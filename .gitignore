@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+
+# build
+dist/
+build/
+bin/
+*.bun-build
+*.tsbuildinfo
+.biome
+
+# system
+.DS_Store
+._*
+.vscode/
+.zed/
+.idea/
+*.log
+.tmp/
+.env
+.env.*
+!.env.example
+.husky/_/
+
+# project
+.cache/
+.claude/*
+!.claude/commands/
+sources/db/
+sources/**/*.db-*
+data/

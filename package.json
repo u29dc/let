@@ -1,0 +1,50 @@
+{
+	"name": "let",
+	"version": "0.0.1",
+	"type": "module",
+	"private": true,
+	"workspaces": [
+		"packages/*"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/u29dc/let.git"
+	},
+	"scripts": {
+		"init---------------------------------": "",
+		"prepare": "husky",
+		"build:cli": "bun build --compile packages/cli/src/index.ts --outfile bin/let && rm -f .*.bun-build",
+		"dev----------------------------------": "",
+		"let": "bun run packages/cli/src/index.ts",
+		"sources------------------------------": "",
+		"sources:build": "bun run sources/build-all.ts",
+		"sources:broadband": "rm -f sources/db/broadband.db && bun run sources/builders/broadband.ts",
+		"sources:postcodes": "rm -f sources/db/postcodes.db && bun run sources/builders/postcodes.ts",
+		"sources:deprivation": "rm -f sources/db/deprivation.db && bun run sources/builders/deprivation.ts",
+		"sources:census": "rm -f sources/db/census.db && bun run sources/builders/census.ts",
+		"sources:population": "rm -f sources/db/population.db && bun run sources/builders/population.ts",
+		"sources:income": "rm -f sources/db/income.db && bun run sources/builders/income.ts",
+		"sources:flood": "rm -f sources/db/flood.db && bun run sources/builders/flood.ts",
+		"sources:naptan": "rm -f sources/db/naptan.db && bun run sources/builders/naptan.ts",
+		"sources:uprn": "rm -f sources/db/uprn.db && bun run sources/builders/uprn.ts",
+		"sources:crime": "rm -f sources/db/crime.db && bun run sources/builders/crime.ts",
+		"check--------------------------------": "",
+		"util:format": "biome format --write .",
+		"util:lint": "biome check . --max-diagnostics 500",
+		"util:lint:fix": "biome check --write .",
+		"util:types": "tsgo --noEmit",
+		"util:clean": "rm -rf dist build",
+		"util:check": "STATUS=0; bun run util:format || STATUS=1; bun run util:lint || STATUS=1; bun run util:types || STATUS=1; bun test || STATUS=1; exit $STATUS"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.13",
+		"@commitlint/cli": "^20.4.0",
+		"@commitlint/config-conventional": "^20.4.0",
+		"@types/html-minifier-terser": "^7.0.2",
+		"@typescript/native-preview": "^7.0.0-dev.20260201.1",
+		"bun-types": "^1.3.8",
+		"husky": "^9.1.7",
+		"lint-staged": "^16.2.7",
+		"xlsx": "^0.18.5"
+	}
+}
