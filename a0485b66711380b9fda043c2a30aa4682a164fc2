@@ -1,0 +1,25 @@
+.husky/pre-commit
+  4db634fcc233cb3b 1
+.husky/commit-msg
+  4db634fcc233cb3b 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.0.40",
+  "base_commit_sha": "a0485b66711380b9fda043c2a30aa4682a164fc2",
+  "prompts": {
+    "4db634fcc233cb3b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e8923f07-bfd6-4674-b115-6ebaf68abd6e",
+        "model": "claude-opus-4-5-20251101"
+      },
+      "human_author": "Han <han@u29dc.com>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
