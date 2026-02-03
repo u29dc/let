@@ -32,7 +32,7 @@ export const AssessmentSchema = z.object({
 	/** Reasoning for the recommendation (1-1000 chars) */
 	reasoning: z.string().min(1).max(1000),
 	/** Manual score adjustment relative to algorithm score (-30 to +30) */
-	scoreAdjustment: z.number().min(-30).max(30).optional(),
+	scoreAdjustment: z.number().min(-30).max(30),
 });
 
 export type Assessment = z.infer<typeof AssessmentSchema>;

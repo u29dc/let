@@ -4,7 +4,6 @@
 
 import { defineCommand } from 'citty';
 import { enrichCommand } from './enrich.js';
-import { migrateCommand } from './migrate.js';
 import { pruneCommand } from './prune.js';
 import { verifyCommand } from './verify.js';
 
@@ -14,11 +13,10 @@ import { verifyCommand } from './verify.js';
 export const opsCommand = defineCommand({
 	meta: {
 		name: 'ops',
-		description: 'Maintenance operations (migrate, enrich, prune, verify)',
+		description: 'Maintenance operations (enrich, prune, verify)',
 	},
 	subCommands: {
 		enrich: enrichCommand,
-		migrate: migrateCommand,
 		prune: pruneCommand,
 		verify: verifyCommand,
 	},

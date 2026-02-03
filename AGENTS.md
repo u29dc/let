@@ -29,7 +29,6 @@
 │   │           ├── ops/
 │   │           │   ├── index.ts
 │   │           │   ├── enrich.ts
-│   │           │   ├── migrate.ts
 │   │           │   ├── prune.ts
 │   │           │   └── verify.ts
 │   │           └── help.ts
@@ -142,7 +141,7 @@
 - **Enrich**: EPC API (rating, floor area, UPRN), broadband lookup, area metrics (IMD, census tenure, population, income, flood, crime) from local SQLite, pattern-based notes extraction
 - **Score**: composites `affordability|location|liveability` aggregated by variance-adaptive formula using `adaptiveness` (0.5-10) and `adaptivenessFactor` (0.1-20), penalties `epc|garden|pets` combined multiplicatively
 - **Storage**: normalized SQLite in `data/let.db`, JSON export via `let output json` to `data/let.db.json`, backup copy in `data/let.db.bak`
-- **Identity**: listing `id` is UUID, portal IDs in `portalIds.*`, legacy Rightmove IDs migrated via `let ops migrate`
+- **Identity**: listing `id` is UUID, portal IDs in `portalIds.*`
 - **Logging**: domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTION) with structured key=value output
 
 ## 6. Data Model
@@ -174,8 +173,8 @@
 ## 9. CLI
 
 - **Entry point**: `bun run let <command> [subcommand] [options]`, compiled binary at `bin/let`
-- **Commands**: `fetch` (batch/id/location), `assess` (view/submit), `view` (list/detail/stats/regions), `output` (notion/json), `ops` (enrich, migrate, prune, verify)
-- **Examples**: `let fetch id 170448131`, `let fetch batch --limit 5`, `let view list --region Sheffield --top 10`, `let output notion --top 20`, `let output json --output backup.json`, `let ops enrich --limit 200`, `let ops migrate`, `let ops verify --dry-run --limit 10`
+- **Commands**: `fetch` (batch/id/location), `assess` (view/submit), `view` (list/detail/stats/regions), `output` (notion/json), `ops` (enrich, prune, verify)
+- **Examples**: `let fetch id 170448131`, `let fetch batch --limit 5`, `let view list --region Sheffield --top 10`, `let output notion --top 20`, `let output json --output backup.json`, `let ops enrich --limit 200`, `let ops verify --dry-run --limit 10`
 
 ## 10. Quality
 
@@ -197,4 +196,4 @@
 - **Phase 15 (Done)**: Data file reorg to `let.*`, listing status, `let ops verify`
 - **Phase 16 (Done)**: Mapbox static maps, neighborhood analysis, Google Maps URLs
 - **Phase 17 (Done)**: CLI output refactor, terminal utilities, assessed score column, removed area/dataQuality composites
-- **Phase 18 (Done)**: Area metrics sources + enrichment, UPRN capture, UUID primary keys with `let ops migrate`, one-time backfill via `let ops enrich`
+- **Phase 18 (Done)**: Area metrics sources + enrichment, UPRN capture, UUID primary keys (migration complete, code removed), one-time backfill via `let ops enrich`

@@ -58,7 +58,7 @@ export function loadExistingListings(options: { allowEmptyOnError?: boolean } = 
 		};
 	} catch (error) {
 		if (error instanceof Error && error.message.includes('no such column')) {
-			log.cli.error('Database schema is outdated; run `let ops migrate` to upgrade IDs and schema', { error: error.message });
+			log.cli.error('Database schema mismatch - schema may be incompatible with current version', { error: error.message });
 			process.exit(1);
 		}
 		if (options.allowEmptyOnError) {

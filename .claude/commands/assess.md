@@ -25,7 +25,7 @@ For each ID:
 1. Glob `.cache/{id}/*.webp` then Read each image (property photos, satellite, street map)
 2. Run `bun run let assess {id}` to view listing details with notes and scores
 3. Analyze: maintenance quality, natural light, spaciousness, what photos show/hide, neighborhood from maps
-4. Submit: `bun run let assess {id} --json '{"maintenance":"...","lightAndSpace":"...","photoAnalysis":"...","neighborhoodAnalysis":"...","recommendation":"...","familySuitability":"...","reasoning":"..."}'`
+4. Submit: `bun run let assess {id} --json '{"maintenance":"...","lightAndSpace":"...","photoAnalysis":"...","neighborhoodAnalysis":"...","recommendation":"...","familySuitability":"...","reasoning":"...","scoreAdjustment":0}'`
 
 Assessment guidance:
 
@@ -71,12 +71,12 @@ No coordination needed - your IDs are unique.
 | maintenance          | `excellent/good/fair/poor`                 | property condition from photos           |
 | lightAndSpace        | string                                     | natural light, spaciousness, layout      |
 | photoAnalysis        | string                                     | coverage, what's shown/hidden, red flags |
-| neighborhoodAnalysis | string                                     | satellite+street findings (optional)     |
-| tradeoffs            | string                                     | compensating factors (optional)          |
 | recommendation       | `strong-recommend/recommend/neutral/avoid` | overall assessment                       |
 | familySuitability    | `excellent/good/fair/poor`                 | suitability for family                   |
 | reasoning            | string                                     | explain recommendation                   |
-| scoreAdjustment      | -30 to +30                                 | manual adjustment (optional)             |
+| scoreAdjustment      | -30 to +30                                 | manual adjustment (use 0 for no change)  |
+| neighborhoodAnalysis | string                                     | satellite+street findings (optional)     |
+| tradeoffs            | string                                     | compensating factors (optional)          |
 
 ## Visual Assessment Quick Reference
 
@@ -95,7 +95,7 @@ No coordination needed - your IDs are unique.
 ## Example
 
 ```bash
-bun run let assess 170448131 --json '{"maintenance":"good","lightAndSpace":"bright bay window, spacious bedrooms, good ceiling heights","photoAnalysis":"all rooms shown, honest representation","neighborhoodAnalysis":"Meadow Park 5min east, quiet cul-de-sac, Greenfield Primary nearby","recommendation":"recommend","familySuitability":"good","reasoning":"well-maintained, good layout, park nearby"}'
+bun run let assess 170448131 --json '{"maintenance":"good","lightAndSpace":"bright bay window, spacious bedrooms, good ceiling heights","photoAnalysis":"all rooms shown, honest representation","neighborhoodAnalysis":"Meadow Park 5min east, quiet cul-de-sac, Greenfield Primary nearby","recommendation":"recommend","familySuitability":"good","reasoning":"well-maintained, good layout, park nearby","scoreAdjustment":5}'
 ```
 
 ## Output

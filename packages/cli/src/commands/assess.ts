@@ -72,6 +72,7 @@ function printAssessmentHelp(): void {
 			['recommendation', '"strong-recommend" | "recommend" | "neutral" | "avoid"'],
 			['familySuitability', '"excellent" | "good" | "fair" | "poor"'],
 			['reasoning', 'string (why this recommendation)'],
+			['scoreAdjustment', 'number (-30 to +30, manual score adjustment)'],
 		],
 		{ keyWidth: 18, indent: 2 },
 	);
@@ -80,7 +81,6 @@ function printAssessmentHelp(): void {
 		[
 			['tradeoffs', 'string (compensating factors, workarounds)'],
 			['neighborhoodAnalysis', 'string (from satellite: parking, gardens, roads, density)'],
-			['scoreAdjustment', 'number (-30 to +30, manual score adjustment)'],
 		],
 		{ keyWidth: 18, indent: 2 },
 	);

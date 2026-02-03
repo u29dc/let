@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS assessments (
     recommendation TEXT NOT NULL,
     family_suitability TEXT NOT NULL,
     reasoning TEXT NOT NULL,
-    score_adjustment REAL NULL,
+    score_adjustment REAL NOT NULL,
     FOREIGN KEY (listing_id) REFERENCES listings(id) ON DELETE CASCADE
 );
 

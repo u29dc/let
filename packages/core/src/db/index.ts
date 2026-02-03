@@ -129,7 +129,7 @@ type AssessmentRow = {
 	recommendation: string;
 	family_suitability: string;
 	reasoning: string;
-	score_adjustment: number | null;
+	score_adjustment: number;
 };
 
 type ListingScores = NonNullable<Listing['scores']>;
@@ -488,7 +488,7 @@ function insertAssessment(statements: InsertStatements, listing: Listing): void 
 		assessment.recommendation,
 		assessment.familySuitability,
 		assessment.reasoning,
-		assessment.scoreAdjustment ?? null,
+		assessment.scoreAdjustment,
 	];
 
 	statements.assessment.run(...values);
@@ -690,7 +690,7 @@ function buildAssessment(row: AssessmentRow | undefined): Listing['assessment'] 
 		recommendation: row.recommendation as ListingAssessment['recommendation'],
 		familySuitability: row.family_suitability as ListingAssessment['familySuitability'],
 		reasoning: row.reasoning,
-		scoreAdjustment: row.score_adjustment ?? undefined,
+		scoreAdjustment: row.score_adjustment,
 	};
 }
 

@@ -330,7 +330,7 @@ export const ListingSchema = z.object({
 			recommendation: z.enum(['strong-recommend', 'recommend', 'neutral', 'avoid']),
 			familySuitability: z.enum(['excellent', 'good', 'fair', 'poor']),
 			reasoning: z.string(),
-			scoreAdjustment: z.number().optional(),
+			scoreAdjustment: z.number(),
 		})
 		.nullable(),
 	/** ISO datetime when AI assessment was performed */

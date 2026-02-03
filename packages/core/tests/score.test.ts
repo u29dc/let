@@ -1198,7 +1198,7 @@ describe('varianceAdaptiveAggregate', () => {
 // =============================================================================
 
 describe('recalcAssessedScores', () => {
-	// Helper for minimal valid assessment
+	// Helper for minimal valid assessment (scoreAdjustment is required)
 	const createAssessment = (overrides: Partial<{ recommendation: string; scoreAdjustment: number }> = {}) => ({
 		maintenance: 'good' as const,
 		lightAndSpace: 'Bright rooms with good natural light',
@@ -1206,7 +1206,7 @@ describe('recalcAssessedScores', () => {
 		recommendation: (overrides.recommendation ?? 'recommend') as 'recommend' | 'strong-recommend' | 'neutral' | 'avoid',
 		familySuitability: 'good' as const,
 		reasoning: 'Well-maintained property suitable for family',
-		scoreAdjustment: overrides.scoreAdjustment,
+		scoreAdjustment: overrides.scoreAdjustment ?? 0,
 	});
 
 	// Helper for scores object
@@ -1269,12 +1269,12 @@ describe('recalcAssessedScores', () => {
 		expect(listing.assessedScore).toBe(70);
 	});
 
-	test('derives adjustment from recommendation when scoreAdjustment absent', () => {
+	test('applies zero scoreAdjustment correctly', () => {
 		const scores = createScores(70);
 		const listing = createListing({
 			scores,
-			assessment: createAssessment({ recommendation: 'strong-recommend' }), // +10 derived
-			assessedScore: 80,
+			assessment: createAssessment({ scoreAdjustment: 0 }),
+			assessedScore: 70,
 		});
 
 		// Algo score changes to 65
@@ -1282,8 +1282,8 @@ describe('recalcAssessedScores', () => {
 
 		recalcAssessedScores([listing]);
 
-		// strong-recommend = +10, so 65 + 10 = 75
-		expect(listing.assessedScore).toBe(75);
+		// No adjustment, so assessedScore = algoScore
+		expect(listing.assessedScore).toBe(65);
 	});
 
 	test('skips listings without assessment', () => {
