@@ -9,9 +9,7 @@
 		"ignoreUnknown": true,
 		"includes": [
 			"**/*.ts",
-			"**/*.tsx",
 			"**/*.js",
-			"**/*.jsx",
 			"**/*.mjs",
 			"**/*.cjs",
 			"**/*.json",
@@ -25,13 +23,11 @@
 			"!**/node_modules",
 			"!**/build",
 			"!**/dist",
-			"!**/.svelte-kit",
 			"!**/tmp",
 			"!**/.tmp",
 			"!**/temp",
 			"!**/.temp",
 			"!**/.archive",
-			"!**/fixtures/**/*.html",
 			"!**/.cache"
 		]
 	},
@@ -41,13 +37,7 @@
 		"indentStyle": "tab",
 		"indentWidth": 4,
 		"lineWidth": 200,
-		"lineEnding": "lf",
-		"attributePosition": "auto"
-	},
-	"css": {
-		"parser": {
-			"tailwindDirectives": true
-		}
+		"lineEnding": "lf"
 	},
 	"assist": {
 		"actions": {
@@ -69,7 +59,6 @@
 		"globals": ["Bun"],
 		"formatter": {
 			"quoteStyle": "single",
-			"jsxQuoteStyle": "double",
 			"trailingCommas": "all",
 			"semicolons": "always",
 			"arrowParentheses": "always",
@@ -88,8 +77,7 @@
 			},
 			"correctness": {
 				"noUnusedVariables": "error",
-				"noUnusedImports": "error",
-				"useExhaustiveDependencies": "warn"
+				"noUnusedImports": "error"
 			},
 			"suspicious": {
 				"noExplicitAny": "error",
@@ -98,8 +86,7 @@
 				"noDoubleEquals": "error",
 				"noGlobalIsNan": "error",
 				"noVar": "error",
-				"noAssignInExpressions": "error",
-				"noUnknownAtRules": "off"
+				"noAssignInExpressions": "error"
 			},
 			"style": {
 				"useImportType": "warn",
@@ -108,18 +95,6 @@
 				"useNodejsImportProtocol": "error",
 				"useTemplate": "warn",
 				"noNonNullAssertion": "error"
-			},
-			"a11y": {
-				"useSemanticElements": "warn"
-			},
-			"nursery": {
-				"useSortedClasses": {
-					"level": "warn",
-					"options": {
-						"attributes": ["className", "class", "classList"],
-						"functions": ["clsx", "cva", "tw", "cn"]
-					}
-				}
 			}
 		}
 	}
