@@ -179,15 +179,21 @@ bin/let view detail <id> --json
 bin/let score explain <id> --json
 ```
 
-Report structure:
+Report structure (compact table-first format):
 
-- **Overview**: count of new fetched, assessed coverage, score distribution, price range.
-- **Top picks (3-5)**: for each:
-    - Link
-    - Algorithm vs assessed score (+ explanation if adjusted)
-    - Key positives/negatives
-    - Neighborhood notes
-    - Clear next steps (viewing, questions to ask, watchlist)
+1. **Overview** (one line): "Fetched 25 new, scored 54 avg, range 750-1100 pcm"
+2. **Comparison table** (all top picks in one table):
+
+```
+| # | Address | pcm | Beds | Type | Score | Crime/1k | IMD | EPC | Broadband | Station | Link |
+```
+
+Columns surface the key decision factors: price, neighbourhood safety, deprivation, energy cost, connectivity, transport. Link is a clickable Rightmove URL.
+
+3. **Notes** (numbered, keyed to table rows): 1-2 lines each covering non-obvious positives/negatives, neighbourhood context, red flags. Example: `1. Split-level flat above shops despite "house" listing. Patio garden only.`
+4. **Verdict**: 2-3 sentences factoring in user's stated priorities (e.g. neighbourhood safety vs price).
+5. **Next steps**: bullet list of actionable items (viewings, questions for agents, etc.)
+
 - **If comparing regions**:
     - Sample size per region
     - Average score and "best value" examples

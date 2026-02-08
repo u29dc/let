@@ -156,7 +156,7 @@ Exit codes: `0` success (including partial), `1` runtime error, `2` prerequisite
 
 ### Tool Registry
 
-Commands defined via `defineToolCommand()` register metadata in a global `toolRegistry[]` array. `let tools --json` reads this to produce the catalog (15 tools). `tools` and `health` themselves use plain `defineCommand()` (not in registry — they are infrastructure, not tools).
+Commands defined via `defineToolCommand()` register metadata in a global `toolRegistry[]` array. `let tools --json` reads this to produce the catalog (17 tools). `tools` and `health` themselves use plain `defineCommand()` (not in registry — they are infrastructure, not tools).
 
 ### Path Resolution
 
@@ -198,7 +198,7 @@ Domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTI
 
 ## 7. CLI Tool Surface
 
-### Registered Tools (15, via `defineToolCommand`)
+### Registered Tools (17, via `defineToolCommand`)
 
 | Tool                | Command                         | Description                                                | Idempotent | Rate Limited   |
 | ------------------- | ------------------------------- | ---------------------------------------------------------- | ---------- | -------------- |
@@ -210,6 +210,8 @@ Domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTI
 | `export.json`       | `let export json`               | Export listings DB to JSON file                            | Yes        | No             |
 | `export.notion`     | `let export notion`             | Sync listings to Notion database                           | No         | 3 req/s        |
 | `fetch`             | `let fetch <ids>`               | Fetch/parse/enrich/score/persist by portal IDs             | No         | config delayMs |
+| `ops.prune`         | `let ops prune`                 | Remove listings by score, region, or status                | No         | No             |
+| `ops.verify`        | `let ops verify`                | Check if listings are still active on Rightmove            | Yes        | config delayMs |
 | `score.compute`     | `let score compute`             | Rescore all listings                                       | Yes        | No             |
 | `score.explain`     | `let score explain <id>`        | Score breakdown for one listing                            | Yes        | No             |
 | `search.diff`       | `let search diff <ids>`         | Compare portal IDs against known listings                  | Yes        | No             |
@@ -224,8 +226,6 @@ Domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTI
 | ---------------- | ---------------------------------------- |
 | `let tools`      | Capability discovery from registry       |
 | `let health`     | Prerequisite checks with remediation     |
-| `let ops prune`  | Remove listings by criteria              |
-| `let ops verify` | Check if listings still active on portal |
 
 ### Common Flags
 
@@ -308,7 +308,7 @@ Network-dependent procedure (not run in CI). Use for manual validation after cha
 bun run build:cli
 
 # 2. Orient
-bin/let tools --json          # should list 15 tools
+bin/let tools --json          # should list 17 tools
 bin/let health --json         # check prerequisites, fix any blocked items
 bin/let config show --json    # verify config loaded
 
