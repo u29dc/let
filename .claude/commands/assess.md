@@ -8,7 +8,7 @@ This command runs parallel subagents for batch assessment.
 
 **Workflow**:
 
-1. Run `bun run let assess --top N` to get unassessed listings
+1. Run `let assess candidates --json` to get unassessed listings
 2. Partition IDs across 5-10 subagents (2-3 listings each)
 3. Launch subagents in parallel via Task tool with `subagent_type=general-purpose`
 
@@ -22,10 +22,10 @@ Use this prompt when launching each subagent (replace `{IDS}` with comma-separat
 Assess listings: {IDS}
 
 For each ID:
-1. Glob `.cache/{id}/*.webp` then Read each image (property photos, satellite, street map)
-2. Run `bun run let assess {id}` to view listing details with notes and scores
+1. Run `let assess context {id} --json` to get listing details, score breakdown, and media paths
+2. Glob `.cache/{id}/*.webp` then Read each image (property photos, satellite, street map)
 3. Analyze: maintenance quality, natural light, spaciousness, what photos show/hide, neighborhood from maps
-4. Submit: `bun run let assess {id} --json '{"maintenance":"...","lightAndSpace":"...","photoAnalysis":"...","neighborhoodAnalysis":"...","recommendation":"...","familySuitability":"...","reasoning":"...","scoreAdjustment":0}'`
+4. Submit: `let assess submit {id} --data '{"maintenance":"...","lightAndSpace":"...","photoAnalysis":"...","neighborhoodAnalysis":"...","recommendation":"...","familySuitability":"...","reasoning":"...","scoreAdjustment":0}' --json`
 
 Assessment guidance:
 
@@ -95,11 +95,11 @@ No coordination needed - your IDs are unique.
 ## Example
 
 ```bash
-bun run let assess 170448131 --json '{"maintenance":"good","lightAndSpace":"bright bay window, spacious bedrooms, good ceiling heights","photoAnalysis":"all rooms shown, honest representation","neighborhoodAnalysis":"Meadow Park 5min east, quiet cul-de-sac, Greenfield Primary nearby","recommendation":"recommend","familySuitability":"good","reasoning":"well-maintained, good layout, park nearby","scoreAdjustment":5}'
+let assess submit 170448131 --data '{"maintenance":"good","lightAndSpace":"bright bay window, spacious bedrooms, good ceiling heights","photoAnalysis":"all rooms shown, honest representation","neighborhoodAnalysis":"Meadow Park 5min east, quiet cul-de-sac, Greenfield Primary nearby","recommendation":"recommend","familySuitability":"good","reasoning":"well-maintained, good layout, park nearby","scoreAdjustment":5}' --json
 ```
 
 ## Output
 
 After assessment: `assessment` object populated, `assessedAt` timestamp set, `assessedScore` = algorithm score + adjustment.
 
-View updated rankings: `bun run let view list --top 20`
+View updated rankings: `let view list --top 20 --json`

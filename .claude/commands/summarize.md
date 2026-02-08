@@ -8,10 +8,10 @@ Read `CLAUDE.md` for project architecture, CLI reference, and schema fields.
 
 ## Execution Steps
 
-1. Run `bun run let view stats` for aggregate statistics
-2. Run `bun run let view list --top 20` for top listings overview
-3. For each region in stats, run `bun run let view list --region <region> --top 5`
-4. Run `bun run let view detail <id> --score` for top 10 overall listings (get full property data)
+1. Run `let view list --top 20 --json` for top listings overview and aggregate data
+2. For each region, run `let view list --region <region> --top 5 --json`
+3. Run `let view detail <id> --json` for top 10 overall listings (get full property data)
+4. Run `let score explain <id> --json` for score breakdowns of top properties
 5. Synthesize patterns and produce report
 
 ## Output Format (follow strictly)
