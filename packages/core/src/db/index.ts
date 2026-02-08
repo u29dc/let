@@ -7,7 +7,7 @@
 import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync } from 'node:fs';
 import type { Assessment } from '../schema/assessment.js';
-import { type Listing, ListingSchema, type ListingsFile, ListingsFileSchema } from '../schema/index.js';
+import type { Listing, ListingsFile } from '../schema/index.js';
 import schemaSQL from './schema.sql' with { type: 'text' };
 
 type DbMeta = { updatedAt: string; lastSearchTotal: number };
@@ -176,7 +176,7 @@ export function loadListingsFile(dbPath: string): ListingsFile {
 			listings,
 		};
 
-		return ListingsFileSchema.parse(data);
+		return data;
 	} finally {
 		closeListingsDb(db);
 	}
@@ -507,8 +507,6 @@ function persistListings(statements: InsertStatements, listings: Listing[]): voi
 }
 
 export function saveListingsFile(dbPath: string, data: ListingsFile): void {
-	const parsed = ListingsFileSchema.parse(data);
-
 	if (existsSync(dbPath)) {
 		const backupPath = `${dbPath}.bak`;
 		copyFileSync(dbPath, backupPath);
@@ -518,10 +516,86 @@ export function saveListingsFile(dbPath: string, data: ListingsFile): void {
 
 	const tx = db.transaction(() => {
 		clearListingsTables(db);
-		insertMetaRow(db, { updatedAt: parsed.updatedAt, lastSearchTotal: parsed.lastSearchTotal });
-		insertSearchUrls(statements, parsed.searchUrls);
-		insertLocations(statements, parsed.locations);
-		persistListings(statements, parsed.listings);
+		insertMetaRow(db, { updatedAt: data.updatedAt, lastSearchTotal: data.lastSearchTotal });
+		insertSearchUrls(statements, data.searchUrls);
+		insertLocations(statements, data.locations);
+		persistListings(statements, data.listings);
+	});
+
+	try {
+		tx();
+	} finally {
+		closeListingsDb(db);
+	}
+}
+
+function updateUnchangedAssessedScores(db: Database, allScoredListings: Listing[], newOrUpdatedIds: Set<string>): void {
+	for (const listing of allScoredListings) {
+		if (!newOrUpdatedIds.has(listing.id) && listing.assessedAt != null) {
+			db.run('UPDATE listings SET assessed_score = ? WHERE id = ?', [listing.assessedScore ?? null, listing.id]);
+		}
+	}
+}
+
+/**
+ * Incremental save: insert new listings, replace updated (re-fetched) listings,
+ * rewrite all scores (percentile-relative), rewrite meta/searchUrls/locations.
+ *
+ * Updated listings are replaced via DELETE+INSERT (CASCADE handles children).
+ * Assessments on updated listings are preserved since carryOverPersistentFields
+ * copies them to the incoming listing before it reaches this function.
+ */
+export function upsertListings(
+	dbPath: string,
+	newListings: Listing[],
+	updatedListings: Listing[],
+	allScoredListings: Listing[],
+	meta: { updatedAt: string; lastSearchTotal: number },
+	searchUrls: string[],
+	locations: string[],
+): void {
+	if (existsSync(dbPath)) {
+		const backupPath = `${dbPath}.bak`;
+		copyFileSync(dbPath, backupPath);
+	}
+	const db = openListingsDb(dbPath);
+	const statements = createInsertStatements(db);
+
+	const newOrUpdatedIds = new Set([...newListings.map((l) => l.id), ...updatedListings.map((l) => l.id)]);
+
+	const tx = db.transaction(() => {
+		// Delete updated listings (CASCADE removes children: stations, images, notes, scores, assessments)
+		for (const listing of updatedListings) {
+			db.run('DELETE FROM listings WHERE id = ?', [listing.id]);
+		}
+
+		// Insert new + updated listing rows and their children
+		for (const listing of [...newListings, ...updatedListings]) {
+			insertListingRow(statements, listing);
+			insertStations(statements, listing);
+			insertImages(statements, listing);
+			insertNotes(statements, listing);
+			if (listing.assessment) {
+				insertAssessment(statements, listing);
+			}
+		}
+
+		// Rewrite all scores (percentiles shift when listings are added)
+		db.run('DELETE FROM scores');
+		for (const listing of allScoredListings) {
+			insertScores(statements, listing);
+		}
+
+		// Update assessed_score on existing listings that have assessments
+		updateUnchangedAssessedScores(db, allScoredListings, newOrUpdatedIds);
+
+		// Rewrite meta/searchUrls/locations (small tables, full rewrite is fine)
+		db.run('DELETE FROM meta');
+		insertMetaRow(db, meta);
+		db.run('DELETE FROM search_urls');
+		insertSearchUrls(statements, searchUrls);
+		db.run('DELETE FROM search_locations');
+		insertLocations(statements, locations);
 	});
 
 	try {
@@ -548,7 +622,7 @@ function hydrateListings(db: Database): Listing[] {
 	const result: Listing[] = [];
 	for (const row of listings) {
 		const listingId = row.id;
-		const listing: Listing = ListingSchema.parse({
+		const listing = {
 			id: listingId,
 			portalIds: {
 				rightmove: row.portal_rightmove ?? undefined,
@@ -621,7 +695,7 @@ function hydrateListings(db: Database): Listing[] {
 			extractionStatus: row.extraction_status,
 			status: row.status,
 			notionPageId: row.notion_page_id ?? undefined,
-		});
+		} as Listing;
 		result.push(listing);
 	}
 
@@ -740,7 +814,7 @@ export function findListingByIdFromDb(dbPath: string, id: string): Listing | nul
 		const scoreRow = db.query('SELECT * FROM scores WHERE listing_id = ?').get(listingId) as ScoreRow | undefined;
 		const assessmentRow = db.query('SELECT * FROM assessments WHERE listing_id = ?').get(listingId) as AssessmentRow | undefined;
 
-		return ListingSchema.parse({
+		return {
 			id: listingId,
 			portalIds: {
 				rightmove: row.portal_rightmove ?? undefined,
@@ -812,7 +886,7 @@ export function findListingByIdFromDb(dbPath: string, id: string): Listing | nul
 			extractionStatus: row.extraction_status,
 			status: row.status,
 			notionPageId: row.notion_page_id ?? undefined,
-		});
+		} as Listing;
 	} finally {
 		closeListingsDb(db);
 	}
