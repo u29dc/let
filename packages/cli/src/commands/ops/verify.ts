@@ -2,13 +2,14 @@
  * Ops command - verify listing availability
  */
 
+import { paths } from '@let/core/paths';
 import { buildListingUrl, fetchWithRateLimit, setFetchDelay } from '@let/core/pipeline/fetch';
 import type { Listing, ListingsFile } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
 import { defineCommand } from 'citty';
 import { isJsonMode, ok } from '../../envelope.js';
 import { printKeyValues, section } from '../../output/index.js';
-import { LISTINGS_DB_PATH, loadExistingListings } from '../shared-read.js';
+import { loadExistingListings } from '../shared-read.js';
 import { saveListingsFile } from '../shared-write.js';
 
 /** Region pattern matcher for filtering */
@@ -242,6 +243,6 @@ export const verifyCommand = defineCommand({
 		await saveListingsFile(output);
 
 		if (jsonMode) ok('ops.verify', { checked: results.length, active, inactive, errors, results }, start);
-		log.cli.success('Verification complete', { path: LISTINGS_DB_PATH, inactive });
+		log.cli.success('Verification complete', { path: paths().derived.database, inactive });
 	},
 });

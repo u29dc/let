@@ -3,13 +3,10 @@
  *
  * let view list          - Table of listings (with filters/sort)
  * let view detail <id>   - Full listing details
- * let view stats         - Aggregate statistics
- * let view regions       - Compare regions by aggregated metrics
  */
 
-import { computeRegionStats, computeStats, formatTableRow, type RegionSortField, type RegionStats, sortRegionStats, truncate } from '@let/core/pipeline/view';
+import { formatTableRow, truncate } from '@let/core/pipeline/view';
 import type { Listing } from '@let/core/schema';
-import { log } from '@let/core/utils/logger';
 import { defineCommand } from 'citty';
 import {
 	colorQuality,
@@ -27,8 +24,6 @@ import {
 	subheader,
 	wrapText,
 } from '../../output/index.js';
-
-import { loadExistingListings } from '../shared-read.js';
 
 /** Standard key width for all detail view sections */
 const KEY_WIDTH = 14;
@@ -292,197 +287,7 @@ export function renderDetail(listing: Listing): void {
 }
 
 /**
- * Render statistics
- */
-function renderStats(listings: Listing[]): void {
-	const stats = computeStats(listings);
-	section(`Listing Statistics (${stats.total} total)`);
-
-	// By Region
-	subheader('By Region');
-	const regionTable = createTable([
-		{ name: 'region', title: 'REGION', alignment: 'left' },
-		{ name: 'count', title: 'COUNT', alignment: 'right' },
-		{ name: 'percent', title: 'PERCENT', alignment: 'right' },
-	]);
-	for (const { region, count, percent } of stats.byRegion) {
-		regionTable.addRow({ region, count, percent: formatPercent(percent) });
-	}
-	regionTable.printTable();
-	printKeyValues([['Regions', `${stats.byRegion.length}`]], { keyWidth: 7 });
-
-	// By Bedrooms
-	subheader('By Bedrooms');
-	const bedsTable = createTable([
-		{ name: 'bedrooms', title: 'BEDROOMS', alignment: 'left' },
-		{ name: 'count', title: 'COUNT', alignment: 'right' },
-		{ name: 'percent', title: 'PERCENT', alignment: 'right' },
-	]);
-	for (const { bedrooms, count, percent } of stats.byBedrooms) {
-		bedsTable.addRow({ bedrooms: `${bedrooms} bed`, count, percent: formatPercent(percent) });
-	}
-	bedsTable.printTable();
-
-	// Score Distribution
-	subheader('Score Distribution');
-	const scoreDistTable = createTable([
-		{ name: 'range', title: 'RANGE', alignment: 'left' },
-		{ name: 'count', title: 'COUNT', alignment: 'right' },
-		{ name: 'percent', title: 'PERCENT', alignment: 'right' },
-	]);
-	for (const { label, min, max, count, percent } of stats.scoreDistribution) {
-		scoreDistTable.addRow({ range: `${label} (${min}-${max})`, count, percent: formatPercent(percent) });
-	}
-	scoreDistTable.printTable();
-
-	// Price Range
-	subheader('Price Range');
-	const priceTable = createTable([
-		{ name: 'metric', title: 'METRIC', alignment: 'left' },
-		{ name: 'value', title: 'VALUE', alignment: 'right' },
-	]);
-	priceTable.addRow({ metric: 'Min', value: formatPrice(stats.price.min) });
-	priceTable.addRow({ metric: 'Max', value: formatPrice(stats.price.max) });
-	priceTable.addRow({ metric: 'Avg', value: formatPrice(stats.price.avg) });
-	priceTable.addRow({ metric: 'Median', value: formatPrice(stats.price.median) });
-	priceTable.printTable();
-
-	// Score Range
-	subheader('Score Range');
-	const scoreTable = createTable([
-		{ name: 'metric', title: 'METRIC', alignment: 'left' },
-		{ name: 'value', title: 'VALUE', alignment: 'right' },
-	]);
-	scoreTable.addRow({ metric: 'Min', value: formatScoreWithSignal(stats.score.min) });
-	scoreTable.addRow({ metric: 'Max', value: formatScoreWithSignal(stats.score.max) });
-	scoreTable.addRow({ metric: 'Avg', value: formatScoreWithSignal(stats.score.avg) });
-	scoreTable.addRow({ metric: 'Median', value: formatScoreWithSignal(stats.score.median) });
-	scoreTable.printTable();
-}
-
-/**
- * let view stats - View aggregate statistics
- */
-const viewStats = defineCommand({
-	meta: {
-		name: 'stats',
-		description: 'View aggregate statistics for listings',
-	},
-	async run() {
-		const { listings } = loadExistingListings();
-
-		if (listings.length === 0) {
-			log.cli.warn('No listings found. Run "let fetch" first.');
-			return;
-		}
-
-		renderStats(listings);
-	},
-});
-
-/** Valid sort fields for regions */
-const VALID_REGION_SORT_FIELDS: RegionSortField[] = ['score', 'price', 'count', 'area', 'station', 'gigabit', 'garden', 'gas', 'top'];
-
-/** Parse and validate region sort field */
-function parseRegionSortField(value: string): RegionSortField {
-	if (VALID_REGION_SORT_FIELDS.includes(value as RegionSortField)) {
-		return value as RegionSortField;
-	}
-	log.cli.warn(`Invalid sort field "${value}", using "score"`, { valid: VALID_REGION_SORT_FIELDS });
-	return 'score';
-}
-
-/** Render region comparison table */
-function renderRegionTable(stats: RegionStats[], total: number, sortField: string, desc: boolean): void {
-	section(`Region Comparison (${stats.length} regions, ${total} listings)`);
-
-	const table = createTable([
-		{ name: 'region', title: 'REGION', alignment: 'left' },
-		{ name: 'count', title: 'COUNT', alignment: 'right' },
-		{ name: 'score', title: 'SCORE', alignment: 'right' },
-		{ name: 'avgPrice', title: 'AVG', alignment: 'right' },
-		{ name: 'medPrice', title: 'MED', alignment: 'right' },
-		{ name: 'range', title: 'RANGE', alignment: 'right' },
-		{ name: 'epc', title: 'EPC', alignment: 'left' },
-		{ name: 'area', title: 'AREA', alignment: 'right' },
-		{ name: 'station', title: 'STATION', alignment: 'right' },
-		{ name: 'gigabit', title: 'GIGABIT', alignment: 'right' },
-		{ name: 'garden', title: 'GARDEN', alignment: 'right' },
-		{ name: 'gas', title: 'GAS', alignment: 'right' },
-		{ name: 'top', title: 'TOP%', alignment: 'right' },
-	]);
-
-	for (const s of stats) {
-		table.addRow({
-			region: truncate(s.region, 18),
-			count: s.count,
-			score: formatScoreWithSignal(s.avgScore),
-			avgPrice: formatPrice(s.avgPrice),
-			medPrice: formatPrice(s.medianPrice),
-			range: `${formatPrice(s.minPrice)}-${formatPrice(s.maxPrice)}`,
-			epc: s.epcTrend,
-			area: s.avgArea ? `${s.avgArea}sqm` : '--',
-			station: s.avgStation ? `${s.avgStation}mi` : '--',
-			gigabit: formatPercent(s.gigabitPct),
-			garden: formatPercent(s.gardenPct),
-			gas: formatPercent(s.gasPct),
-			top: formatPercent(s.topPct),
-		});
-	}
-
-	table.printTable();
-	printKeyValues(
-		[
-			['Sorted', `${sortField} (${desc ? 'desc' : 'asc'})`],
-			['Top%', 'Listings scoring 85%+'],
-		],
-		{ keyWidth: 6 },
-	);
-}
-
-/**
- * let view regions - Compare regions by aggregated metrics
- */
-const viewRegions = defineCommand({
-	meta: {
-		name: 'regions',
-		description: 'Compare regions by aggregated metrics',
-	},
-	args: {
-		sort: {
-			type: 'string',
-			description: 'Sort by: score, price, count, area, station, gigabit, garden, gas, top',
-			default: 'score',
-		},
-		asc: {
-			type: 'boolean',
-			description: 'Ascending order (default: descending)',
-			default: false,
-		},
-	},
-	async run({ args }) {
-		const { listings } = loadExistingListings();
-
-		if (listings.length === 0) {
-			log.cli.warn('No listings found. Run "let fetch" first.');
-			return;
-		}
-
-		const sortField = parseRegionSortField(args.sort);
-		const desc = !args.asc;
-
-		let stats = computeRegionStats(listings);
-		stats = sortRegionStats(stats, sortField, desc);
-
-		renderRegionTable(stats, listings.length, sortField, desc);
-	},
-});
-
-/**
  * Main view command with subcommands
- *
- * list and detail use new path-resolved commands (defineToolCommand);
- * stats and regions remain legacy for now.
  */
 import { viewDetailCommand } from './detail.js';
 import { viewListCommand } from './list.js';
@@ -495,7 +300,5 @@ export const viewCommand = defineCommand({
 	subCommands: {
 		list: viewListCommand,
 		detail: viewDetailCommand,
-		stats: viewStats,
-		regions: viewRegions,
 	},
 });

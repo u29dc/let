@@ -292,3 +292,79 @@ describe('JSON envelope contracts', () => {
 		expect(parsed['data']['count']).toBe(1);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Search/fetch fixture tests (LET-030)
+// Network-dependent commands (fetch, search.resolve, search.discover) cannot
+// be tested in CI without mocking. search.diff is fully tested here and in
+// the parity gate. Live verification is documented in AGENTS.md section 13.
+// ---------------------------------------------------------------------------
+
+describe('Search fixture tests', () => {
+	test('search diff classifies unknown IDs as new', () => {
+		const { stdout } = run(['search', 'diff', '111111111,222222222,333333333', '--json']);
+		const parsed = assertValidEnvelope(stdout, 'search.diff');
+		expect(parsed['ok']).toBe(true);
+		const data = parsed['data'] as Record<string, unknown>;
+		expect((data['new'] as string[]).length).toBe(3);
+		expect((data['known'] as string[]).length).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Registry drift test (LET-009)
+// ---------------------------------------------------------------------------
+
+describe('Registry drift', () => {
+	test('tools catalog has exactly 15 registered tools', () => {
+		const { stdout } = run(['tools', '--json']);
+		const parsed = JSON.parse(stdout.trim());
+		expect(parsed['data']['tools'].length).toBe(15);
+	});
+
+	test('every registered tool name matches a routable command', () => {
+		const { stdout } = run(['tools', '--json']);
+		const parsed = JSON.parse(stdout.trim());
+		const names: string[] = parsed['data']['tools'].map((t: { name: string }) => t.name);
+
+		const expected = [
+			'assess.candidates',
+			'assess.context',
+			'assess.submit',
+			'config.show',
+			'config.validate',
+			'export.json',
+			'export.notion',
+			'fetch',
+			'score.compute',
+			'score.explain',
+			'search.diff',
+			'search.discover',
+			'search.resolve',
+			'view.detail',
+			'view.list',
+		];
+
+		expect(names.sort()).toEqual(expected.sort());
+	});
+
+	test('no legacy tool names in catalog', () => {
+		const { stdout } = run(['tools', '--json']);
+		const parsed = JSON.parse(stdout.trim());
+		const names: string[] = parsed['data']['tools'].map((t: { name: string }) => t.name);
+
+		const legacy = ['help', 'output', 'output.json', 'output.notion', 'ops.enrich', 'view.stats', 'view.regions'];
+		for (const name of legacy) {
+			expect(names).not.toContain(name);
+		}
+	});
+
+	test('tools and health are infrastructure, not in catalog', () => {
+		const { stdout } = run(['tools', '--json']);
+		const parsed = JSON.parse(stdout.trim());
+		const names: string[] = parsed['data']['tools'].map((t: { name: string }) => t.name);
+
+		expect(names).not.toContain('tools');
+		expect(names).not.toContain('health');
+	});
+});
