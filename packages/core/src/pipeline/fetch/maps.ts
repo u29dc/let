@@ -14,7 +14,6 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { calculateBackoff, sleep } from '@let/core/utils/http';
 import { log } from '@let/core/utils/logger';
-import { Transformer } from '@napi-rs/image';
 
 // =============================================================================
 // CONFIGURATION
@@ -37,8 +36,6 @@ const MAP_CONFIG = {
 	height: 600,
 	/** Request 2x resolution */
 	retina: true,
-	/** WebP quality (higher than photos for detail preservation) */
-	quality: 85,
 } as const;
 
 /** Maximum retries for Mapbox requests */
@@ -107,10 +104,10 @@ function hashCoordinates(lat: number, lng: number, zoom: number): string {
 
 /**
  * Generate map view filename
- * Format: {id}-{view}-{coordhash}.webp
+ * Format: {id}-{view}-{coordhash}.png
  */
 export function generateMapFilename(id: string, view: MapViewType, lat: number, lng: number): string {
-	return `${id}-${view}-${hashCoordinates(lat, lng, MAP_CONFIG.zoom)}.webp`;
+	return `${id}-${view}-${hashCoordinates(lat, lng, MAP_CONFIG.zoom)}.png`;
 }
 
 /**
@@ -137,29 +134,19 @@ export function buildPublicMapUrl(view: MapViewType, lat: number, lng: number): 
 }
 
 /**
- * Create a timeout promise that can be cancelled
- */
-function createTimeout<T>(ms: number, value: T, onTimeout?: () => void): { promise: Promise<T>; cancel: () => void } {
-	let timeoutId: Timer;
-	const promise = new Promise<T>((resolve) => {
-		timeoutId = setTimeout(() => {
-			onTimeout?.();
-			resolve(value);
-		}, ms);
-	});
-	return { promise, cancel: () => clearTimeout(timeoutId) };
-}
-
-/**
  * Read response body with timeout protection
  */
 async function readBodyWithTimeout(response: Response, timeoutMs: number, label: string): Promise<Buffer | null> {
-	const bodyPromise = response.arrayBuffer().then((ab) => Buffer.from(ab));
-	const timeout = createTimeout(timeoutMs, null, () => {
-		log.fetchMaps.warn(`[${label}] Body read timeout after ${timeoutMs}ms`);
+	let timeoutId: Timer | undefined;
+	const timeoutPromise = new Promise<null>((resolve) => {
+		timeoutId = setTimeout(() => {
+			log.fetchMaps.warn(`[${label}] Body read timeout after ${timeoutMs}ms`);
+			resolve(null);
+		}, timeoutMs);
 	});
-	const result = await Promise.race([bodyPromise, timeout.promise]);
-	timeout.cancel();
+	const bodyPromise = response.arrayBuffer().then((ab) => Buffer.from(ab));
+	const result = await Promise.race([bodyPromise, timeoutPromise]);
+	if (timeoutId) clearTimeout(timeoutId);
 	return result;
 }
 
@@ -251,12 +238,11 @@ async function fetchSingleView(id: string, view: MapViewType, lat: number, lng: 
 	}
 
 	try {
-		const processed = await new Transformer(buffer).webp(MAP_CONFIG.quality);
-		await Bun.write(outputPath, processed);
-		log.fetchMaps.success('Map view cached', { id, view, filename, size: `${Math.round(processed.length / 1024)}KB` });
+		await Bun.write(outputPath, buffer);
+		log.fetchMaps.success('Map view cached', { id, view, filename, size: `${Math.round(buffer.length / 1024)}KB` });
 		return { remote: publicUrl, local: filename };
 	} catch (e) {
-		log.fetchMaps.warn('Map view processing failed', { id, view, error: e instanceof Error ? e.message : String(e) });
+		log.fetchMaps.warn('Map view write failed', { id, view, error: e instanceof Error ? e.message : String(e) });
 		return { remote: publicUrl, local: null };
 	}
 }
