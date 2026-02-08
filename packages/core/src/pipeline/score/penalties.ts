@@ -61,6 +61,24 @@ function calculatePetsPenalty(petPolicy: 'yes' | 'no' | 'unknown', config: Penal
 }
 
 /**
+ * Calculate deprivation penalty multiplier
+ * Applies when IMD decile is at or below the configured threshold (most deprived areas)
+ */
+function calculateDeprivationPenalty(imdDecile: number | null, config: PenaltyConfig): number {
+	if (imdDecile === null || imdDecile > config.deprivationThreshold) return 1.0;
+	return config.deprivation;
+}
+
+/**
+ * Calculate high crime penalty multiplier
+ * Applies when crime rate per 1k exceeds the configured threshold
+ */
+function calculateHighCrimePenalty(crimeRatePer1k: number | null, config: PenaltyConfig): number {
+	if (crimeRatePer1k === null || crimeRatePer1k <= config.highCrimeThreshold) return 1.0;
+	return config.highCrime;
+}
+
+/**
  * Calculate missing-data penalty multiplier
  */
 function calculateMissingDataPenalty(factors: NormalizedFactors, config: PenaltyConfig): number {
@@ -88,14 +106,18 @@ export function calculatePenalties(factors: NormalizedFactors, config: PenaltyCo
 	const epc = calculateEpcPenalty(factors.epcBand, config);
 	const garden = calculateGardenPenalty(factors.gardenType, config);
 	const pets = calculatePetsPenalty(factors.petPolicy, config);
+	const deprivation = calculateDeprivationPenalty(factors.imdDecile, config);
+	const highCrime = calculateHighCrimePenalty(factors.crimeRatePer1k, config);
 	const missing = calculateMissingDataPenalty(factors, config);
 
-	const combined = epc * garden * pets * missing;
+	const combined = epc * garden * pets * deprivation * highCrime * missing;
 
 	return {
 		epc,
 		garden,
 		pets,
+		deprivation,
+		highCrime,
 		combined,
 	};
 }
@@ -120,6 +142,14 @@ export function explainPenalties(penalties: PenaltyMultipliers): string[] {
 
 	if (penalties.pets < 1.0) {
 		explanations.push(`No pets allowed: ${Math.round((1 - penalties.pets) * 100)}% penalty (need dog-friendly)`);
+	}
+
+	if (penalties.deprivation < 1.0) {
+		explanations.push(`High deprivation area: ${Math.round((1 - penalties.deprivation) * 100)}% penalty (IMD decile in most deprived)`);
+	}
+
+	if (penalties.highCrime < 1.0) {
+		explanations.push(`High crime area: ${Math.round((1 - penalties.highCrime) * 100)}% penalty (crime rate exceeds threshold)`);
 	}
 
 	return explanations;

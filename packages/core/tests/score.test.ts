@@ -619,6 +619,55 @@ describe('calculatePenalties', () => {
 		expect(penalties.combined).toBeCloseTo(0.06, 2);
 	});
 
+	test('IMD decile 1 triggers deprivation penalty', () => {
+		const penalties = calculatePenalties({ ...baseFactors, imdDecile: 1 }, config.penalties);
+		expect(penalties.deprivation).toBe(0.75);
+		expect(penalties.combined).toBeLessThan(1.0);
+	});
+
+	test('IMD decile 2 triggers deprivation penalty', () => {
+		const penalties = calculatePenalties({ ...baseFactors, imdDecile: 2 }, config.penalties);
+		expect(penalties.deprivation).toBe(0.75);
+	});
+
+	test('IMD decile 3 does NOT trigger deprivation penalty', () => {
+		const penalties = calculatePenalties({ ...baseFactors, imdDecile: 3 }, config.penalties);
+		expect(penalties.deprivation).toBe(1.0);
+	});
+
+	test('null IMD decile does NOT trigger deprivation penalty', () => {
+		const penalties = calculatePenalties({ ...baseFactors, imdDecile: null }, config.penalties);
+		expect(penalties.deprivation).toBe(1.0);
+	});
+
+	test('crime rate 150 triggers high crime penalty', () => {
+		const penalties = calculatePenalties({ ...baseFactors, crimeRatePer1k: 150 }, config.penalties);
+		expect(penalties.highCrime).toBe(0.8);
+		expect(penalties.combined).toBeLessThan(1.0);
+	});
+
+	test('crime rate 80 does NOT trigger high crime penalty', () => {
+		const penalties = calculatePenalties({ ...baseFactors, crimeRatePer1k: 80 }, config.penalties);
+		expect(penalties.highCrime).toBe(1.0);
+	});
+
+	test('crime rate exactly at threshold does NOT trigger penalty', () => {
+		const penalties = calculatePenalties({ ...baseFactors, crimeRatePer1k: 120 }, config.penalties);
+		expect(penalties.highCrime).toBe(1.0);
+	});
+
+	test('null crime rate does NOT trigger high crime penalty', () => {
+		const penalties = calculatePenalties({ ...baseFactors, crimeRatePer1k: null }, config.penalties);
+		expect(penalties.highCrime).toBe(1.0);
+	});
+
+	test('both deprivation and crime penalties multiply into combined', () => {
+		const penalties = calculatePenalties({ ...baseFactors, imdDecile: 1, crimeRatePer1k: 150 }, config.penalties);
+		expect(penalties.deprivation).toBe(0.75);
+		expect(penalties.highCrime).toBe(0.8);
+		expect(penalties.combined).toBeCloseTo(0.75 * 0.8, 4);
+	});
+
 	test('missing data applies penalty multiplier', () => {
 		const penaltyConfig = { ...config.penalties, missingDataPenalty: 0.9 };
 		const penalties = calculatePenalties(
@@ -643,6 +692,8 @@ describe('explainPenalties', () => {
 			epc: 0.3,
 			garden: 1.0,
 			pets: 1.0,
+			deprivation: 1.0,
+			highCrime: 1.0,
 			combined: 0.3,
 		};
 		const explanations = explainPenalties(penalties);
@@ -655,10 +706,27 @@ describe('explainPenalties', () => {
 			epc: 0.1,
 			garden: 0.5,
 			pets: 0.4,
+			deprivation: 1.0,
+			highCrime: 1.0,
 			combined: 0.02,
 		};
 		const explanations = explainPenalties(penalties);
 		expect(explanations.length).toBe(3);
+	});
+
+	test('explains deprivation and crime penalties', () => {
+		const penalties = {
+			epc: 1.0,
+			garden: 1.0,
+			pets: 1.0,
+			deprivation: 0.75,
+			highCrime: 0.8,
+			combined: 0.6,
+		};
+		const explanations = explainPenalties(penalties);
+		expect(explanations.length).toBe(2);
+		expect(explanations[0]).toContain('deprivation');
+		expect(explanations[1]).toContain('crime');
 	});
 
 	test('returns empty array for no penalties', () => {
@@ -666,6 +734,8 @@ describe('explainPenalties', () => {
 			epc: 1.0,
 			garden: 1.0,
 			pets: 1.0,
+			deprivation: 1.0,
+			highCrime: 1.0,
 			combined: 1.0,
 		};
 		const explanations = explainPenalties(penalties);
@@ -1261,7 +1331,7 @@ describe('recalcAssessedScores', () => {
 			crimeRatePer1k: null,
 			crimeRatePercentile: null,
 		},
-		penalties: { epc: 1.0, garden: 1.0, pets: 1.0, combined: 1.0 },
+		penalties: { epc: 1.0, garden: 1.0, pets: 1.0, deprivation: 1.0, highCrime: 1.0, combined: 1.0 },
 		context: {
 			configHash: 'test-hash',
 			percentiles: {

@@ -71,11 +71,11 @@ G = 500
 
 # Location composite configuration
 [scoring.location]
-priorityWeight = 0.30   # Weight of region priority score
-broadbandWeight = 0.25  # Weight of gigabit availability
-stationWeight = 0.25    # Weight of station proximity
-imdWeight = 0.12        # Weight of IMD decile
-crimeWeight = 0.08      # Weight of crime rate percentile
+stationWeight = 0.20    # Weight of station proximity
+broadbandWeight = 0.20  # Weight of gigabit availability
+priorityWeight = 0.20   # Weight of region priority score
+imdWeight = 0.20        # Weight of IMD decile
+crimeWeight = 0.20      # Weight of crime rate percentile
 
 # Liveability composite configuration
 [scoring.liveability]
@@ -111,10 +111,14 @@ studio = 40
 # Applied multiplicatively to final score
 # Note: gardenRequired is automatically set based on mustHave containing "garden"
 [scoring.penalties]
-epcF = 0.00             # EPC F 100% penalty (uninhabitable)
-epcG = 0.00             # EPC G 100% penalty (uninhabitable)
-noGarden = 0.50         # No garden: 50% penalty - only applied when garden in mustHave
-noPets = 0.90           # No pets: 10% penalty
+epcF = 0.00               # EPC F 100% penalty (uninhabitable)
+epcG = 0.00               # EPC G 100% penalty (uninhabitable)
+noGarden = 0.50           # No garden: 50% penalty - only applied when garden in mustHave
+noPets = 0.90             # No pets: 10% penalty
+deprivation = 0.75        # IMD decile 1-2: 25% penalty (most deprived areas)
+deprivationThreshold = 2  # IMD decile cutoff (1-10 scale)
+highCrime = 0.80          # Crime rate above threshold: 20% penalty
+highCrimeThreshold = 120  # Crime rate per 1k population cutoff
 missingDataPenalty = 0.95 # Per-missing-factor penalty multiplier
 
 # Region priority scores (0-100)

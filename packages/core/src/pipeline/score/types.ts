@@ -64,6 +64,10 @@ export interface PenaltyConfig {
 	epcG: number;
 	noGarden: number;
 	noPets: number;
+	deprivation: number; // Multiplier (0-1), applied when IMD decile <= deprivationThreshold
+	deprivationThreshold: number; // IMD decile cutoff (1-10 scale)
+	highCrime: number; // Multiplier (0-1), applied when crime rate > highCrimeThreshold
+	highCrimeThreshold: number; // Crime rate per 1k population cutoff
 	missingDataPenalty: number;
 	gardenRequired: boolean; // Only apply noGarden penalty if true (garden in mustHave)
 }
@@ -160,6 +164,8 @@ export interface PenaltyMultipliers {
 	epc: number;
 	garden: number;
 	pets: number;
+	deprivation: number;
+	highCrime: number;
 	combined: number;
 }
 

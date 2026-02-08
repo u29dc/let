@@ -113,6 +113,10 @@ const PenaltyConfigSchema = z.object({
 	epcG: z.number().min(0).max(1),
 	noGarden: z.number().min(0).max(1),
 	noPets: z.number().min(0).max(1),
+	deprivation: z.number().min(0).max(1).default(0.75),
+	deprivationThreshold: z.number().int().min(1).max(10).default(2),
+	highCrime: z.number().min(0).max(1).default(0.8),
+	highCrimeThreshold: z.number().nonnegative().default(120),
 	missingDataPenalty: z.number().min(0).max(1).default(0.95),
 	gardenRequired: z.boolean().default(false), // Injected from mustHave, default false
 });
@@ -170,11 +174,11 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
 		},
 	},
 	location: {
-		stationWeight: 0.25,
-		broadbandWeight: 0.25,
-		priorityWeight: 0.3,
-		imdWeight: 0.12,
-		crimeWeight: 0.08,
+		stationWeight: 0.2,
+		broadbandWeight: 0.2,
+		priorityWeight: 0.2,
+		imdWeight: 0.2,
+		crimeWeight: 0.2,
 	},
 	liveability: {
 		gardenWeight: 0.45,
@@ -207,6 +211,10 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
 		epcG: 0.0,
 		noGarden: 0.5,
 		noPets: 0.4,
+		deprivation: 0.75,
+		deprivationThreshold: 2,
+		highCrime: 0.8,
+		highCrimeThreshold: 120,
 		missingDataPenalty: 0.95,
 		gardenRequired: false, // Set by applySearchScoringSync based on mustHave
 	},

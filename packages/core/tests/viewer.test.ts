@@ -38,6 +38,8 @@ function createScores(overall: number): Scores {
 			epc: 1.0,
 			garden: 1.0,
 			pets: 1.0,
+			deprivation: 1.0,
+			highCrime: 1.0,
 			combined: 1.0,
 		},
 		context: {

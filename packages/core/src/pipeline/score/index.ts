@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto';
 import type { Listing } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
-import { parseScoringConfig } from '../../config/index.js';
+import { DEFAULT_SCORING_CONFIG, parseScoringConfig } from '../../config/index.js';
 import { calculateAssessedScore } from '../assess/index.js';
 import { aggregateScores } from './aggregate.js';
 import { calculateAffordability, calculateLiveability, calculateLocation } from './composites.js';
@@ -84,90 +84,7 @@ export type {
 // PUBLIC API
 // =============================================================================
 
-/**
- * Default scoring configuration
- */
-export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
-	adaptiveness: 2.0, // 1.0=conservative, 2.0=balanced, 4.0=aggressive compensation
-	adaptivenessFactor: 10, // Sigmoid steepness multiplier (exposes previous hardcoded factor)
-	weights: {
-		affordability: 0.4,
-		location: 0.3,
-		liveability: 0.3,
-	},
-	affordability: {
-		priceWeight: 1.0, // 100% true cost percentile (rent + heating)
-		epcWeight: 0.0, // EPC captured via true cost; avoid double-counting
-		heatingCosts: {
-			A: 30,
-			B: 45,
-			C: 70,
-			D: 100,
-			E: 150,
-			F: 200,
-			G: 250,
-		},
-	},
-	location: {
-		stationWeight: 0.25,
-		broadbandWeight: 0.25,
-		priorityWeight: 0.3,
-		imdWeight: 0.12,
-		crimeWeight: 0.08,
-	},
-	liveability: {
-		gardenWeight: 0.45,
-		heatingWeight: 0.3,
-		propertyTypeWeight: 0.25,
-		garden: {
-			private: 100,
-			shared: 40,
-			none: 0,
-		},
-		heating: {
-			gas: 100,
-			electric: 60,
-			unknown: 30,
-		},
-		propertyType: {
-			detached: 95,
-			house: 95,
-			'semi-detached': 90,
-			terraced: 85,
-			cottage: 85,
-			bungalow: 80,
-			flat: 65,
-			apartment: 65,
-			studio: 40,
-		},
-	},
-	penalties: {
-		epcF: 0.0,
-		epcG: 0.0,
-		noGarden: 0.5,
-		noPets: 0.4,
-		missingDataPenalty: 0.95,
-		gardenRequired: false, // Set to true if garden in mustHave
-	},
-	regionPriority: {
-		York: 95,
-		Durham: 90,
-		Stamford: 90,
-		Brighton: 85,
-		Harrogate: 85,
-		Newcastle: 80,
-		Liverpool: 80,
-		Morpeth: 80,
-		Lancaster: 75,
-		Folkestone: 75,
-		Leicester: 75,
-		Nottingham: 70,
-		Sheffield: 70,
-		Swansea: 70,
-		Leeds: 65,
-		Manchester: 65,
-	},
-};
+export { DEFAULT_SCORING_CONFIG };
 
 function hashScoringConfig(config: ScoringConfig): string {
 	const serialized = JSON.stringify(config);
