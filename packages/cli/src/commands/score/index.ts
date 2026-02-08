@@ -1,10 +1,11 @@
 /**
  * `score` command group — Score analysis.
  *
- * Subcommands: explain (compute added later in Stage 4)
+ * Subcommands: explain, compute
  */
 
 import { defineCommand } from 'citty';
+import { scoreComputeCommand } from './compute.js';
 import { scoreExplainCommand } from './explain.js';
 
 export const scoreCommand = defineCommand({
@@ -14,5 +15,6 @@ export const scoreCommand = defineCommand({
 	},
 	subCommands: {
 		explain: scoreExplainCommand,
+		compute: scoreComputeCommand,
 	},
 });

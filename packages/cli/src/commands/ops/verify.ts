@@ -6,6 +6,7 @@ import { buildListingUrl, fetchWithRateLimit, setFetchDelay } from '@let/core/pi
 import type { Listing, ListingsFile } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
 import { defineCommand } from 'citty';
+import { isJsonMode, ok } from '../../envelope.js';
 import { printKeyValues, section } from '../../output/index.js';
 import { LISTINGS_DB_PATH, loadExistingListings, saveListingsFile } from '../shared.js';
 
@@ -151,6 +152,17 @@ async function runVerification(toVerify: Listing[]): Promise<{ results: VerifyRe
 	return { results, inactive, errors };
 }
 
+/** Apply inactive status to listings based on verification results */
+function applyInactiveStatus(listings: Listing[], results: VerifyResult[]): void {
+	const listingsById = new Map(listings.map((l) => [l.id, l]));
+	for (const result of results) {
+		if (!result.error && result.status === 'inactive') {
+			const listing = listingsById.get(result.id);
+			if (listing) listing.status = 'inactive';
+		}
+	}
+}
+
 /** Print verification summary */
 function printVerifySummary(total: number, inactive: number, errors: number): void {
 	section('Verification Summary');
@@ -176,8 +188,11 @@ export const verifyCommand = defineCommand({
 		region: { type: 'string', description: 'Only verify listings from specific region' },
 		limit: { type: 'string', description: 'Max listings to check' },
 		delay: { type: 'string', description: 'Delay between requests in ms', default: '3000' },
+		json: { type: 'boolean', description: 'Output as JSON envelope', default: false },
 	},
 	async run({ args }) {
+		const start = performance.now();
+		const jsonMode = isJsonMode();
 		const parsed = parseVerifyArgs(args);
 		if (!parsed) return;
 
@@ -185,13 +200,17 @@ export const verifyCommand = defineCommand({
 		log.cli.info('Verify listings', { dryRun: parsed.dryRun, region: parsed.region ?? 'all', delay: parsed.delay });
 
 		const existing = loadExistingListings();
+		const emptyResult = { checked: 0, active: 0, inactive: 0, errors: 0, results: [] };
+
 		if (existing.listings.length === 0) {
+			if (jsonMode) ok('ops.verify', emptyResult, start);
 			log.cli.warn('No listings to verify');
 			return;
 		}
 
 		const toVerify = filterListingsForVerify(existing.listings, parsed.region, parsed.limit);
 		if (toVerify.length === 0) {
+			if (jsonMode) ok('ops.verify', emptyResult, start);
 			log.cli.success('No listings to verify (all already have status)');
 			return;
 		}
@@ -199,20 +218,17 @@ export const verifyCommand = defineCommand({
 		log.cli.info('Verifying listings', { count: toVerify.length, total: existing.listings.length });
 
 		const { results, inactive, errors } = await runVerification(toVerify);
-		printVerifySummary(results.length, inactive, errors);
+		const active = results.length - inactive - errors;
+
+		if (!jsonMode) printVerifySummary(results.length, inactive, errors);
 
 		if (parsed.dryRun) {
+			if (jsonMode) ok('ops.verify', { checked: results.length, active, inactive, errors, dryRun: true, results }, start);
 			log.cli.info('Dry run - no changes saved');
 			return;
 		}
 
-		const listingsById = new Map(existing.listings.map((l) => [l.id, l]));
-		for (const result of results) {
-			if (!result.error && result.status === 'inactive') {
-				const listing = listingsById.get(result.id);
-				if (listing) listing.status = 'inactive';
-			}
-		}
+		applyInactiveStatus(existing.listings, results);
 
 		const output: ListingsFile = {
 			updatedAt: new Date().toISOString(),
@@ -223,6 +239,8 @@ export const verifyCommand = defineCommand({
 		};
 
 		await saveListingsFile(output);
+
+		if (jsonMode) ok('ops.verify', { checked: results.length, active, inactive, errors, results }, start);
 		log.cli.success('Verification complete', { path: LISTINGS_DB_PATH, inactive });
 	},
 });

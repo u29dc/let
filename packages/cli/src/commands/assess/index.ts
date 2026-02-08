@@ -1,15 +1,13 @@
 /**
- * `assess` command group — Assessment workflow (read-only first).
+ * `assess` command group — Assessment workflow.
  *
- * Subcommands: candidates, context (submit added later in Stage 4)
- *
- * Note: The legacy `assess` command (assess.ts) remains for backward compat.
- * This module provides the new agent-native subcommands.
+ * Subcommands: candidates, context, submit
  */
 
 import { defineCommand } from 'citty';
 import { assessCandidatesCommand } from './candidates.js';
 import { assessContextCommand } from './context.js';
+import { assessSubmitCommand } from './submit.js';
 
 export const assessNewCommand = defineCommand({
 	meta: {
@@ -19,5 +17,6 @@ export const assessNewCommand = defineCommand({
 	subCommands: {
 		candidates: assessCandidatesCommand,
 		context: assessContextCommand,
+		submit: assessSubmitCommand,
 	},
 });
