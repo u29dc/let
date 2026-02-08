@@ -92,6 +92,11 @@ export function getNearestStationDistance(listing: Listing): number | null {
 
 /** Extract raw factors from a listing */
 export function extractRawFactors(listing: Listing, regions?: string[]): RawFactors {
+	const regionName = extractRegionName(listing, regions);
+	if (regionName && !listing.region) {
+		listing.region = regionName;
+	}
+
 	return {
 		monthlyRent: listing.price,
 		floorAreaSqm: listing.floorAreaSqm ?? null,
@@ -99,7 +104,7 @@ export function extractRawFactors(listing: Listing, regions?: string[]): RawFact
 		bedrooms: listing.bedrooms,
 		stationMiles: getNearestStationDistance(listing),
 		gigabitPct: listing.gigabitAvailability ?? null,
-		regionName: extractRegionName(listing, regions),
+		regionName,
 		gardenType: detectGardenType(listing),
 		heatingType: detectHeatingType(listing),
 		petPolicy: detectPetPolicy(listing),

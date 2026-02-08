@@ -986,6 +986,28 @@ describe('extractRawFactors', () => {
 		expect(factors.bedrooms).toBe(3);
 	});
 
+	test('persists region to listing.region when null', () => {
+		const listing = createListing({
+			region: null,
+			address: '42 Test Street, Sheffield',
+		});
+
+		extractRawFactors(listing, ['Sheffield']);
+
+		expect(listing.region).toBe('Sheffield');
+	});
+
+	test('does not overwrite existing region', () => {
+		const listing = createListing({
+			region: 'Manchester',
+			address: '42 Test Street, Sheffield',
+		});
+
+		extractRawFactors(listing, ['Sheffield', 'Manchester']);
+
+		expect(listing.region).toBe('Manchester');
+	});
+
 	test('handles missing data gracefully', () => {
 		const listing = createListing({
 			price: 1000,
