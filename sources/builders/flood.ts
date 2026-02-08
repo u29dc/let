@@ -10,17 +10,18 @@ import { Database } from 'bun:sqlite';
 import { createReadStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { createBatchInserter, downloadFile, findColumnIndex, normalizePostcode, parseCsvLine, progress, progressDone, withTempDir } from '../utils/index.ts';
+import { checkSasExpiry, createBatchInserter, downloadFile, findColumnIndex, normalizePostcode, parseCsvLine, progress, progressDone, withTempDir } from '../utils/index.ts';
 
 /**
  * Source page: https://environment.data.gov.uk/dataset/53cba123-71f8-417a-8441-4c7ba111e8e1
- * Direct download: https://agrilake2live.file.core.windows.net/gms-datasets/fb921496-1788-4fc2-b469-7b51e2a45553/Postcodes_Risk_Assessment_All.csv?sv=2022-11-02&se=2026-01-29T16%3A06%3A25Z&sr=f&sp=r&sig=%2FoFvyR1D%2BkDg%2BH5Sncfw5V9yQVxJN0jG6ialALfwdjo%3D
+ * Direct download: https://agrilake2live.file.core.windows.net/gms-datasets/fb921496-1788-4fc2-b469-7b51e2a45553/Postcodes_Risk_Assessment_All.csv?sv=2022-11-02&se=2026-02-09T12%3A34%3A08Z&sr=f&sp=r&sig=ZqHp87BTmcoetaCQ7aVNxBx0Sb5fVjoJEq50vFG0zZY%3D
  * Notes:
  * - SAS links can expire; overrides supported via FLOOD_CSV_URL or FLOOD_CSV_PATH.
  * - Human service reference: https://www.gov.uk/check-long-term-flood-risk
  */
 const FLOOD_CSV_URL =
-	'https://agrilake2live.file.core.windows.net/gms-datasets/fb921496-1788-4fc2-b469-7b51e2a45553/Postcodes_Risk_Assessment_All.csv?sv=2022-11-02&se=2026-01-29T16%3A06%3A25Z&sr=f&sp=r&sig=%2FoFvyR1D%2BkDg%2BH5Sncfw5V9yQVxJN0jG6ialALfwdjo%3D';
+	'https://agrilake2live.file.core.windows.net/gms-datasets/fb921496-1788-4fc2-b469-7b51e2a45553/Postcodes_Risk_Assessment_All.csv?sv=2022-11-02&se=2026-02-09T12%3A34%3A08Z&sr=f&sp=r&sig=ZqHp87BTmcoetaCQ7aVNxBx0Sb5fVjoJEq50vFG0zZY%3D';
+const FLOOD_SOURCE_PAGE = 'https://environment.data.gov.uk/dataset/53cba123-71f8-417a-8441-4c7ba111e8e1';
 const DB_PATH = join(import.meta.dirname, '..', 'db', 'flood.db');
 mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
 
@@ -36,6 +37,13 @@ async function downloadDataset(tempDir: string): Promise<string> {
 	console.log('Downloading flood risk dataset...');
 	const downloadUrl = process.env['FLOOD_CSV_URL'] ?? FLOOD_CSV_URL;
 	console.log(`URL: ${downloadUrl}\n`);
+	checkSasExpiry(downloadUrl, {
+		sourceName: 'flood',
+		sourcePageUrl: FLOOD_SOURCE_PAGE,
+		envUrlVar: 'FLOOD_CSV_URL',
+		envPathVar: 'FLOOD_CSV_PATH',
+		buildCommand: 'bun run sources:flood',
+	});
 	await downloadFile(downloadUrl, csvPath);
 	console.log('Download complete.\n');
 	return csvPath;

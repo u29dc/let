@@ -31,6 +31,47 @@ export function progressDone(): void {
 }
 
 // ============================================================================
+// SAS token expiry check
+// ============================================================================
+
+export interface SasExpiryContext {
+	sourceName: string;
+	sourcePageUrl: string;
+	envUrlVar: string;
+	envPathVar: string;
+	buildCommand: string;
+}
+
+export function checkSasExpiry(url: string, ctx: SasExpiryContext): void {
+	const parsed = new URL(url);
+	const seParam = parsed.searchParams.get('se');
+	if (!seParam) return;
+
+	const expiry = new Date(seParam);
+	if (Number.isNaN(expiry.getTime())) return;
+
+	const now = new Date();
+	const msUntilExpiry = expiry.getTime() - now.getTime();
+
+	if (msUntilExpiry <= 0) {
+		const expiryStr = expiry.toISOString().slice(0, 10);
+		throw new Error(
+			`SAS token expired for ${ctx.sourceName} dataset (expired ${expiryStr})\n\n` +
+				`Get a fresh URL from: ${ctx.sourcePageUrl}\n` +
+				`Then either:\n` +
+				`  ${ctx.envUrlVar}="<new-url>" ${ctx.buildCommand}\n` +
+				`  ${ctx.envPathVar}="/path/to/local.csv" ${ctx.buildCommand}`,
+		);
+	}
+
+	const hoursUntilExpiry = msUntilExpiry / (1000 * 60 * 60);
+	if (hoursUntilExpiry <= 24) {
+		// biome-ignore lint/suspicious/noConsole: build script warning to stderr
+		console.warn(`WARNING: SAS token for ${ctx.sourceName} expires in ${Math.round(hoursUntilExpiry)}h (${expiry.toISOString().slice(0, 10)})`);
+	}
+}
+
+// ============================================================================
 // Download with streaming and progress
 // ============================================================================
 
