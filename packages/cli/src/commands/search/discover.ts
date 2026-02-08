@@ -40,13 +40,13 @@ function buildSearchParams(locationId: string, filters: SearchFilters, maxPerLoc
 	};
 }
 
-async function searchLocations(searchConfig: SearchConfig, locations: SearchConfig['locations'], maxPerLocation: number) {
+async function searchLocations(filters: SearchFilters, locations: SearchConfig['locations'], maxPerLocation: number) {
 	const allIds: string[] = [];
 	const locationResults: Array<{ name: string; id: string; count: number }> = [];
 
 	for (const loc of locations) {
 		log.cli.info(`Searching ${loc.name}...`);
-		const params = buildSearchParams(loc.id, searchConfig.filters, maxPerLocation);
+		const params = buildSearchParams(loc.id, filters, maxPerLocation);
 		const result = await searchListingsApi(params);
 
 		if (result.success) {
@@ -82,6 +82,14 @@ export const searchDiscoverCommand = defineToolCommand(
 				type: 'string' as const,
 				description: 'Filter to specific location name',
 			},
+			location: {
+				type: 'string' as const,
+				description: 'Raw locationIdentifier for ad-hoc search (e.g., REGION^904)',
+			},
+			'property-types': {
+				type: 'string' as const,
+				description: 'Override property types (comma-separated, e.g., flat,apartment)',
+			},
 			limit: {
 				type: 'string' as const,
 				description: 'Max listings per location',
@@ -107,7 +115,9 @@ export const searchDiscoverCommand = defineToolCommand(
 				setFetchMaxRetries(config.fetch.maxRetries);
 
 				let locations = config.search.locations;
-				if (args.region) {
+				if (args.location) {
+					locations = [{ id: args.location, name: args.location }];
+				} else if (args.region) {
 					const regionLower = args.region.toLowerCase();
 					locations = locations.filter((loc) => loc.name.toLowerCase().includes(regionLower));
 					if (locations.length === 0) {
@@ -119,8 +129,13 @@ export const searchDiscoverCommand = defineToolCommand(
 					}
 				}
 
+				let filters = config.search.filters;
+				if (args['property-types']) {
+					filters = { ...filters, propertyTypes: args['property-types'].split(',').map((t: string) => t.trim()) };
+				}
+
 				const maxPerLocation = args.limit ? Number.parseInt(args.limit, 10) : config.fetch.maxListings;
-				const { ids, locationResults } = await searchLocations(config.search, locations, maxPerLocation);
+				const { ids, locationResults } = await searchLocations(filters, locations, maxPerLocation);
 
 				if (jsonMode) {
 					ok('search.discover', { ids, total: ids.length, locations: locationResults }, start);

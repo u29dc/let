@@ -342,6 +342,23 @@ describe('Registry drift', () => {
 		}
 	});
 
+	test('fetch tool has --region parameter', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
+		const fetchTool = parsed['data']['tools'].find((t: { name: string }) => t.name === 'fetch');
+		const paramNames: string[] = fetchTool['parameters'].map((p: { name: string }) => p.name);
+		expect(paramNames).toContain('--region');
+	});
+
+	test('search.discover tool has --location and --property-types parameters', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
+		const discoverTool = parsed['data']['tools'].find((t: { name: string }) => t.name === 'search.discover');
+		const paramNames: string[] = discoverTool['parameters'].map((p: { name: string }) => p.name);
+		expect(paramNames).toContain('--location');
+		expect(paramNames).toContain('--property-types');
+	});
+
 	test('tools and health are infrastructure, not in catalog', async () => {
 		const { stdout } = await run(['tools', '--json'], ENV);
 		const parsed = JSON.parse(stdout);

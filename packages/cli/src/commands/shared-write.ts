@@ -254,7 +254,7 @@ function carryOverPersistentFields(incoming: Listing, existing: Listing): void {
 }
 
 /** Deduplicate listings by rightmove portal ID, keeping the most recently fetched version */
-function deduplicateListings(listings: Listing[]): { uniqueListings: Listing[]; removed: number; replaced: number } {
+export function deduplicateListings(listings: Listing[]): { uniqueListings: Listing[]; removed: number; replaced: number } {
 	const indexById = new Map<string, number>();
 	const uniqueListings: Listing[] = [];
 	let removed = 0;

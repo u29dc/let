@@ -6,7 +6,7 @@
  */
 
 import { loadConfig, resetConfigCache } from '@let/core/config';
-import { loadListingsFile, saveListingsFile as saveToDb } from '@let/core/db';
+import { loadListingsFile } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { closeAreaDbs, closeBroadbandDb } from '@let/core/pipeline/enrich';
 import { setApiDelay, setApiMaxRetries, setFetchDelay, setFetchMaxRetries } from '@let/core/pipeline/fetch';
@@ -15,7 +15,7 @@ import type { Listing, ListingsFile } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
 import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
-import { processListing } from '../shared-write.js';
+import { processListing, saveListingsFile } from '../shared-write.js';
 
 type FetchedItem = { id: string; address: string; score: number | null };
 type FailedItem = { id: string; error: string };
@@ -36,14 +36,16 @@ function parseInputIds(raw: string): string[] {
 		.filter(Boolean);
 }
 
-async function fetchListings(inputIds: string[], options: { skipImages: boolean; skipEpc: boolean }) {
+async function fetchListings(inputIds: string[], options: { skipImages: boolean; skipEpc: boolean; region?: string }) {
 	const fetched: FetchedItem[] = [];
 	const failed: FailedItem[] = [];
 	const newListings: Listing[] = [];
 
 	for (const id of inputIds) {
 		try {
-			const listing = await processListing(id, { skipImages: options.skipImages, skipEpc: options.skipEpc });
+			const processOptions: Parameters<typeof processListing>[1] = { skipImages: options.skipImages, skipEpc: options.skipEpc };
+			if (options.region) processOptions.region = options.region;
+			const listing = await processListing(id, processOptions);
 			if (listing) {
 				newListings.push(listing);
 				fetched.push({ id, address: listing.address, score: null });
@@ -95,6 +97,10 @@ export const fetchNewCommand = defineToolCommand(
 				description: 'Comma-separated portal IDs to fetch',
 				required: true,
 			},
+			region: {
+				type: 'string' as const,
+				description: 'Region name to assign to fetched listings',
+			},
 			'skip-images': {
 				type: 'boolean' as const,
 				description: 'Skip image/map downloads',
@@ -135,7 +141,7 @@ export const fetchNewCommand = defineToolCommand(
 				setApiMaxRetries(config.fetch.maxRetries);
 
 				const existing = loadExisting(dbPath);
-				const { fetched, failed, newListings } = await fetchListings(inputIds, { skipImages: args['skip-images'], skipEpc: args['skip-epc'] });
+				const { fetched, failed, newListings } = await fetchListings(inputIds, { skipImages: args['skip-images'], skipEpc: args['skip-epc'], region: args.region });
 
 				const merged = [...existing.listings, ...newListings];
 				const scored = scoreListingsWithConfig(merged, config as unknown as Record<string, unknown>);
@@ -149,11 +155,20 @@ export const fetchNewCommand = defineToolCommand(
 					lastSearchTotal: existing.lastSearchTotal,
 					listings: scored,
 				};
-				saveToDb(dbPath, output);
+
+				let saveError: string | undefined;
+				try {
+					await saveListingsFile(output);
+				} catch (error) {
+					saveError = error instanceof Error ? error.message : String(error);
+					log.cli.error(`Save failed: ${saveError}`);
+				}
 				cleanupDbs();
 
 				if (jsonMode) {
-					ok('fetch', { fetched, failed, total: inputIds.length }, start);
+					const data: Record<string, unknown> = { fetched, failed, total: inputIds.length };
+					if (saveError) data['saveError'] = saveError;
+					ok('fetch', data, start);
 				}
 
 				log.cli.info(`Fetched ${fetched.length}/${inputIds.length} listings`);
