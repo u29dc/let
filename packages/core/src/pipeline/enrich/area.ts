@@ -3,9 +3,9 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { isAbsolute, join } from 'node:path';
 import type { Listing } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
+import { paths } from '../../paths.js';
 
 type DbKey = 'postcodes' | 'deprivation' | 'census' | 'population' | 'income' | 'flood' | 'crime' | 'uprn';
 
@@ -22,31 +22,11 @@ type PostcodeLookup = {
 
 export type AreaEnrichmentResult = { applied: boolean };
 
-const DB_FILES: Record<DbKey, string> = {
-	postcodes: 'postcodes.db',
-	deprivation: 'deprivation.db',
-	census: 'census.db',
-	population: 'population.db',
-	income: 'income.db',
-	flood: 'flood.db',
-	crime: 'crime.db',
-	uprn: 'uprn.db',
-};
-
 const dbCache: Partial<Record<DbKey, Database>> = {};
 const dbFailed = new Set<DbKey>();
 
-function resolveSourcesDir(): string {
-	const letHome = process.env['LET_HOME'];
-	if (letHome) {
-		const base = isAbsolute(letHome) ? letHome : join(process.cwd(), letHome);
-		return join(base, 'sources', 'db');
-	}
-	return join(import.meta.dirname, '..', '..', '..', '..', '..', 'sources', 'db');
-}
-
 function resolveDbPath(key: DbKey): string {
-	return join(resolveSourcesDir(), DB_FILES[key]);
+	return paths().derived.sourceDb(key);
 }
 
 function getDb(key: DbKey): Database | null {

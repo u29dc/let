@@ -5,6 +5,7 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
+		"./paths": "./src/paths.ts",
 		"./schema": "./src/schema/index.ts",
 		"./config": "./src/config/index.ts",
 		"./pipeline": "./src/pipeline/index.ts",

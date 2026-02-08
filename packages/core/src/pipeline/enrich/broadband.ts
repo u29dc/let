@@ -8,8 +8,8 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { isAbsolute, join } from 'node:path';
 import { log } from '@let/core/utils/logger';
+import { paths } from '../../paths.js';
 
 /**
  * Result of a broadband lookup
@@ -22,16 +22,10 @@ export interface BroadbandResult {
 }
 
 /**
- * Resolve database path using LET_HOME or relative to monorepo root
+ * Resolve database path using shared path resolution
  */
 function resolveDatabasePath(): string {
-	const letHome = process.env['LET_HOME'];
-	if (letHome) {
-		const base = isAbsolute(letHome) ? letHome : join(process.cwd(), letHome);
-		return join(base, 'sources', 'db', 'broadband.db');
-	}
-	// Fallback: 6 levels up from packages/core/src/pipeline/enrich/
-	return join(import.meta.dirname, '..', '..', '..', '..', '..', 'sources', 'db', 'broadband.db');
+	return paths().derived.sourceDb('broadband');
 }
 
 /** Cached database connection (singleton) */

@@ -6,8 +6,10 @@ import * as readline from 'node:readline/promises';
 import type { Listing, ListingsFile } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
 import { defineCommand } from 'citty';
+import { isJsonMode, ok } from '../../envelope.js';
 import { createTable, formatScoreWithSignal, printKeyValues, subheader } from '../../output/index.js';
-import { loadExistingListings, saveListingsFile } from '../shared.js';
+import { loadExistingListings } from '../shared-read.js';
+import { saveListingsFile } from '../shared-write.js';
 
 /** Prompt user for confirmation */
 async function promptConfirm(message: string): Promise<boolean> {
@@ -83,6 +85,7 @@ type PruneArgs = {
 	'dry-run': boolean;
 	force: boolean;
 	region?: string;
+	inactive?: boolean;
 	'min-score': string;
 	bottom?: string;
 };
@@ -141,6 +144,34 @@ async function pruneByRegion(existing: ExistingListings, region: string, args: P
 	};
 	await saveListingsFile(output);
 	log.cli.success('Pruned by region', { removed: toRemove.length, remaining: toKeep.length });
+}
+
+/** Prune inactive listings */
+async function pruneInactive(existing: ExistingListings, args: PruneArgs, jsonMode: boolean, start: number): Promise<void> {
+	const toRemove = existing.listings.filter((l) => l.status === 'inactive');
+	const toKeep = existing.listings.filter((l) => l.status !== 'inactive');
+
+	if (toRemove.length === 0) {
+		if (jsonMode) ok('ops.prune', { removed: 0, remaining: existing.listings.length, mode: 'inactive' }, start);
+		log.cli.success('No inactive listings to prune');
+		return;
+	}
+
+	if (!jsonMode) displayRemovalPreview(toRemove);
+
+	if (!args['dry-run'] && (args.force || jsonMode)) {
+		const output: ListingsFile = {
+			updatedAt: new Date().toISOString(),
+			searchUrls: existing.searchUrls,
+			locations: existing.locations,
+			lastSearchTotal: existing.lastSearchTotal,
+			listings: toKeep,
+		};
+		await saveListingsFile(output);
+	}
+
+	if (jsonMode) ok('ops.prune', { removed: toRemove.length, remaining: toKeep.length, mode: 'inactive', dryRun: args['dry-run'] }, start);
+	log.cli.success('Pruned inactive', { removed: toRemove.length, remaining: toKeep.length });
 }
 
 /** Prune listings by score threshold */
@@ -225,6 +256,11 @@ export const pruneCommand = defineCommand({
 			type: 'string',
 			description: 'Remove all listings from these regions (comma-separated)',
 		},
+		inactive: {
+			type: 'boolean',
+			description: 'Remove inactive listings',
+			default: false,
+		},
 		'dry-run': {
 			type: 'boolean',
 			description: 'Preview without removing',
@@ -235,11 +271,24 @@ export const pruneCommand = defineCommand({
 			description: 'Skip confirmation prompt',
 			default: false,
 		},
+		json: {
+			type: 'boolean',
+			description: 'Output as JSON envelope',
+			default: false,
+		},
 	},
 	async run({ args }) {
+		const start = performance.now();
+		const jsonMode = isJsonMode();
 		const existing = loadExistingListings();
 		if (existing.listings.length === 0) {
+			if (jsonMode) ok('ops.prune', { removed: 0, remaining: 0, mode: 'none' }, start);
 			log.cli.warn('No listings to prune');
+			return;
+		}
+
+		if (args.inactive) {
+			await pruneInactive(existing, args, jsonMode, start);
 			return;
 		}
 

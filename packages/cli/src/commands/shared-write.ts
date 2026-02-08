@@ -7,12 +7,12 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { type Config, loadConfig } from '@let/core/config';
 import { saveListingsFile as saveListingsToDb } from '@let/core/db';
+import { paths } from '@let/core/paths';
 import { applyEpcToListing, enrichListingArea, enrichListingNotes, enrichWithEpc, lookupBroadband } from '@let/core/pipeline/enrich';
 import { buildListingUrl, downloadListingImages, fetchMapViews, fetchWithRateLimit } from '@let/core/pipeline/fetch';
 import { extractPageModel, scrapeListing } from '@let/core/pipeline/parse';
 import type { Listing, ListingsFile } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
-import { CACHE_DIR, CONFIG_PATH, LISTINGS_DB_PATH } from './shared-read.js';
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -44,12 +44,13 @@ function readCacheAsHtml(path: string, id: string, label: string): string {
  * Cache structure: .cache/{id}/data.json
  */
 export function getCachedHtml(id: string, options: { allowStale?: boolean } = {}): string | undefined {
-	const newJsonPath = join(CACHE_DIR, id, 'data.json');
+	const cacheDir = paths().resolved.cache;
+	const newJsonPath = join(cacheDir, id, 'data.json');
 	if (existsSync(newJsonPath)) {
 		if (!options.allowStale && isCacheStale(newJsonPath, id)) return undefined;
 		return readCacheAsHtml(newJsonPath, id, '');
 	}
-	const legacyJsonPath = join(CACHE_DIR, `${id}.json`);
+	const legacyJsonPath = join(cacheDir, `${id}.json`);
 	if (existsSync(legacyJsonPath)) {
 		if (!options.allowStale && isCacheStale(legacyJsonPath, id)) return undefined;
 		return readCacheAsHtml(legacyJsonPath, id, ' (legacy)');
@@ -63,8 +64,7 @@ export function getCachedHtml(id: string, options: { allowStale?: boolean } = {}
  * Cache structure: .cache/{id}/data.json
  */
 export function cachePageModel(id: string, html: string): void {
-	// New structure: .cache/{id}/data.json
-	const listingDir = join(CACHE_DIR, id);
+	const listingDir = paths().derived.cacheDir(id);
 	mkdirSync(listingDir, { recursive: true });
 	const jsonPath = join(listingDir, 'data.json');
 
@@ -167,15 +167,16 @@ async function getListingHtml(id: string, options: Pick<ProcessListingOptions, '
  * Download images and map views for a listing
  */
 async function applyMediaAssets(listing: Listing, id: string, options: Pick<ProcessListingOptions, 'skipImages' | 'dev'>): Promise<void> {
+	const cacheDir = paths().resolved.cache;
 	const skip = options.skipImages || options.dev;
 	if (!skip) {
-		const imageResult = await downloadListingImages(id, listing.images, listing.floorplan, listing.epc, CACHE_DIR);
+		const imageResult = await downloadListingImages(id, listing.images, listing.floorplan, listing.epc, cacheDir);
 		listing.images = imageResult.images;
 		listing.floorplan = imageResult.floorplan;
 		listing.epc = imageResult.epc;
 	}
 	if (!skip) {
-		const mapResult = await fetchMapViews(id, listing.location.lat, listing.location.lng, CACHE_DIR);
+		const mapResult = await fetchMapViews(id, listing.location.lat, listing.location.lng, cacheDir);
 		listing.mapViews = mapResult.success ? mapResult.mapViews : { satellite: { remote: null, local: null }, street: { remote: null, local: null } };
 	} else {
 		listing.mapViews = { satellite: { remote: null, local: null }, street: { remote: null, local: null } };
@@ -220,11 +221,12 @@ export async function processListing(id: string, options: ProcessListingOptions)
  * Load and return config, or exit on error
  */
 export async function loadConfigOrExit(): Promise<Config> {
+	const configFile = paths().derived.configFile;
 	try {
-		return await loadConfig(CONFIG_PATH);
+		return await loadConfig(configFile);
 	} catch (e) {
 		log.cli.error('Failed to load config', {
-			path: CONFIG_PATH,
+			path: configFile,
 			error: e instanceof Error ? e.message : String(e),
 		});
 		process.exit(1);
@@ -294,22 +296,23 @@ export async function saveListingsFile(output: ListingsFile): Promise<void> {
 		log.cli.warn('Duplicate listings resolved before save', { removed, replaced, remaining: uniqueListings.length });
 	}
 
-	saveListingsToDb(LISTINGS_DB_PATH, { ...output, listings: uniqueListings });
+	saveListingsToDb(paths().derived.database, { ...output, listings: uniqueListings });
 }
 
 /**
  * Download images and maps for a listing (for deferred batch downloads)
  */
 export async function downloadListingAssets(listing: Listing): Promise<void> {
+	const cacheDir = paths().resolved.cache;
 	const id = listing.portalIds.rightmove ?? listing.id;
 
 	// Download images
-	const imageResult = await downloadListingImages(id, listing.images, listing.floorplan, listing.epc, CACHE_DIR);
+	const imageResult = await downloadListingImages(id, listing.images, listing.floorplan, listing.epc, cacheDir);
 	listing.images = imageResult.images;
 	listing.floorplan = imageResult.floorplan;
 	listing.epc = imageResult.epc;
 
 	// Fetch map views
-	const mapResult = await fetchMapViews(id, listing.location.lat, listing.location.lng, CACHE_DIR);
+	const mapResult = await fetchMapViews(id, listing.location.lat, listing.location.lng, cacheDir);
 	listing.mapViews = mapResult.success ? mapResult.mapViews : { satellite: { remote: null, local: null }, street: { remote: null, local: null } };
 }
