@@ -280,6 +280,56 @@ describe('JSON envelope contracts', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Assessment atomicity regression test
+// ---------------------------------------------------------------------------
+
+describe('Assessment atomicity', () => {
+	const ASSESSMENT_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+	test('sequential assessments both persist (no data loss from targeted UPDATE)', async () => {
+		// First assessment
+		const assessment1 = JSON.stringify({
+			maintenance: 'good',
+			lightAndSpace: 'Bright rooms with south-facing windows',
+			photoAnalysis: 'Photos show well-maintained property',
+			recommendation: 'recommend',
+			familySuitability: 'good',
+			reasoning: 'Good value terrace with garden',
+			scoreAdjustment: 5,
+		});
+		const { stdout: stdout1 } = await run(['assess', 'submit', ASSESSMENT_ID, assessment1, '--json'], ENV);
+		const parsed1 = JSON.parse(stdout1);
+		expect(parsed1['ok']).toBe(true);
+		expect(parsed1['data']['scoreAdjustment']).toBe(5);
+
+		// Second assessment overwrites the first (same listing)
+		const assessment2 = JSON.stringify({
+			maintenance: 'excellent',
+			lightAndSpace: 'Very bright with large windows',
+			photoAnalysis: 'Excellent condition throughout',
+			recommendation: 'strong-recommend',
+			familySuitability: 'excellent',
+			reasoning: 'Outstanding property after closer inspection',
+			scoreAdjustment: 10,
+		});
+		const { stdout: stdout2 } = await run(['assess', 'submit', ASSESSMENT_ID, assessment2, '--json'], ENV);
+		const parsed2 = JSON.parse(stdout2);
+		expect(parsed2['ok']).toBe(true);
+		expect(parsed2['data']['scoreAdjustment']).toBe(10);
+
+		// Verify latest assessment persisted via view detail
+		const { stdout: detailStdout } = await run(['view', 'detail', ASSESSMENT_ID, '--json'], ENV);
+		const detail = JSON.parse(detailStdout);
+		expect(detail['ok']).toBe(true);
+		const listing = detail['data']['listing'] as Record<string, unknown>;
+		expect(listing['assessedScore']).toBeDefined();
+		const assessment = listing['assessment'] as Record<string, unknown>;
+		expect(assessment['maintenance']).toBe('excellent');
+		expect(assessment['scoreAdjustment']).toBe(10);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Search fixture tests (LET-030)
 // ---------------------------------------------------------------------------
 
@@ -350,13 +400,15 @@ describe('Registry drift', () => {
 		expect(paramNames).toContain('--region');
 	});
 
-	test('search.discover tool has --location and --property-types parameters', async () => {
+	test('search.discover tool has --location, --property-types params and idsByLocation output', async () => {
 		const { stdout } = await run(['tools', '--json'], ENV);
 		const parsed = JSON.parse(stdout);
 		const discoverTool = parsed['data']['tools'].find((t: { name: string }) => t.name === 'search.discover');
 		const paramNames: string[] = discoverTool['parameters'].map((p: { name: string }) => p.name);
 		expect(paramNames).toContain('--location');
 		expect(paramNames).toContain('--property-types');
+		const outputFields: string[] = discoverTool['outputFields'];
+		expect(outputFields).toContain('idsByLocation');
 	});
 
 	test('tools and health are infrastructure, not in catalog', async () => {

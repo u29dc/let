@@ -56,6 +56,8 @@ Available override flags for `search discover`:
 | `--dont-show <list\|none>` | `--dont-show none`                | Override dontShow filters ("none" clears)                   |
 | `--limit <n>`              | `--limit 50`                      | Max results per location                                    |
 
+When `--location` is used, `mustHave`, `dontShow`, and `propertyTypes` are automatically cleared unless explicitly passed. This means ad-hoc searches start from a blank slate. To carry forward a config filter, pass it explicitly (e.g., `--must-have garden`).
+
 For fetch: `--region <name>` assigns region to fetched listings (use displayName from `search resolve`).
 
 ## 2) Discover (IDs only, no persistence)
@@ -67,9 +69,18 @@ let search discover --json
 let search diff <comma-separated-ids> --json
 ```
 
+The `discover` output includes `idsByLocation` -- a map of location name to portal IDs. Use this to batch `fetch` calls by region:
+
+```bash
+let search discover --json
+# Output includes: idsByLocation: { "Sheffield": ["id1", ...], "Stamford": ["id2", ...] }
+let fetch <sheffield-ids> --region Sheffield --json
+let fetch <stamford-ids> --region Stamford --json
+```
+
 Guidance:
 
-- If DB is empty, `diff.new` may be “everything.” Start by fetching a small sample first (5–10) to calibrate.
+- If DB is empty, `diff.new` may be "everything." Start by fetching a small sample first (5–10) to calibrate.
 - Prefer repeated small loops over one giant run: discover → diff → fetch → triage → repeat.
 
 ## 3) Acquire (fetch + enrich + score + persist)
@@ -142,7 +153,7 @@ Assessment rules:
 
 ### Batch assessment via parallel subagents (optional)
 
-For speed, split candidate IDs across 5–10 subagents (2–3 listings each). Each subagent gets disjoint IDs; writes are per-listing atomic.
+For speed, split candidate IDs across 5–10 subagents (2–3 listings each). Each subagent gets disjoint IDs; assessment writes are per-listing atomic (targeted SQL UPDATE, not full DB rewrite). Parallel subagents submitting to different listings will not conflict.
 
 Subagent prompt template (replace `{IDS}`):
 
