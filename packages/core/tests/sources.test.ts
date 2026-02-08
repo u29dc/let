@@ -3,7 +3,7 @@
  *
  * Verifies each source database has the expected table and columns.
  * Databases that don't exist are skipped with a log message.
- * Run `bun run sources:build` to build all databases.
+ * Run `bun run build:sources` to build all databases.
  */
 
 import { Database } from 'bun:sqlite';

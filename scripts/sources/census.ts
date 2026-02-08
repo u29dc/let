@@ -1,7 +1,7 @@
 /**
  * Build Census 2021 tenure (TS054) database
  *
- * Usage: bun run sources/builders/census.ts
+ * Usage: bun run scripts/sources/census.ts
  */
 
 /* biome-ignore-all lint/suspicious/noConsole: Build script uses console for progress */
@@ -11,15 +11,15 @@ import { createReadStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Glob } from 'bun';
-import { createBatchInserter, downloadFile, extractZip, findColumnIndex, parseCsvLine, toInt, withTempDir } from '../utils/index.ts';
+import { createBatchInserter, downloadFile, extractZip, findColumnIndex, parseCsvLine, SOURCES_DIR, toInt, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://www.nomisweb.co.uk/sources/census_2021_bulk
  * Direct download: https://www.nomisweb.co.uk/output/census/2021/census2021-ts054.zip
  */
 const TS054_URL = 'https://www.nomisweb.co.uk/output/census/2021/census2021-ts054.zip';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'census.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'census.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 async function findLsoaCsv(extractDir: string): Promise<string> {
 	const glob = new Glob('**/census2021-ts054-lsoa.csv');

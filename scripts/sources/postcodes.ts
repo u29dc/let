@@ -1,7 +1,7 @@
 /**
  * Build postcode lookup database from ONSPD
  *
- * Usage: bun run sources/builders/postcodes.ts
+ * Usage: bun run scripts/sources/postcodes.ts
  */
 
 /* biome-ignore-all lint/suspicious/noConsole: Build script uses console for progress */
@@ -12,7 +12,7 @@ import { createReadStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Glob } from 'bun';
-import { cleanHeader, createBatchInserter, downloadFile, extractZip, normalizePostcode, parseCsvLine, progress, progressDone, withTempDir } from '../utils/index.ts';
+import { cleanHeader, createBatchInserter, downloadFile, extractZip, normalizePostcode, parseCsvLine, progress, progressDone, SOURCES_DIR, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://geoportal.statistics.gov.uk/datasets/3be72478d8454b59bb86ba97b4ee325b/about
@@ -21,8 +21,8 @@ import { cleanHeader, createBatchInserter, downloadFile, extractZip, normalizePo
  * - Alternative hosted CSV (no ZIP): https://open-geography-portalx-ons.hub.arcgis.com/api/download/v1/items/cfd03a224ae24db483f89051c35dac29/csv?layers=0
  */
 const ONSPD_ZIP_URL = 'https://www.arcgis.com/sharing/rest/content/items/3be72478d8454b59bb86ba97b4ee325b/data';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'postcodes.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'postcodes.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 async function findCsvFile(extractDir: string): Promise<string> {
 	const glob = new Glob('**/ONSPD_*_UK.csv');

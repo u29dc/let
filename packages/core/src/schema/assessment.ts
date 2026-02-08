@@ -17,14 +17,14 @@ import { z } from 'zod';
 export const AssessmentSchema = z.object({
 	/** Property maintenance quality from photos */
 	maintenance: z.enum(['excellent', 'good', 'fair', 'poor']),
-	/** Assessment of natural light and spaciousness (1-500 chars) */
-	lightAndSpace: z.string().min(1).max(500),
-	/** Photo analysis - honesty, what's shown/hidden (1-500 chars) */
-	photoAnalysis: z.string().min(1).max(500),
-	/** Trade-off evaluation for specific requirements (optional) */
-	tradeoffs: z.string().max(500).optional(),
-	/** Neighborhood analysis from satellite imagery (parks, roads, density, surroundings) */
-	neighborhoodAnalysis: z.string().max(500).optional(),
+	/** Assessment of natural light and spaciousness (1-1000 chars) */
+	lightAndSpace: z.string().min(1).max(1000),
+	/** Photo analysis - honesty, what's shown/hidden (1-1000 chars) */
+	photoAnalysis: z.string().min(1).max(1000),
+	/** Trade-off evaluation for specific requirements (1-800 chars, optional) */
+	tradeoffs: z.string().max(800).optional(),
+	/** Neighborhood analysis from satellite imagery (1-800 chars, optional) */
+	neighborhoodAnalysis: z.string().max(800).optional(),
 	/** Overall recommendation based on AI analysis */
 	recommendation: z.enum(['strong-recommend', 'recommend', 'neutral', 'avoid']),
 	/** Family suitability assessment */

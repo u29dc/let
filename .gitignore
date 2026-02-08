@@ -23,10 +23,8 @@ bin/
 .husky/_/
 
 # project
-.cache/
+.let/
+
 .claude/*
-!.claude/commands/
+!.claude/skills/
 !.claude/settings.local.json
-sources/db/
-sources/**/*.db-*
-data/

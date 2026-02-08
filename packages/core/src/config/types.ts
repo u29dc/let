@@ -8,6 +8,14 @@
 import type { ScoringConfig } from '../pipeline/score/types.js';
 
 // =============================================================================
+// RIGHTMOVE SEARCH TYPES
+// =============================================================================
+
+/** Valid property types for Rightmove search URL filters (not listing subtypes) */
+export const RIGHTMOVE_SEARCH_TYPES = ['detached', 'semi-detached', 'terraced', 'flat'] as const;
+export type RightmoveSearchType = (typeof RIGHTMOVE_SEARCH_TYPES)[number];
+
+// =============================================================================
 // SEARCH CONFIGURATION
 // =============================================================================
 

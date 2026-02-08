@@ -1,7 +1,7 @@
 /**
  * Build flood risk lookup database (postcode-based)
  *
- * Usage: bun run sources/builders/flood.ts
+ * Usage: bun run scripts/sources/flood.ts
  */
 
 /* biome-ignore-all lint/suspicious/noConsole: Build script uses console for progress */
@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import { createReadStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { checkSasExpiry, createBatchInserter, downloadFile, findColumnIndex, normalizePostcode, parseCsvLine, progress, progressDone, withTempDir } from '../utils/index.ts';
+import { checkSasExpiry, createBatchInserter, downloadFile, findColumnIndex, normalizePostcode, parseCsvLine, progress, progressDone, SOURCES_DIR, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://environment.data.gov.uk/dataset/53cba123-71f8-417a-8441-4c7ba111e8e1
@@ -22,8 +22,8 @@ import { checkSasExpiry, createBatchInserter, downloadFile, findColumnIndex, nor
 const FLOOD_CSV_URL =
 	'https://agrilake2live.file.core.windows.net/gms-datasets/fb921496-1788-4fc2-b469-7b51e2a45553/Postcodes_Risk_Assessment_All.csv?sv=2022-11-02&se=2026-02-09T12%3A34%3A08Z&sr=f&sp=r&sig=ZqHp87BTmcoetaCQ7aVNxBx0Sb5fVjoJEq50vFG0zZY%3D';
 const FLOOD_SOURCE_PAGE = 'https://environment.data.gov.uk/dataset/53cba123-71f8-417a-8441-4c7ba111e8e1';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'flood.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'flood.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 async function downloadDataset(tempDir: string): Promise<string> {
 	const csvPath = join(tempDir, 'flood.csv');
@@ -42,7 +42,7 @@ async function downloadDataset(tempDir: string): Promise<string> {
 		sourcePageUrl: FLOOD_SOURCE_PAGE,
 		envUrlVar: 'FLOOD_CSV_URL',
 		envPathVar: 'FLOOD_CSV_PATH',
-		buildCommand: 'bun run sources:flood',
+		buildCommand: 'bun run build:source:flood',
 	});
 	await downloadFile(downloadUrl, csvPath);
 	console.log('Download complete.\n');

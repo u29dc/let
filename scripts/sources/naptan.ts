@@ -1,7 +1,7 @@
 /**
  * Build NaPTAN stops database
  *
- * Usage: bun run sources/builders/naptan.ts
+ * Usage: bun run scripts/sources/naptan.ts
  */
 
 /* biome-ignore-all lint/suspicious/noConsole: Build script uses console for progress */
@@ -10,15 +10,15 @@ import { Database } from 'bun:sqlite';
 import { createReadStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { createBatchInserter, downloadFile, findColumnIndex, parseCsvLine, progress, progressDone, withTempDir } from '../utils/index.ts';
+import { createBatchInserter, downloadFile, findColumnIndex, parseCsvLine, progress, progressDone, SOURCES_DIR, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://www.data.gov.uk/dataset/ff93ffc1-6656-47d8-9155-85ea0b8f2251/naptan
  * Direct download: https://naptan.api.dft.gov.uk/v1/access-nodes?dataFormat=csv
  */
 const NAPTAN_CSV_URL = 'https://naptan.api.dft.gov.uk/v1/access-nodes?dataFormat=csv';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'naptan.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'naptan.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 type StopRow = [string, string | null, string | null, string | null, number | null, number | null];
 

@@ -7,14 +7,14 @@
  * Precedence (highest to lowest):
  *  1. CLI flags (PathOverrides)
  *  2. Category env vars (LET_DATA_DIR, LET_CONFIG_DIR, etc.)
- *  3. LET_HOME env var (base for data/cache/config/sources)
- *  4. Dev mode detection (monorepo root via package.json marker)
+ *  3. Dev mode detection (monorepo root via package.json marker)
+ *  4. Binary location detection (compiled binary in {skill}/.let/bin/)
  *  5. OS defaults (XDG on Linux, ~/Library on macOS)
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -92,6 +92,29 @@ function detectMonorepoRoot(startDir: string, maxLevels = 5): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Binary location detection (skill package)
+// ---------------------------------------------------------------------------
+
+/**
+ * When running as a compiled binary at {skill}/.let/bin/let_*, detect the
+ * .let/ directory by walking two levels up: bin/ -> .let/ -> {skill}/.
+ * Validates that {skill}/SKILL.md exists. Returns the .let/ directory or null.
+ *
+ * Safety: non-compiled Bun's execPath points to ~/.bun/bin/bun (no .let parent),
+ * and the monorepo bin/let binary's parent has package.json (no SKILL.md),
+ * so detection falls through in both cases.
+ */
+function detectBinaryHome(): string | null {
+	const binDir = dirname(process.execPath);
+	if (basename(binDir) !== 'bin') return null;
+	const dotLet = dirname(binDir);
+	if (basename(dotLet) !== '.let') return null;
+	const skillRoot = dirname(dotLet);
+	if (existsSync(join(skillRoot, 'SKILL.md'))) return dotLet;
+	return null;
+}
+
+// ---------------------------------------------------------------------------
 // OS defaults
 // ---------------------------------------------------------------------------
 
@@ -164,7 +187,7 @@ let cached: { resolved: ResolvedPaths; derived: DerivedPaths } | null = null;
 type DirSet = { config: string; data: string; cache: string; sources: string };
 
 /**
- * Compute base defaults from dev detection, LET_HOME, or OS conventions.
+ * Compute base defaults from dev detection, binary location, or OS conventions.
  */
 function resolveDefaults(): { defaults: DirSet; isDev: boolean } {
 	const monorepoRoot = detectMonorepoRoot(process.cwd());
@@ -173,24 +196,23 @@ function resolveDefaults(): { defaults: DirSet; isDev: boolean } {
 	if (isDev && monorepoRoot) {
 		return {
 			defaults: {
-				config: join(monorepoRoot, 'data'),
-				data: join(monorepoRoot, 'data'),
-				cache: join(monorepoRoot, '.cache'),
-				sources: join(monorepoRoot, 'sources', 'db'),
+				config: join(monorepoRoot, '.let', 'data'),
+				data: join(monorepoRoot, '.let', 'data'),
+				cache: join(monorepoRoot, '.let', 'cache'),
+				sources: join(monorepoRoot, '.let', 'sources'),
 			},
 			isDev,
 		};
 	}
 
-	const letHome = process.env['LET_HOME'];
-	if (letHome) {
-		const base = resolveAbsoluteOrCwd(letHome);
+	const binaryHome = detectBinaryHome();
+	if (binaryHome) {
 		return {
 			defaults: {
-				config: join(base, 'config'),
-				data: join(base, 'data'),
-				cache: join(base, 'cache'),
-				sources: join(base, 'sources'),
+				config: join(binaryHome, 'data'),
+				data: join(binaryHome, 'data'),
+				cache: join(binaryHome, 'cache'),
+				sources: join(binaryHome, 'sources'),
 			},
 			isDev: false,
 		};

@@ -6,7 +6,7 @@
  */
 
 import type { SearchConfig, SearchFilters } from '@let/core/config';
-import { loadConfig, resetConfigCache } from '@let/core/config';
+import { loadConfig, RIGHTMOVE_SEARCH_TYPES, resetConfigCache } from '@let/core/config';
 import { paths } from '@let/core/paths';
 import { type ApiSearchParams, searchListingsApi, setApiDelay, setApiMaxRetries, setFetchDelay, setFetchMaxRetries } from '@let/core/pipeline/fetch';
 import { log } from '@let/core/utils/logger';
@@ -42,7 +42,14 @@ function applyFilterOverrides(filters: SearchFilters, args: Record<string, unkno
 	const mustHave = args['must-have'];
 	const dontShow = args['dont-show'];
 	if (typeof propertyTypes === 'string') {
-		result = { ...result, propertyTypes: propertyTypes.split(',').map((t) => t.trim()) };
+		const types = propertyTypes.split(',').map((t) => t.trim());
+		const validSet = new Set<string>(RIGHTMOVE_SEARCH_TYPES);
+		const invalid = types.filter((t) => !validSet.has(t));
+		if (invalid.length > 0) {
+			const start = performance.now();
+			fail('search.discover', 'INVALID_PROPERTY_TYPE', `Invalid property type: ${invalid.join(', ')}`, `Valid types: ${RIGHTMOVE_SEARCH_TYPES.join(', ')}`, start);
+		}
+		result = { ...result, propertyTypes: types };
 	}
 	if (typeof mustHave === 'string') {
 		result = { ...result, mustHave: parseCommaSeparated(mustHave) };
@@ -120,7 +127,7 @@ export const searchDiscoverCommand = defineToolCommand(
 			},
 			'property-types': {
 				type: 'string' as const,
-				description: 'Override property types (comma-separated, e.g., flat,apartment)',
+				description: 'Override property types (comma-separated: detached, semi-detached, terraced, flat)',
 			},
 			'must-have': {
 				type: 'string' as const,

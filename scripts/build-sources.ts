@@ -1,7 +1,7 @@
 /**
  * Build all data sources with parallel subprocess execution and TUI progress
  *
- * Usage: bun run sources/build-all.ts [options]
+ * Usage: bun run scripts/build-sources.ts [options]
  *
  * Options:
  *   --only, -o <sources>       Comma-separated source filter
@@ -13,6 +13,7 @@
 
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { formatElapsed } from './utils.ts';
 
 // ============================================================================
 // Source registry
@@ -73,10 +74,6 @@ function showCursor(): void {
 
 let renderScheduled = false;
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
-
-function formatElapsed(ms: number): string {
-	return `${(ms / 1000).toFixed(1)}s`;
-}
 
 function formatSourceLine(s: SourceState, maxNameLen: number): string {
 	const name = s.name.padEnd(maxNameLen);
@@ -207,7 +204,7 @@ async function readStdout(state: SourceState, reader: ReadableStreamDefaultReade
 }
 
 async function runSource(state: SourceState, onUpdate: () => void): Promise<void> {
-	const scriptPath = join(import.meta.dirname, 'builders', `${state.name}.ts`);
+	const scriptPath = join(import.meta.dirname, 'sources', `${state.name}.ts`);
 	const startTime = performance.now();
 
 	state.status = 'running';
@@ -238,7 +235,7 @@ async function runSource(state: SourceState, onUpdate: () => void): Promise<void
 }
 
 async function runSourceInherit(state: SourceState): Promise<void> {
-	const scriptPath = join(import.meta.dirname, 'builders', `${state.name}.ts`);
+	const scriptPath = join(import.meta.dirname, 'sources', `${state.name}.ts`);
 	const startTime = performance.now();
 
 	console.log('-'.repeat(60));
@@ -356,7 +353,7 @@ async function main(): Promise<void> {
 		console.log(`
 Build all data sources
 
-Usage: bun run sources/build-all.ts [options]
+Usage: bun run scripts/build-sources.ts [options]
 
 Options:
   --only, -o <sources>       Build only specified sources (comma-separated)

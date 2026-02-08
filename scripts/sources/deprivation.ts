@@ -1,7 +1,7 @@
 /**
  * Build deprivation (IMD 2025) database
  *
- * Usage: bun run sources/builders/deprivation.ts
+ * Usage: bun run scripts/sources/deprivation.ts
  */
 
 /* biome-ignore-all lint/suspicious/noConsole: Build script uses console for progress */
@@ -9,15 +9,15 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { createBatchInserter, downloadFile, findColumnIndex, parseCsvLine, progress, progressDone, toInt, toNumber, withTempDir } from '../utils/index.ts';
+import { createBatchInserter, downloadFile, findColumnIndex, parseCsvLine, progress, progressDone, SOURCES_DIR, toInt, toNumber, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://www.gov.uk/government/statistics/english-indices-of-deprivation-2025
  * Direct download: https://assets.publishing.service.gov.uk/media/691ded56d140bbbaa59a2a7d/File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv
  */
 const IMD_CSV_URL = 'https://assets.publishing.service.gov.uk/media/691ded56d140bbbaa59a2a7d/File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'deprivation.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'deprivation.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 async function buildDatabase(csvPath: string): Promise<void> {
 	console.log('Building deprivation database...');

@@ -1,7 +1,7 @@
 /**
  * Build broadband coverage database from Ofcom CSV data
  *
- * Usage: bun run sources/builders/broadband.ts
+ * Usage: bun run scripts/sources/broadband.ts
  *
  * @file Standalone build script - console output and complexity are expected
  */
@@ -14,7 +14,7 @@ import { mkdirSync } from 'node:fs';
 import { mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Glob } from 'bun';
-import { downloadFile, extractZip, findNestedZip, progress, progressDone, withTempDir } from '../utils/index.ts';
+import { downloadFile, extractZip, findNestedZip, progress, progressDone, SOURCES_DIR, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://www.ofcom.org.uk/siteassets/resources/documents/research-and-data/multi-sector/infrastructure-research/connected-nations-2025/
@@ -27,8 +27,8 @@ import { downloadFile, extractZip, findNestedZip, progress, progressDone, withTe
  */
 const OFCOM_ZIP_URL = 'https://www.ofcom.org.uk/siteassets/resources/documents/research-and-data/multi-sector/infrastructure-research/connected-nations-2025/202507_fixed_broadband_coverage_r01.zip';
 
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'broadband.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'broadband.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 function extractOutward(postcodeWithSpace: string): string {
 	return postcodeWithSpace.trim().split(' ')[0] ?? '';

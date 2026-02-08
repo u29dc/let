@@ -1,7 +1,7 @@
 /**
  * Build crime statistics database from Police.uk archive
  *
- * Usage: bun run sources/builders/crime.ts
+ * Usage: bun run scripts/sources/crime.ts
  * Optional: CRIME_ARCHIVE_PATH=/path/to/latest.zip
  */
 
@@ -13,7 +13,7 @@ import { createReadStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Glob } from 'bun';
-import { createBatchInserter, downloadFile, extractZip, findColumnIndex, isTTY, parseCsvLine, progress, progressDone, withTempDir } from '../utils/index.ts';
+import { createBatchInserter, downloadFile, extractZip, findColumnIndex, isTTY, parseCsvLine, progress, progressDone, SOURCES_DIR, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://data.police.uk/data/
@@ -22,8 +22,8 @@ import { createBatchInserter, downloadFile, extractZip, findColumnIndex, isTTY, 
  * - Optional override: CRIME_ARCHIVE_PATH points to a local ZIP.
  */
 const CRIME_ZIP_URL = 'https://data.police.uk/data/archive/latest.zip';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'crime.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'crime.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 type CrimeCounts = { total: number; violent: number; burglary: number; robbery: number };
 

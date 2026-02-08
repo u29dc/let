@@ -8,6 +8,7 @@
 import { z } from 'zod/v4';
 import { log } from '../utils/logger.js';
 import type { Config, ScoringConfig } from './types.js';
+import { RIGHTMOVE_SEARCH_TYPES } from './types.js';
 
 // =============================================================================
 // SEARCH & FETCH SCHEMAS
@@ -23,7 +24,7 @@ const FiltersSchema = z.object({
 	maxBedrooms: z.number().int().positive(),
 	minPrice: z.number().nonnegative(),
 	maxPrice: z.number().positive(),
-	propertyTypes: z.array(z.string()),
+	propertyTypes: z.array(z.enum(RIGHTMOVE_SEARCH_TYPES)),
 	includeLetAgreed: z.boolean(),
 	radius: z.number().nonnegative(),
 	dontShow: z.array(z.string()),

@@ -1,7 +1,7 @@
 /**
  * Build income estimates database (MSOA)
  *
- * Usage: bun run sources/builders/income.ts
+ * Usage: bun run scripts/sources/income.ts
  */
 
 /* biome-ignore-all lint/suspicious/noConsole: Build script uses console for progress */
@@ -10,7 +10,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import * as XLSX from 'xlsx';
-import { createBatchInserter, downloadFile, withTempDir } from '../utils/index.ts';
+import { createBatchInserter, downloadFile, SOURCES_DIR, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://www.ons.gov.uk/peoplepopulationandcommunity/personalandhouseholdfinances/incomeandwealth/bulletins/smallareamodelbasedincomeestimates/financialyearending2023
@@ -20,8 +20,8 @@ import { createBatchInserter, downloadFile, withTempDir } from '../utils/index.t
  * - Overrides supported via INCOME_XLSX_URL or INCOME_XLSX_PATH.
  */
 const INCOME_XLSX_URL = 'https://www.ons.gov.uk/visualisations/dvc3434/fig01/datadownload.xlsx?';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'income.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'income.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 async function downloadDataset(tempDir: string): Promise<string> {
 	const xlsxPath = join(tempDir, 'income.xlsx');

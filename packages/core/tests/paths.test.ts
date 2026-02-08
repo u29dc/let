@@ -10,7 +10,6 @@ import { paths, resetPaths, resolvePaths } from '../src/paths.js';
 
 /** Helper: clear all LET_* env vars to get a clean slate */
 function clearEnv(): void {
-	delete process.env['LET_HOME'];
 	delete process.env['LET_DATA_DIR'];
 	delete process.env['LET_CONFIG_DIR'];
 	delete process.env['LET_CACHE_DIR'];
@@ -30,11 +29,11 @@ describe('paths', () => {
 			expect(resolved.isDev).toBe(true);
 		});
 
-		test('dev mode uses repo-local data/ directory', () => {
+		test('dev mode uses repo-local .let/ directory', () => {
 			const { resolved } = resolvePaths();
-			expect(resolved.data).toMatch(/data$/);
-			expect(resolved.cache).toMatch(/\.cache$/);
-			expect(resolved.sources).toMatch(/sources\/db$/);
+			expect(resolved.data).toMatch(/\.let\/data$/);
+			expect(resolved.cache).toMatch(/\.let\/cache$/);
+			expect(resolved.sources).toMatch(/\.let\/sources$/);
 		});
 	});
 

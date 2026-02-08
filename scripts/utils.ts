@@ -1,14 +1,37 @@
 /**
- * Shared utilities for source build scripts
+ * Shared utilities for build scripts
  *
- * Includes: progress output, download, extract, CSV parsing, database batch insert, temp directory management
+ * Merged from: sources/utils/index.ts, build-skill.ts, build-all.ts
+ * Used by: scripts/build-skill.ts, scripts/build-sources.ts, scripts/sources/*.ts
  */
 
 import type { Database } from 'bun:sqlite';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+
+// ============================================================================
+// Paths
+// ============================================================================
+
+export const ROOT = resolve(import.meta.dirname, '..');
+export const SOURCES_DIR = join(ROOT, '.let', 'sources');
+
+// ============================================================================
+// Formatting
+// ============================================================================
+
+export function formatSize(bytes: number): string {
+	if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+	if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${bytes} B`;
+}
+
+export function formatElapsed(ms: number): string {
+	return `${(ms / 1000).toFixed(1)}s`;
+}
 
 // ============================================================================
 // Progress output (TTY-aware)

@@ -1,7 +1,7 @@
 /**
  * Build OS Open UPRN lookup database
  *
- * Usage: bun run sources/builders/uprn.ts
+ * Usage: bun run scripts/sources/uprn.ts
  */
 
 /* biome-ignore-all lint/suspicious/noConsole: Build script uses console for progress */
@@ -11,7 +11,7 @@ import { createReadStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Glob } from 'bun';
-import { createBatchInserter, downloadFile, extractZip, findColumnIndex, parseCsvLine, progress, progressDone, toNumber, withTempDir } from '../utils/index.ts';
+import { createBatchInserter, downloadFile, extractZip, findColumnIndex, parseCsvLine, progress, progressDone, SOURCES_DIR, toNumber, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://osdatahub.os.uk/data/downloads/open/OpenUPRN
@@ -20,8 +20,8 @@ import { createBatchInserter, downloadFile, extractZip, findColumnIndex, parseCs
  * - Product overview: https://www.ordnancesurvey.co.uk/products/os-open-uprn
  */
 const UPRN_ZIP_URL = 'https://api.os.uk/downloads/v1/products/OpenUPRN/downloads?area=GB&format=CSV&redirect';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'uprn.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'uprn.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 async function findCsvFile(extractDir: string): Promise<string> {
 	const glob = new Glob('**/*.csv');

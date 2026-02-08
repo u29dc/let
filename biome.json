@@ -28,7 +28,7 @@
 			"!**/temp",
 			"!**/.temp",
 			"!**/.archive",
-			"!**/.cache"
+			"!**/.let"
 		]
 	},
 	"formatter": {

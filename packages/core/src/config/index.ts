@@ -14,5 +14,6 @@ export {
 	resetConfigCache,
 	ScoringConfigSchema,
 } from './loader.js';
-// Re-export types
-export type { Config, FetchConfig, Location, ScoringConfig, SearchConfig, SearchFilters } from './types.js';
+export type { Config, FetchConfig, Location, RightmoveSearchType, ScoringConfig, SearchConfig, SearchFilters } from './types.js';
+// Re-export constants
+export { RIGHTMOVE_SEARCH_TYPES } from './types.js';

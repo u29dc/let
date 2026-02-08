@@ -41,7 +41,7 @@ function readCacheAsHtml(path: string, id: string, label: string): string {
 /**
  * Get cached data for a listing ID
  * Returns reconstructed HTML from cached PAGE_MODEL JSON
- * Cache structure: .cache/{id}/data.json
+ * Cache structure: cache/{id}/data.json
  */
 export function getCachedHtml(id: string, options: { allowStale?: boolean } = {}): string | undefined {
 	const cacheDir = paths().resolved.cache;
@@ -61,7 +61,7 @@ export function getCachedHtml(id: string, options: { allowStale?: boolean } = {}
 /**
  * Cache PAGE_MODEL JSON for a listing ID
  * Extracts the JSON data before caching to preserve it for later parsing
- * Cache structure: .cache/{id}/data.json
+ * Cache structure: cache/{id}/data.json
  */
 export function cachePageModel(id: string, html: string): void {
 	const listingDir = paths().derived.cacheDir(id);

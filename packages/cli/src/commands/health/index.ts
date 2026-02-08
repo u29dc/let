@@ -33,16 +33,16 @@ interface HealthCheck {
 // ---------------------------------------------------------------------------
 
 const SOURCE_REGISTRY: Array<{ name: string; required: boolean; severity: Severity; buildCommand: string }> = [
-	{ name: 'postcodes', required: true, severity: 'blocking', buildCommand: 'bun run sources:postcodes' },
-	{ name: 'broadband', required: false, severity: 'degraded', buildCommand: 'bun run sources:broadband' },
-	{ name: 'deprivation', required: false, severity: 'degraded', buildCommand: 'bun run sources:deprivation' },
-	{ name: 'census', required: false, severity: 'degraded', buildCommand: 'bun run sources:census' },
-	{ name: 'population', required: false, severity: 'degraded', buildCommand: 'bun run sources:population' },
-	{ name: 'income', required: false, severity: 'degraded', buildCommand: 'bun run sources:income' },
-	{ name: 'flood', required: false, severity: 'degraded', buildCommand: 'bun run sources:flood' },
-	{ name: 'crime', required: false, severity: 'degraded', buildCommand: 'bun run sources:crime' },
-	{ name: 'naptan', required: false, severity: 'degraded', buildCommand: 'bun run sources:naptan' },
-	{ name: 'uprn', required: false, severity: 'degraded', buildCommand: 'bun run sources:uprn' },
+	{ name: 'postcodes', required: true, severity: 'blocking', buildCommand: 'bun run build:source:postcodes' },
+	{ name: 'broadband', required: false, severity: 'degraded', buildCommand: 'bun run build:source:broadband' },
+	{ name: 'deprivation', required: false, severity: 'degraded', buildCommand: 'bun run build:source:deprivation' },
+	{ name: 'census', required: false, severity: 'degraded', buildCommand: 'bun run build:source:census' },
+	{ name: 'population', required: false, severity: 'degraded', buildCommand: 'bun run build:source:population' },
+	{ name: 'income', required: false, severity: 'degraded', buildCommand: 'bun run build:source:income' },
+	{ name: 'flood', required: false, severity: 'degraded', buildCommand: 'bun run build:source:flood' },
+	{ name: 'crime', required: false, severity: 'degraded', buildCommand: 'bun run build:source:crime' },
+	{ name: 'naptan', required: false, severity: 'degraded', buildCommand: 'bun run build:source:naptan' },
+	{ name: 'uprn', required: false, severity: 'degraded', buildCommand: 'bun run build:source:uprn' },
 ];
 
 // ---------------------------------------------------------------------------

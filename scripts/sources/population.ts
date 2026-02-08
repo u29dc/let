@@ -1,7 +1,7 @@
 /**
  * Build population database from Census 2021 TS001
  *
- * Usage: bun run sources/builders/population.ts
+ * Usage: bun run scripts/sources/population.ts
  */
 
 /* biome-ignore-all lint/suspicious/noConsole: Build script uses console for progress */
@@ -10,15 +10,15 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Glob } from 'bun';
-import { createBatchInserter, downloadFile, extractZip, findColumnIndex, parseCsvLine, toInt, withTempDir } from '../utils/index.ts';
+import { createBatchInserter, downloadFile, extractZip, findColumnIndex, parseCsvLine, SOURCES_DIR, toInt, withTempDir } from '../utils.ts';
 
 /**
  * Source page: https://www.nomisweb.co.uk/sources/census_2021_bulk
  * Direct download: https://www.nomisweb.co.uk/output/census/2021/census2021-ts001.zip
  */
 const TS001_ZIP_URL = 'https://www.nomisweb.co.uk/output/census/2021/census2021-ts001.zip';
-const DB_PATH = join(import.meta.dirname, '..', 'db', 'population.db');
-mkdirSync(join(import.meta.dirname, '..', 'db'), { recursive: true });
+const DB_PATH = join(SOURCES_DIR, 'population.db');
+mkdirSync(SOURCES_DIR, { recursive: true });
 
 async function findLsoaCsv(extractDir: string): Promise<string> {
 	const glob = new Glob('**/census2021-ts001-lsoa.csv');
