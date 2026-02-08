@@ -23,6 +23,7 @@ import { helpCommand } from './commands/help.js';
 import { opsCommand } from './commands/ops/index.js';
 import { outputCommand } from './commands/output/index.js';
 import { scoreCommand } from './commands/score/index.js';
+import { searchCommand } from './commands/search/index.js';
 import { setupSignalHandlers } from './commands/shared-read.js';
 import { toolsCommand } from './commands/tools/index.js';
 import { viewCommand } from './commands/view/index.js';
@@ -47,6 +48,7 @@ const main = defineCommand({
 		output: outputCommand,
 		ops: opsCommand,
 		score: scoreCommand,
+		search: searchCommand,
 		help: helpCommand,
 		tools: toolsCommand,
 		health: healthCommand,
