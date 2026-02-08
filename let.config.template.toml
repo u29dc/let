@@ -26,7 +26,6 @@ mustHave = ["garden"]  # NOTE: noGarden penalty only applies when garden is in m
 # =============================================================================
 
 [fetch]
-useApi = false      # Use REST API for search (faster but may be blocked)
 delayMs = 3000      # Delay between requests (avoid rate limiting)
 maxListings = 100   # Max listings per search
 maxRetries = 3      # Retry failed requests

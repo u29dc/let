@@ -50,7 +50,6 @@ export interface SearchConfig {
  * Fetch behavior configuration
  */
 export interface FetchConfig {
-	useApi: boolean;
 	delayMs: number;
 	maxListings: number;
 	maxRetries: number;

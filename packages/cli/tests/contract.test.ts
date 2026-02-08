@@ -48,7 +48,6 @@ radius = 0
 dontShow = []
 mustHave = ["garden"]
 [fetch]
-useApi = false
 delayMs = 1000
 maxListings = 100
 maxRetries = 3

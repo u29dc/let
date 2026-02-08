@@ -31,7 +31,6 @@ const FiltersSchema = z.object({
 });
 
 const FetchSchema = z.object({
-	useApi: z.boolean().default(false),
 	delayMs: z.number().int().positive(),
 	maxListings: z.number().int().positive(),
 	maxRetries: z.number().int().positive(),
