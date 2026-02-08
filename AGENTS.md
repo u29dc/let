@@ -1,36 +1,46 @@
-## 1. Documentation
+## 1. Philosophy
+
+This is an **agent-native CLI toolbelt**. The `let` binary exposes atomic, composable primitives that an AI agent orchestrates via a single `/let` skill. The agent discovers listings, fetches selectively, triages by score, deep-dives top candidates with photo/map analysis, writes assessments, and produces a final report. No human sequencing required.
+
+**Key principles**:
+- **Primitives, not workflows**: each command does one thing. The agent composes `search discover` + `search diff` + `fetch <ids>` instead of a monolithic batch fetch
+- **Judgment stays with the agent**: scoring and enrichment are deterministic; the agent adds value through photo analysis, neighborhood research, and tradeoff reasoning
+- **Structured contracts**: every command supports `--json` outputting exactly one JSON envelope to stdout. Stderr is for logs only. The agent reads stdout, ignores stderr
+- **Self-describing**: `let tools --json` returns the full catalog with parameters, examples, and output fields. `let health --json` reports prerequisites with fix commands
+
+## 2. Documentation
 
 - **Runtime**: [`bun.com/llms.txt`](https://bun.com/llms.txt)
 - **Libraries**: [`zod.dev/llms.txt`](https://zod.dev/llms.txt)
 - **APIs**: [`epc.opendatacommunities.org/docs/api`](https://epc.opendatacommunities.org/docs/api), [`postcodes.io/docs`](https://postcodes.io/docs), [`developers.notion.com/llms.txt`](https://developers.notion.com/llms.txt), [`docs.mapbox.com/llms.txt`](https://docs.mapbox.com/llms.txt)
 
-## 2. Repository Structure
+## 3. Repository Structure
 
 ```
 .
 ├── bin/
-│   └── let                  # compiled CLI binary (build:cli)
+│   └── let                  # compiled CLI binary (bun run build:cli)
 ├── packages/
 │   ├── cli/
 │   │   ├── src/
-│   │   │   ├── index.ts           # CLI entrypoint (10 command groups)
+│   │   │   ├── index.ts           # citty root: 10 subcommand groups
 │   │   │   ├── envelope.ts        # JSON envelope: ok()/fail()/isJsonMode()
 │   │   │   ├── tool.ts            # defineToolCommand() + toolRegistry[]
 │   │   │   ├── output/
-│   │   │   │   └── index.ts       # Terminal formatters
+│   │   │   │   └── index.ts       # Terminal formatters (human-readable mode)
 │   │   │   └── commands/
-│   │   │       ├── shared-read.ts  # Read-only shared utilities
-│   │   │       ├── shared-write.ts # Write shared utilities (processListing)
+│   │   │       ├── shared-read.ts  # Read-only utilities (DB loading, paths)
+│   │   │       ├── shared-write.ts # Write utilities (processListing, save)
 │   │   │       ├── assess/         # candidates, context, submit
 │   │   │       ├── config/         # show, validate
 │   │   │       ├── export/         # json, notion
 │   │   │       ├── fetch/          # fetch by portal IDs
-│   │   │       ├── health/         # prerequisite checks
+│   │   │       ├── health/         # prerequisite checks + remediation
 │   │   │       ├── ops/            # prune, verify
 │   │   │       ├── score/          # explain, compute
 │   │   │       ├── search/         # resolve, discover, diff
 │   │   │       ├── tools/          # capability discovery
-│   │   │       └── view/           # list, detail, stats, regions
+│   │   │       └── view/           # list, detail
 │   │   └── tests/
 │   │       ├── contract.test.ts    # JSON envelope contracts (13 tests)
 │   │       ├── parity-gate.test.ts # E2E loop test (13 steps)
@@ -38,6 +48,7 @@
 │   └── core/
 │       ├── src/
 │       │   ├── index.ts
+│       │   ├── paths.ts            # Cross-platform path resolution (shared)
 │       │   ├── schema/
 │       │   │   ├── assessment.ts
 │       │   │   ├── listing.ts
@@ -48,76 +59,38 @@
 │       │   │   └── schema.sql
 │       │   ├── pipeline/
 │       │   │   ├── index.ts
-│       │   │   ├── fetch/
-│       │   │   │   ├── api.ts
-│       │   │   │   ├── html.ts
-│       │   │   │   ├── images.ts
-│       │   │   │   └── maps.ts
-│       │   │   ├── parse/
-│       │   │   │   ├── extract.ts
-│       │   │   │   └── sanitize.ts
-│       │   │   ├── enrich/
-│       │   │   │   ├── area.ts
-│       │   │   │   ├── broadband.ts
-│       │   │   │   ├── epc.ts
-│       │   │   │   └── notes/
-│       │   │   │       ├── extract.ts
-│       │   │   │       ├── patterns.ts
-│       │   │   │       └── index.ts
-│       │   │   ├── score/
-│       │   │   │   ├── aggregate.ts
-│       │   │   │   ├── composites.ts
-│       │   │   │   ├── confidence.ts
-│       │   │   │   ├── factors/
-│       │   │   │   │   ├── extract.ts
-│       │   │   │   │   └── normalize.ts
-│       │   │   │   ├── math/
-│       │   │   │   │   ├── basic.ts
-│       │   │   │   │   ├── percentiles.ts
-│       │   │   │   │   └── utilities.ts
-│       │   │   │   ├── penalties.ts
-│       │   │   │   ├── regions.ts
-│       │   │   │   ├── types.ts
-│       │   │   │   └── index.ts
-│       │   │   ├── assess/
-│       │   │   │   ├── index.ts
-│       │   │   │   ├── normalize.ts
-│       │   │   │   └── scoring.ts
-│       │   │   ├── view/
-│       │   │   │   └── index.ts
-│       │   │   └── output/
-│       │   │       ├── index.ts
-│       │   │       └── notion.ts
-│       │   ├── config/
-│       │   │   ├── index.ts
-│       │   │   ├── loader.ts
-│       │   │   └── types.ts
-│       │   └── utils/
-│       │       ├── http.ts
-│       │       ├── logger.ts
-│       │       └── terminal.ts  # ANSI colors, visible length, terminal width
+│       │   │   ├── fetch/           # api.ts, html.ts, images.ts, maps.ts
+│       │   │   ├── parse/           # extract.ts, sanitize.ts
+│       │   │   ├── enrich/          # area.ts, broadband.ts, epc.ts, notes/
+│       │   │   ├── score/           # aggregate, composites, confidence, factors/, math/, penalties, regions
+│       │   │   ├── assess/          # scoring.ts, normalize.ts
+│       │   │   ├── view/            # formatters for table rows
+│       │   │   └── output/          # notion.ts export logic
+│       │   ├── config/              # loader.ts, types.ts
+│       │   └── utils/               # http.ts, logger.ts, terminal.ts
 │       └── tests/
+│           ├── sources.test.ts      # Source database schema validation (10 DBs)
+│           ├── paths.test.ts        # Path resolution tests
+│           └── ...                  # Unit tests for core modules
 ├── sources/
 │   ├── builders/          # broadband, postcodes, deprivation, census, population, income, flood, naptan, uprn, crime
-│   ├── db/                # SQLite databases (gitignored)
+│   ├── db/                # SQLite databases (gitignored, built by sources:build)
 │   ├── utils/
 │   │   └── index.ts       # progress, download, extract, CSV, batch insert
 │   └── build-all.ts       # parallel subprocess orchestrator with TUI
 ├── data/
 │   ├── let.db             # Listings database (SQLite, generated)
-│   ├── let.db.bak         # SQLite backup
-│   ├── let.db.json        # JSON backup (generated by `let export json`)
-│   └── let.config.toml    # Search and scoring configuration
-├── .cache/
+│   ├── let.db.bak         # Automatic backup
+│   ├── let.db.json        # JSON export (generated by `let export json`)
+│   └── let.config.toml    # Search and scoring configuration (dev mode name)
+├── .cache/                # PAGE_MODEL JSON + images + maps per listing
 ├── .claude/
 │   └── commands/
-│       ├── let.md         # /let skill: autonomous search pipeline
-│       ├── assess.md      # /assess skill: batch photo assessment
-│       └── summarize.md   # /summarize skill: listings report
+│       └── let.md         # /let skill: autonomous search pipeline
 ├── .github/
 │   └── workflows/
-│       └── ci.yml         # Quality + smoke test matrix
-├── .env
+│       └── ci.yml         # Quality + smoke test matrix (ubuntu + macos)
+├── .env                   # API keys (EPC_API_KEY, NOTION_API_KEY, MAPBOX_ACCESS_TOKEN)
 ├── package.json
 ├── biome.json
 ├── tsconfig.json
@@ -125,7 +98,7 @@
 └── lint-staged.config.js
 ```
 
-## 3. Stack
+## 4. Stack
 
 | Layer      | Choice     | Notes                                           |
 | ---------- | ---------- | ----------------------------------------------- |
@@ -138,24 +111,145 @@
 | Commits    | commitlint | Conventional commits, mandatory scopes          |
 | Database   | SQLite     | Listings + source datasets via bun:sqlite       |
 
-## 4. Commands
+## 5. Commands
 
 - **Quick start**: copy `let.config.template.toml` to `data/let.config.toml` and customize
 - **Install/Run**: `bun install`, `bun run let`, `bun run build:cli` (outputs `bin/let`)
 - **Sources**: `bun run sources:build` (supports `-- -o name1,name2`, `-- -c N`), `bun run sources:{broadband|postcodes|deprivation|census|population|income|flood|naptan|uprn|crime}`
 - **Quality**: `bun run util:format`, `bun run util:lint`, `bun run util:lint:fix`, `bun run util:types`, `bun run util:check`, `bun test`, `bun run util:clean`
 
-## 5. Architecture
+## 6. Architecture
 
-- **Pipeline**: Fetch -> Parse -> Enrich -> Score -> Assess -> View -> Output, CLI commands mirror stages and `let ops` holds maintenance tasks
-- **Fetch**: Rightmove HTML/REST, images, Mapbox views, cache PAGE_MODEL JSON in `.cache/{id}/data.json` and assets in `.cache/{id}/`
-- **Enrich**: EPC API (rating, floor area, UPRN), broadband lookup, area metrics (IMD, census tenure, population, income, flood, crime) from local SQLite, pattern-based notes extraction
-- **Score**: composites `affordability|location|liveability` aggregated by variance-adaptive formula using `adaptiveness` (0.5-10) and `adaptivenessFactor` (0.1-20), penalties `epc|garden|pets` combined multiplicatively
-- **Storage**: normalized SQLite in `data/let.db`, JSON export via `let export json` to `data/let.db.json`, backup copy in `data/let.db.bak`
-- **Identity**: listing `id` is UUID, portal IDs in `portalIds.*`
-- **Logging**: domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTION) with structured key=value output
+### Pipeline
 
-## 6. Data Model
+Fetch -> Parse -> Enrich -> Score -> Assess -> View -> Output. CLI commands mirror each stage as an atomic tool. `let ops` holds maintenance tasks.
+
+### Agent Loop
+
+```
+Agent (/let skill)
+  |  let tools --json           # discover available commands
+  |  let health --json          # check prerequisites, run fix commands
+  |  let search discover --json # find portal IDs on Rightmove
+  |  let search diff --json     # classify new vs known
+  |  let fetch <ids> --json     # fetch + parse + enrich + score + persist
+  |  let view list --json       # triage by score
+  |  let assess context --json  # get listing + photos + maps for assessment
+  |  let assess submit --json   # write assessment back
+  |  let view detail --json     # final report data
+  v
+CLI Dispatcher (index.ts)
+  |  citty root with 10 subcommand groups
+  |  defineToolCommand() registers metadata -> toolRegistry[]
+  |  --json triggers JSON envelope output
+  v
+Core Library (@let/core) — domain logic unchanged
+  pipeline/{fetch,parse,enrich,score,assess,view,output}
+  schema/, db/, config/, utils/, paths.ts
+```
+
+### JSON Envelope
+
+Every `--json` command outputs exactly one JSON line to stdout. No other stdout in JSON mode.
+
+```
+Success: { ok: true,  data: T,                         meta: { tool, elapsed, count?, total? } }
+Error:   { ok: false, error: { code, message, hint },  meta: { tool, elapsed } }
+```
+
+Exit codes: `0` success (including partial), `1` runtime error, `2` prerequisites blocked.
+
+### Tool Registry
+
+Commands defined via `defineToolCommand()` register metadata in a global `toolRegistry[]` array. `let tools --json` reads this to produce the catalog (15 tools). `tools` and `health` themselves use plain `defineCommand()` (not in registry — they are infrastructure, not tools).
+
+### Path Resolution
+
+Single source of truth: `packages/core/src/paths.ts`. Cached singleton, CLI primes at startup with overrides.
+
+**Precedence** (highest to lowest):
+1. CLI flags (`--data-dir`, `--config-dir`, `--cache-dir`, `--sources-dir`)
+2. Category env vars (`LET_DATA_DIR`, `LET_CONFIG_DIR`, `LET_CACHE_DIR`, `LET_SOURCES_DIR`)
+3. `LET_HOME` env var (base for data/cache/config/sources)
+4. Dev mode detection (monorepo root via `package.json` marker)
+5. OS defaults (XDG on Linux, `~/Library/Application Support` on macOS)
+
+**Dev mode**: walks up from `process.cwd()` looking for `package.json` with `name: "let"` and `workspaces`. Config file is `let.config.toml` in dev, `config.toml` when installed.
+
+### Enrichment
+
+- **EPC API**: energy rating, floor area, UPRN (requires `EPC_API_KEY`)
+- **Broadband**: local SQLite three-tier fallback (postcode -> outward -> area)
+- **Area metrics**: IMD, census tenure, population, income, flood, crime from local SQLite source databases
+- **Notes**: pattern-based extraction from listing description
+- **Maps**: Mapbox satellite + street view, cached WebP (requires `MAPBOX_ACCESS_TOKEN`)
+
+### Scoring
+
+Composites `affordability|location|liveability` aggregated by variance-adaptive formula using `adaptiveness` (0.5-10) and `adaptivenessFactor` (0.1-20). Penalties `epc|garden|pets` combined multiplicatively. Scores are percentile-relative within the current database.
+
+### Storage
+
+- **Database**: normalized SQLite in `data/let.db`, schema in `packages/core/src/db/schema.sql`, `CREATE TABLE IF NOT EXISTS` on every open
+- **Backup**: automatic `let.db.bak` on each save
+- **Export**: `let export json` writes `let.db.json`, `let export notion` syncs to Notion
+- **Identity**: listing `id` is UUID, portal IDs in `portalIds.rightmove`
+- **Cache**: `.cache/{portalId}/data.json` (PAGE_MODEL), `.cache/{portalId}/*.webp` (images, maps)
+
+### Logging
+
+Domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTION) with structured key=value output to stderr. Never contaminates stdout in `--json` mode.
+
+## 7. CLI Tool Surface
+
+### Registered Tools (15, via `defineToolCommand`)
+
+| Tool | Command | Description | Idempotent | Rate Limited |
+| ---- | ------- | ----------- | ---------- | ------------ |
+| `assess.candidates` | `let assess candidates` | List unassessed listings ranked by score | Yes | No |
+| `assess.context` | `let assess context <id>` | Assessment context bundle (listing + scores + media paths) | Yes | No |
+| `assess.submit` | `let assess submit <id> <json>` | Write assessment back to DB | No | No |
+| `config.show` | `let config show` | Show parsed configuration | Yes | No |
+| `config.validate` | `let config validate` | Validate config file | Yes | No |
+| `export.json` | `let export json` | Export listings DB to JSON file | Yes | No |
+| `export.notion` | `let export notion` | Sync listings to Notion database | No | 3 req/s |
+| `fetch` | `let fetch <ids>` | Fetch/parse/enrich/score/persist by portal IDs | No | config delayMs |
+| `score.compute` | `let score compute` | Rescore all listings | Yes | No |
+| `score.explain` | `let score explain <id>` | Score breakdown for one listing | Yes | No |
+| `search.diff` | `let search diff <ids>` | Compare portal IDs against known listings | Yes | No |
+| `search.discover` | `let search discover` | Discover listing IDs from configured locations | Yes | config delayMs |
+| `search.resolve` | `let search resolve <location>` | Resolve location name to REGION identifier | Yes | 1 req |
+| `view.detail` | `let view detail <id>` | Full listing details | Yes | No |
+| `view.list` | `let view list` | Ranked listings table with filters/sorting | Yes | No |
+
+### Infrastructure Commands (not in registry)
+
+| Command | Description |
+| ------- | ----------- |
+| `let tools` | Capability discovery from registry |
+| `let health` | Prerequisite checks with remediation |
+| `let ops prune` | Remove listings by criteria |
+| `let ops verify` | Check if listings still active on portal |
+
+### Common Flags
+
+- `--json` (or `LET_JSON=1`) — JSON envelope output
+- `--data-dir`, `--config-dir`, `--cache-dir`, `--sources-dir` — path overrides
+- `--skip-images`, `--skip-epc` — skip optional enrichment steps
+- `--dry-run` — preview without writing (ops, export notion)
+- `--top N`, `--region`, `--min-score`, `--sort`, `--asc` — filtering/sorting
+
+### Examples
+
+```bash
+let fetch 170448131,170448132 --json
+let view list --region Sheffield --top 10 --json
+let assess context <uuid> --json
+let export json --output backup.json --json
+let ops verify --dry-run --limit 10 --json
+```
+
+## 8. Data Model
 
 - **ListingSchema**: UUID `id`, `portalIds` (Rightmove/Zoopla/OnTheMarket), UPRN + source/confidence, address/location/region, Google Maps URLs, media (images, floorplan, epc), mapViews (satellite/street), scores, assessment, status
 - **Area metrics**: `lsoa`/`msoa` codes+names, IMD rank/decile/score, income (bhc/ahc), socialHousingPct, population, flood risk (level/source), crime stats (12m counts, rate per 1k, band/trend, updatedAt)
@@ -164,52 +258,54 @@
 - **Status**: `active` or `inactive`, set to active on ingest, updated via `let ops verify`
 - **Media caching**: floorplan.local and epc.local remain null (document caching disabled)
 
-## 7. Scraping
+## 9. Source Databases
+
+10 local SQLite databases built from government/open data sources. Located in `sources/db/` (gitignored). Built via `bun run sources:build` or individually.
+
+| Database | Table | Key Columns | Rows | Used By |
+| -------- | ----- | ----------- | ---- | ------- |
+| postcodes | postcodes | postcode, lat, lng, lsoa_code, msoa_code | ~2.7M | Base lookup for all enrichment |
+| deprivation | imd | lsoa_code, rank, decile, score | ~33K | Area metrics (IMD) |
+| census | tenure | lsoa_code, total_households, social_housing_pct | ~35K | Area metrics (housing) |
+| population | population | lsoa_code, population | ~35K | Area metrics |
+| income | income | msoa_code, income_bhc, income_ahc | ~7K | Area metrics |
+| broadband | postcodes + aggregates | postcode, gigabit_availability | ~1.5M | Broadband enrichment |
+| flood | flood | postcode, risk, source | varies | Flood risk |
+| crime | crime_12m | lsoa_code, total, violent, burglary, robbery | varies | Crime stats |
+| naptan | stops | atco_code, common_name, stop_type, lat, lng | ~434K | Not actively queried |
+| uprn | uprn | uprn, lat, lng | varies | Not actively queried |
+
+Schema validation tests in `packages/core/tests/sources.test.ts` — automatically skipped if DB file doesn't exist.
+
+## 10. Scraping
 
 - **Search results**: `__NEXT_DATA__` JSON at `props.pageProps.searchResults.properties[]`
 - **Listing page**: `window.PAGE_MODEL` JSON extracted via brace counting
 - **Field mapping**: `id` generated UUID, `portalIds.rightmove` from `propertyData.id`, `location` from propertyData, `postcode` from outcode+incode, `price` parsed from primaryPrice, `nearestStations` from propertyData
-- **Learnings**: coordinates on main listing page, postcode always present, stations pre-calculated, floor area requires EPC API, 3s delay to avoid 429s, `pinType: ACCURATE_POINT` means exact location
+- **Coordinates**: always on main listing page; `pinType: ACCURATE_POINT` means exact location
+- **REST API**: TypeAhead (`/typeAhead/uknostreet/{tokenized}/`) returns `locationIdentifier` (REGION^id); Search API (`/api/_search?...`) JSON properties; fallback to HTML if blocked; config `[fetch] useApi = false`
 - **HTML sanitization**: `<br>` to newlines, `</p>` to double newlines, strip tags, decode entities, normalize whitespace
+- **Rate limiting**: 3s delay between requests to avoid 429s. EPC API has no published limit. Mapbox has per-account token limits
 
-## 8. APIs
+## 11. External APIs
 
-- **Rightmove REST**: TypeAhead (`/typeAhead/uknostreet/{tokenized}/`) returns `locationIdentifier` (REGION^id); Search API (`/api/_search?...`) JSON properties; fallback to HTML if blocked; config `[fetch] useApi = false`, CLI `--api true|false`
 - **EPC API**: `GET https://epc.opendatacommunities.org/api/v1/domestic/search?postcode={postcode}` with Basic auth; returns CSV with address, energy band, floor area, UPRN
 - **Postcodes.io**: `GET https://api.postcodes.io/postcodes?lon={lng}&lat={lat}&radius=100&limit=10` (fallback only)
-- **Ofcom Broadband**: local SQLite lookup, returns `{ gigabitAvailability, source }` with postcode/outward/area fallback
 - **Notion API**: `POST https://api.notion.com/v1/pages` with image file objects, rate limited to 3 req/s, `notionPageId` stored in SQLite
 - **Mapbox Static Images**: satellite-v9 + streets-v12, zoom 15, cached WebP; token via `MAPBOX_ACCESS_TOKEN`
 
-## 9. CLI
+## 12. Quality
 
-- **Entry point**: `bun run let <command> [subcommand] [options]`, compiled binary at `bin/let`
-- **JSON mode**: All commands support `--json` (or `LET_JSON=1`). Stdout is exactly one JSON envelope: `{ ok, data|error, meta: { tool, elapsed } }`
-- **Tool discovery**: `let tools --json` returns full catalog from `defineToolCommand()` registry
-- **Commands**:
-  - `fetch <ids>` — Fetch by comma-separated portal IDs
-  - `assess candidates|context|submit` — AI assessment workflow
-  - `config show|validate` — Config inspection
-  - `view list|detail|stats|regions` — Display and analytics
-  - `export json|notion` — Export to file or Notion
-  - `score explain|compute` — Score inspection and recomputation
-  - `search resolve|discover|diff` — Location and listing discovery
-  - `ops prune|verify` — Maintenance operations
-  - `tools` — Capability discovery
-  - `health` — Prerequisite checks with remediation
-- **Examples**: `let fetch 170448131,170448132 --json`, `let view list --region Sheffield --top 10 --json`, `let assess context <uuid> --json`, `let export json --output backup.json --json`, `let ops verify --dry-run --limit 10 --json`
+- **Pre-commit**: Husky + lint-staged runs `util:check` (format + lint + types + tests)
+- **Tests**: `packages/core/tests/*.test.ts` (unit), `packages/cli/tests/*.test.ts` (contract, parity gate, binary smoke)
+- **Source tests**: `packages/core/tests/sources.test.ts` validates schema for each source DB (auto-skipped if DB missing)
+- **CI**: GitHub Actions matrix (ubuntu + macos), quality job (format/lint/types/tests), smoke job (build binary, verify `tools --json` and `health --json`)
+- **Commits**: Conventional `type(scope): subject` with body bullets explaining why; scopes: `cli`, `scraper`, `schema`, `score`, `api`, `db`, `cache`, `changes`, `config`, `deps`
+- **All CI tests are deterministic**: seeded SQLite fixtures in temp directories, no network calls
 
-## 10. Quality
+## 13. Live E2E Verification
 
-- Pre-commit: Husky + lint-staged runs `util:check`
-- Tests: `packages/core/tests/*.test.ts`, `packages/cli/tests/*.test.ts`
-- Test suites: unit (core), contract (JSON envelope), parity gate (E2E loop), binary smoke (compiled)
-- Commits: Conventional `type(scope): subject` with body bullets explaining why; scopes: `cli`, `scraper`, `schema`, `score`, `api`, `db`, `cache`, `changes`, `config`, `deps`
-- CI: GitHub Actions matrix (ubuntu + macos), quality job (format/lint/types/tests), smoke job (build binary, verify JSON output)
-
-## 11. Live E2E Verification
-
-Network-dependent verification procedure (not run in CI). Use for manual validation after changes.
+Network-dependent procedure (not run in CI). Use for manual validation after changes.
 
 ```bash
 # 1. Build binary
@@ -222,11 +318,9 @@ bin/let config show --json    # verify config loaded
 
 # 3. Discover + diff (requires network, rate-limit 3s per request)
 bin/let search discover --json
-# Take first few IDs from response, diff against DB:
 bin/let search diff <id1>,<id2>,<id3> --json
 
 # 4. Fetch (requires network + EPC API credentials in .env)
-# Use --skip-images for quick test, --skip-epc if no credentials
 bin/let fetch <new-id> --skip-images --json
 
 # 5. Verify data persisted
@@ -238,23 +332,10 @@ bin/let score explain <uuid-from-step-4> --json
 bin/let export json --output /tmp/test-export.json --json
 ```
 
-**Rate-limit guidance**: Rightmove enforces 429s after rapid requests. Use `--delay 3000` (default) for batch operations. EPC API has no published rate limit but keep requests moderate. Mapbox has per-account token limits.
+## 14. Known Limitations
 
-**CI stays deterministic**: All CI tests use seeded SQLite fixtures in temp directories. No network calls. Contract tests and parity gate test cover the full command surface without external dependencies.
-
-## 12. Changelog
-
-- **Phase 1-4 (Done)**: Scraper core, Zod schemas, field mapping, rate-limited fetch, PAGE_MODEL extraction, HTML sanitization, dev caching, integration tests
-- **Phase 5-7 (Done)**: Notes enrichment, REST API integration, fallback handling, incremental updates, caching, re-score all
-- **Phase 8 (Done)**: CLI restructure with citty, verb-first subcommands, nested hierarchy, Zod validation
-- **Phase 9 (Done)**: Results viewer, table output, detail view, stats, filtering and sorting
-- **Phase 10 (Done)**: Broadband infrastructure, three-tier fallback lookup, region tracking, EPC address matching improvements
-- **Phase 11 (Done)**: Notion output, rate limiting, dry-run/sync mode, `notionPageId` tracking
-- **Phase 12 (Done)**: Notes extraction module with pattern library
-- **Phase 13 (Done)**: Pipeline stage refactor, unified public API, CLI alignment with pipeline
-- **Phase 14 (Done)**: Variance-adaptive scoring + AI assessment workflow, `scoring.adaptiveness` config
-- **Phase 15 (Done)**: Data file reorg to `let.*`, listing status, `let ops verify`
-- **Phase 16 (Done)**: Mapbox static maps, neighborhood analysis, Google Maps URLs
-- **Phase 17 (Done)**: CLI output refactor, terminal utilities, assessed score column, removed area/dataQuality composites
-- **Phase 18 (Done)**: Area metrics sources + enrichment, UPRN capture, UUID primary keys (migration complete, code removed), one-time backfill via `let ops enrich`
-- **Phase 19 (Done)**: Agent-native CLI re-architecture: cross-platform paths, JSON envelope, tool registry, 15 `defineToolCommand` commands, contract tests, CI matrix, binary smoke tests, `/let` skill file, legacy cleanup
+- **Source databases require manual builds**: `bun run sources:build` downloads ~5-10GB from government sources. Some URLs expire (flood, broadband). Missing sources cause degraded enrichment (lower confidence scores), not failures
+- **Rightmove rate limits**: 429s after rapid requests. Default 3s delay between requests. Batch operations should use `--delay 5000`
+- **No migration system**: database schema changes require DB recreation. Health check detects incompatibility
+- **EPC address matching**: fuzzy match against address string; may miss on unusual addresses
+- **Assessment is write-once**: no diff/update semantics; re-submit overwrites entirely

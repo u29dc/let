@@ -61,6 +61,10 @@ Unblocks after: LET-014..024 (Stage 2 commands registered via defineToolCommand)
 | [x]  | LET-044 | Add `/let` skill file for Claude Code                                     | Stage 7 · `.claude/commands/let.md`                                | Skill implements orient→discover→diff→fetch→triage→context→assess→report loop; includes recovery table                           |
 | [x]  | LET-045 | Update repo docs (`CLAUDE.md`) to reflect new toolbelt                    | Stage 7                                                            | Docs list new surface, how to run, how to bootstrap sources, how to verify                                                       |
 | [x]  | LET-046 | Add optional live E2E verification notes (network-enabled)                | Web access note + Testing                                          | Document a live run procedure; keep CI deterministic; include rate-limit guidance                                                |
+| [ ]  | LET-047 | Migrate `shared-read.ts` to use `@let/core/paths`                         | Stage 6 · Files Removed: `shared-read.ts`                         | Remove `resolveRootDir()`, `ROOT_DIR`, `CACHE_DIR`, `DATA_DIR`, `LISTINGS_DB_PATH`, `CONFIG_PATH`; all consumers use `paths()` |
+| [ ]  | LET-048 | Migrate `shared-write.ts` to use `@let/core/paths`                        | Stage 6 · Files Removed: `shared-write.ts`                        | `processListing`, `saveListingsFile`, cache helpers use `paths().derived.*`; no path constants imported from `shared-read`       |
+| [ ]  | LET-049 | Remove legacy `view stats` and `view regions` subcommands                 | Stage 6 · Directory Structure (view only has list + detail)        | `view/index.ts` routes only `list` and `detail`; stats/regions code removed; `tools --json` matches routable surface            |
+| [ ]  | LET-050 | Delete stale `AGENT.md` tracking file                                     | Review findings                                                    | `AGENT.md` removed; `TODO.md` is the sole tracker                                                                               |
 
 ## Update Log (append-only)
 
