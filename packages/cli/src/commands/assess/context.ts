@@ -13,6 +13,7 @@ import { findListingById } from '@let/core/pipeline/view';
 import { log } from '@let/core/utils/logger';
 import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
+import { ASSESSMENT_SCHEMA } from './schema.js';
 
 function resolveMediaPaths(listing: import('@let/core/schema').Listing, cacheDir: string) {
 	const id = listing.portalIds.rightmove ?? listing.id;
@@ -50,28 +51,20 @@ function buildScoreBreakdown(listing: import('@let/core/schema').Listing) {
 	};
 }
 
-const ASSESSMENT_SCHEMA = {
-	type: 'object',
-	required: ['maintenance', 'lightAndSpace', 'photoAnalysis', 'recommendation', 'familySuitability', 'reasoning', 'scoreAdjustment'],
-	properties: {
-		maintenance: { type: 'string', enum: ['excellent', 'good', 'fair', 'poor'] },
-		lightAndSpace: { type: 'string' },
-		photoAnalysis: { type: 'string' },
-		tradeoffs: { type: 'string' },
-		neighborhoodAnalysis: { type: 'string' },
-		recommendation: { type: 'string', enum: ['strong-recommend', 'recommend', 'neutral', 'avoid'] },
-		familySuitability: { type: 'string', enum: ['excellent', 'good', 'fair', 'poor'] },
-		reasoning: { type: 'string' },
-		scoreAdjustment: { type: 'number', minimum: -30, maximum: 30 },
-	},
-};
-
 export const assessContextCommand = defineToolCommand(
 	{
 		name: 'assess.context',
 		command: 'let assess context',
 		category: 'assess',
-		outputFields: ['listing', 'scoreBreakdown', 'assessmentSchema', 'media', 'links', 'description', 'notes'],
+		outputSchema: {
+			listing: { type: 'object', items: 'Listing', description: 'Full listing object' },
+			scoreBreakdown: { type: 'object', items: 'ScoreBreakdown', description: 'Overall, composites (affordability/location/liveability), factors, penalties' },
+			assessmentSchema: { type: 'object', description: 'JSON Schema for assessment validation' },
+			media: { type: 'object', items: 'MediaPaths', description: 'Absolute paths: images[], floorplan, satellite, street, cacheDir' },
+			links: { type: 'object', items: 'Links', description: 'URLs: rightmove, googleMaps, streetView, epcSearch' },
+			description: { type: 'string', description: 'Full listing description text' },
+			notes: { type: 'array', items: 'string', description: 'Extracted property notes and findings' },
+		},
 		idempotent: true,
 		rateLimit: null,
 		example: 'let assess context 170448131 --json',

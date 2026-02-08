@@ -91,7 +91,12 @@ export const fetchNewCommand = defineToolCommand(
 		name: 'fetch',
 		command: 'let fetch',
 		category: 'fetch',
-		outputFields: ['fetched', 'failed', 'total'],
+		outputSchema: {
+			fetched: { type: 'array', items: 'FetchedItem', description: 'Successful: { id, address, score }' },
+			failed: { type: 'array', items: 'FailedItem', description: 'Failed: { id, error }' },
+			total: { type: 'number', description: 'Total requested IDs' },
+			saveError: { type: 'string', description: 'Optional: error message if DB save failed after fetch' },
+		},
 		idempotent: false,
 		rateLimit: 'config fetch.delayMs per request',
 		example: 'let fetch 170448131,170448132 --json',

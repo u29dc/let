@@ -16,7 +16,9 @@ export const viewDetailCommand = defineToolCommand(
 		name: 'view.detail',
 		command: 'let view detail',
 		category: 'view',
-		outputFields: ['listing'],
+		outputSchema: {
+			listing: { type: 'object', items: 'Listing', description: 'Full listing with all fields: portalIds, address, location, scores, assessment, media, status' },
+		},
 		idempotent: true,
 		rateLimit: null,
 		example: 'let view detail 170448131 --json',

@@ -29,7 +29,11 @@ export const viewListCommand = defineToolCommand(
 		name: 'view.list',
 		command: 'let view list',
 		category: 'view',
-		outputFields: ['listings', 'total', 'filtered'],
+		outputSchema: {
+			listings: { type: 'array', items: 'TableRow', description: 'Listings as table rows: id, address, price, priceDisplay, bedrooms, score, assessedScore, scoreChange, station, region, url' },
+			total: { type: 'number', description: 'Total listings in database before filtering' },
+			filtered: { type: 'number', description: 'Count after applying filters' },
+		},
 		idempotent: true,
 		rateLimit: null,
 		example: 'let view list --top 10 --region Sheffield --json',

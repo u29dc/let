@@ -12,6 +12,7 @@ import { AssessmentSchema } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
 import { emitRaw, fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
+import { ASSESSMENT_SCHEMA } from './schema.js';
 
 function parseAssessmentJson(raw: string) {
 	try {
@@ -72,6 +73,7 @@ export const assessSubmitCommand = defineToolCommand(
 		outputFields: ['id', 'assessedScore', 'algoScore', 'scoreAdjustment'],
 		idempotent: false,
 		rateLimit: null,
+		inputSchema: ASSESSMENT_SCHEMA,
 		example: 'let assess submit 170448131 \'{"maintenance":"good",...}\' --json',
 	},
 	{

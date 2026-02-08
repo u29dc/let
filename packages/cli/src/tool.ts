@@ -19,6 +19,15 @@ export interface ParameterMeta {
 	description: string;
 }
 
+export interface OutputFieldSchema {
+	type: 'string' | 'number' | 'boolean' | 'array' | 'object';
+	/** For arrays/objects: element or shape type name */
+	items?: string;
+	description?: string;
+}
+
+export type OutputSchema = Record<string, OutputFieldSchema>;
+
 export interface ToolMeta {
 	/** Dotted name e.g. "search.discover" */
 	name: string;
@@ -32,12 +41,16 @@ export interface ToolMeta {
 	parameters: ParameterMeta[];
 	/** Top-level fields in the JSON data payload */
 	outputFields: string[];
+	/** Structured schema for the JSON data payload (overrides outputFields when present) */
+	outputSchema?: OutputSchema;
 	/** Whether repeated calls produce the same result */
 	idempotent: boolean;
 	/** Rate limit domain (null if none) */
 	rateLimit: string | null;
 	/** Example invocation */
 	example: string;
+	/** Input validation schema for structured JSON input (e.g. assess.submit) */
+	inputSchema?: Record<string, unknown>;
 }
 
 /**
@@ -48,10 +61,13 @@ interface ToolCommandMeta {
 	name: string;
 	command: string;
 	category: string;
-	outputFields: string[];
+	/** Explicit output field names. Auto-derived from outputSchema keys when omitted. */
+	outputFields?: string[];
+	outputSchema?: OutputSchema;
 	idempotent: boolean;
 	rateLimit: string | null;
 	example: string;
+	inputSchema?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,8 +114,11 @@ export function defineToolCommand<T extends ArgsDef = ArgsDef>(toolMeta: ToolCom
 	const meta = def.meta;
 	const description = (meta && typeof meta === 'object' && 'description' in meta ? meta.description : undefined) ?? '';
 
+	const resolvedOutputFields = toolMeta.outputSchema ? Object.keys(toolMeta.outputSchema) : (toolMeta.outputFields ?? []);
+
 	toolRegistry.push({
 		...toolMeta,
+		outputFields: resolvedOutputFields,
 		description,
 		parameters,
 	});
