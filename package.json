@@ -34,7 +34,7 @@
 		"util:lint:fix": "biome check --write .",
 		"util:types": "tsgo --noEmit",
 		"util:clean": "rm -rf dist build",
-		"util:check": "STATUS=0; bun run util:format || STATUS=1; bun run util:lint || STATUS=1; bun run util:types || STATUS=1; bun test || STATUS=1; exit $STATUS"
+		"util:check": "STATUS=0; bun run util:format || STATUS=1; bun run util:lint || STATUS=1; bun run util:types || STATUS=1; bun test --concurrent || STATUS=1; exit $STATUS"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.14",
