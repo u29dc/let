@@ -1,8 +1,8 @@
 /**
  * Image download and processing for property listings
  *
- * Downloads property images from Rightmove CDN, converts to WebP,
- * and normalizes dimensions for consistent AI analysis.
+ * Downloads property images from Rightmove CDN, converts to JPEG,
+ * and caps maximum dimensions for consistent AI analysis.
  * Uses @napi-rs/image for Rust-based processing.
  *
  * Downloads are SEQUENTIAL (not concurrent) for simplicity and reliability.
@@ -25,12 +25,10 @@ const IMAGE_FETCH_TIMEOUT_MS = 5_000;
 const IMAGE_PROCESS_TIMEOUT_MS = 5_000;
 
 const IMAGE_CONFIG = {
-	/** Minimum dimension (width for landscape, height for portrait) */
-	minDimension: 900,
 	/** Maximum dimension (width for landscape, height for portrait) */
 	maxDimension: 1200,
-	/** WebP quality (0-100) */
-	quality: 70,
+	/** JPEG quality (0-100) */
+	quality: 80,
 	/** Delay between downloads (ms) */
 	delayMs: 200,
 	/** Maximum retries per image */
@@ -76,10 +74,10 @@ function hashUrl(url: string): string {
 
 /**
  * Generate deterministic image filename from URL
- * Format: {id}-{type}-{urlhash}.webp
+ * Format: {id}-{type}-{urlhash}.jpg
  */
 export function generateImageFilename(id: string, type: 'photo' | 'floorplan' | 'epc', remoteUrl: string): string {
-	return `${id}-${type}-${hashUrl(remoteUrl)}.webp`;
+	return `${id}-${type}-${hashUrl(remoteUrl)}.jpg`;
 }
 
 /**
@@ -212,7 +210,8 @@ async function downloadImage(url: string, label: string): Promise<Buffer | null>
 }
 
 /**
- * Process image buffer: resize and convert to WebP
+ * Process image buffer: downscale if oversized and convert to JPEG
+ * No upscaling — Rightmove images are already web-optimized
  */
 async function processImage(buffer: Buffer, label: string): Promise<Buffer> {
 	log.fetchImages.debug(`[${label}] Processing image`);
@@ -228,21 +227,15 @@ async function processImage(buffer: Buffer, label: string): Promise<Buffer> {
 
 	if (isLandscape) {
 		if (width > IMAGE_CONFIG.maxDimension) {
-			return transformer.resize(IMAGE_CONFIG.maxDimension).webp(IMAGE_CONFIG.quality);
-		}
-		if (width < IMAGE_CONFIG.minDimension) {
-			return transformer.resize(IMAGE_CONFIG.minDimension).webp(IMAGE_CONFIG.quality);
+			return transformer.resize(IMAGE_CONFIG.maxDimension).jpeg(IMAGE_CONFIG.quality);
 		}
 	} else {
 		if (height > IMAGE_CONFIG.maxDimension) {
-			return transformer.resize({ width: 99999, height: IMAGE_CONFIG.maxDimension }).webp(IMAGE_CONFIG.quality);
-		}
-		if (height < IMAGE_CONFIG.minDimension) {
-			return transformer.resize({ width: 99999, height: IMAGE_CONFIG.minDimension }).webp(IMAGE_CONFIG.quality);
+			return transformer.resize({ width: 99999, height: IMAGE_CONFIG.maxDimension }).jpeg(IMAGE_CONFIG.quality);
 		}
 	}
 
-	return transformer.webp(IMAGE_CONFIG.quality);
+	return transformer.jpeg(IMAGE_CONFIG.quality);
 }
 
 /**
