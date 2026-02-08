@@ -45,6 +45,19 @@ Rules:
     - `Overrides applied:` (bullet list)
     - `What stayed from config:` (short bullet list)
 
+Available override flags for `search discover`:
+
+| Flag                       | Example                           | Effect                                                      |
+| -------------------------- | --------------------------------- | ----------------------------------------------------------- |
+| `--location <ID>`          | `--location REGION^904`           | Search a non-config location (get ID from `search resolve`) |
+| `--location-name <name>`   | `--location-name Manchester`      | Display name for ad-hoc location                            |
+| `--property-types <list>`  | `--property-types flat,apartment` | Override property types                                     |
+| `--must-have <list\|none>` | `--must-have none`                | Override mustHave filters ("none" clears)                   |
+| `--dont-show <list\|none>` | `--dont-show none`                | Override dontShow filters ("none" clears)                   |
+| `--limit <n>`              | `--limit 50`                      | Max results per location                                    |
+
+For fetch: `--region <name>` assigns region to fetched listings (use displayName from `search resolve`).
+
 ## 2) Discover (IDs only, no persistence)
 
 Definition: **“new listings” = portal IDs not present in the SQLite DB yet**.
@@ -118,7 +131,7 @@ What to look for:
 Submit assessment:
 
 ```bash
-let assess submit <id> --data '{...}' --json
+let assess submit <id> '<assessment-json>' --json
 ```
 
 Assessment rules:
@@ -140,7 +153,7 @@ For each listing ID:
 1) Run `let assess context {id} --json`
 2) Use the returned `media` paths (do not guess cache directories)
 3) Review images/maps; do a quick neighborhood web check if needed
-4) Submit: `let assess submit {id} --data '<valid assessment JSON>' --json`
+4) Submit: `let assess submit {id} '<valid assessment JSON>' --json`
 
 Guidance:
 * Maintenance: excellent / good / fair / poor

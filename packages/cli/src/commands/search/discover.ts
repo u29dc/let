@@ -24,6 +24,27 @@ function dedupeIds(ids: string[]): string[] {
 	return unique;
 }
 
+function parseCommaSeparated(value: string): string[] {
+	return value === 'none' ? [] : value.split(',').map((t) => t.trim());
+}
+
+function applyFilterOverrides(filters: SearchFilters, args: Record<string, unknown>): SearchFilters {
+	let result = filters;
+	const propertyTypes = args['property-types'];
+	const mustHave = args['must-have'];
+	const dontShow = args['dont-show'];
+	if (typeof propertyTypes === 'string') {
+		result = { ...result, propertyTypes: propertyTypes.split(',').map((t) => t.trim()) };
+	}
+	if (typeof mustHave === 'string') {
+		result = { ...result, mustHave: parseCommaSeparated(mustHave) };
+	}
+	if (typeof dontShow === 'string') {
+		result = { ...result, dontShow: parseCommaSeparated(dontShow) };
+	}
+	return result;
+}
+
 function buildSearchParams(locationId: string, filters: SearchFilters, maxPerLocation: number): ApiSearchParams {
 	return {
 		locationIdentifier: locationId,
@@ -70,7 +91,7 @@ export const searchDiscoverCommand = defineToolCommand(
 		outputFields: ['ids', 'total', 'locations'],
 		idempotent: true,
 		rateLimit: 'config fetch.delayMs per request',
-		example: 'let search discover --region York --json',
+		example: 'let search discover --location REGION^904 --property-types flat --must-have none --json',
 	},
 	{
 		meta: {
@@ -89,6 +110,18 @@ export const searchDiscoverCommand = defineToolCommand(
 			'property-types': {
 				type: 'string' as const,
 				description: 'Override property types (comma-separated, e.g., flat,apartment)',
+			},
+			'must-have': {
+				type: 'string' as const,
+				description: 'Override mustHave filters (comma-separated, or "none" to clear)',
+			},
+			'dont-show': {
+				type: 'string' as const,
+				description: 'Override dontShow filters (comma-separated, or "none" to clear)',
+			},
+			'location-name': {
+				type: 'string' as const,
+				description: 'Display name for ad-hoc location (used in output)',
 			},
 			limit: {
 				type: 'string' as const,
@@ -116,7 +149,7 @@ export const searchDiscoverCommand = defineToolCommand(
 
 				let locations = config.search.locations;
 				if (args.location) {
-					locations = [{ id: args.location, name: args.location }];
+					locations = [{ id: args.location, name: args['location-name'] || args.location }];
 				} else if (args.region) {
 					const regionLower = args.region.toLowerCase();
 					locations = locations.filter((loc) => loc.name.toLowerCase().includes(regionLower));
@@ -129,10 +162,7 @@ export const searchDiscoverCommand = defineToolCommand(
 					}
 				}
 
-				let filters = config.search.filters;
-				if (args['property-types']) {
-					filters = { ...filters, propertyTypes: args['property-types'].split(',').map((t: string) => t.trim()) };
-				}
+				const filters = applyFilterOverrides(config.search.filters, args);
 
 				const maxPerLocation = args.limit ? Number.parseInt(args.limit, 10) : config.fetch.maxListings;
 				const { ids, locationResults } = await searchLocations(filters, locations, maxPerLocation);
