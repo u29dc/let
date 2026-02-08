@@ -83,7 +83,7 @@ function formatScoreChange(change: number | null): string {
 /**
  * Render listings as a table
  */
-function renderTable(listings: Listing[]): void {
+export function renderTable(listings: Listing[]): void {
 	const table = createTable([
 		{ name: 'id', title: 'ID', alignment: 'left' },
 		{ name: 'address', title: 'ADDRESS', alignment: 'left' },

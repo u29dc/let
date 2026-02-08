@@ -15,13 +15,14 @@
  */
 
 import { defineCommand, runMain } from 'citty';
-import { assessCommand } from './commands/assess.js';
+import { assessNewCommand } from './commands/assess/index.js';
 import { configCommand } from './commands/config/index.js';
 import { fetchCommand } from './commands/fetch.js';
 import { healthCommand } from './commands/health/index.js';
 import { helpCommand } from './commands/help.js';
 import { opsCommand } from './commands/ops/index.js';
 import { outputCommand } from './commands/output/index.js';
+import { scoreCommand } from './commands/score/index.js';
 import { setupSignalHandlers } from './commands/shared-read.js';
 import { toolsCommand } from './commands/tools/index.js';
 import { viewCommand } from './commands/view/index.js';
@@ -40,11 +41,12 @@ const main = defineCommand({
 	},
 	subCommands: {
 		fetch: fetchCommand,
-		assess: assessCommand,
+		assess: assessNewCommand,
 		config: configCommand,
 		view: viewCommand,
 		output: outputCommand,
 		ops: opsCommand,
+		score: scoreCommand,
 		help: helpCommand,
 		tools: toolsCommand,
 		health: healthCommand,
