@@ -3,10 +3,10 @@
  * CLI entry point for Property Search Agent
  *
  * Commands:
- * - let fetch     Data acquisition (single ID or batch from config)
+ * - let fetch     Fetch listings by portal ID
  * - let assess    View or submit AI assessment
  * - let view      Display and analytics (list, detail, stats, regions)
- * - let output    Export to external services (notion, json)
+ * - let export    Export to external services (notion, json)
  * - let ops       Maintenance operations (prune, verify)
  *
  * Usage: bun run let <command> [options]
@@ -18,11 +18,9 @@ import { defineCommand, runMain } from 'citty';
 import { assessNewCommand } from './commands/assess/index.js';
 import { configCommand } from './commands/config/index.js';
 import { exportCommand } from './commands/export/index.js';
-import { fetchCommand } from './commands/fetch.js';
+import { fetchNewCommand } from './commands/fetch/index.js';
 import { healthCommand } from './commands/health/index.js';
-import { helpCommand } from './commands/help.js';
 import { opsCommand } from './commands/ops/index.js';
-import { outputCommand } from './commands/output/index.js';
 import { scoreCommand } from './commands/score/index.js';
 import { searchCommand } from './commands/search/index.js';
 import { setupSignalHandlers } from './commands/shared-read.js';
@@ -42,16 +40,14 @@ const main = defineCommand({
 		description: 'Property Search Agent - Rightmove scraper, scorer, and viewer',
 	},
 	subCommands: {
-		fetch: fetchCommand,
+		fetch: fetchNewCommand,
 		assess: assessNewCommand,
 		config: configCommand,
 		view: viewCommand,
 		export: exportCommand,
-		output: outputCommand,
 		ops: opsCommand,
 		score: scoreCommand,
 		search: searchCommand,
-		help: helpCommand,
 		tools: toolsCommand,
 		health: healthCommand,
 	},

@@ -8,7 +8,8 @@ import { log } from '@let/core/utils/logger';
 import { defineCommand } from 'citty';
 import { isJsonMode, ok } from '../../envelope.js';
 import { printKeyValues, section } from '../../output/index.js';
-import { LISTINGS_DB_PATH, loadExistingListings, saveListingsFile } from '../shared.js';
+import { LISTINGS_DB_PATH, loadExistingListings } from '../shared-read.js';
+import { saveListingsFile } from '../shared-write.js';
 
 /** Region pattern matcher for filtering */
 function matchesRegionPattern(listingRegion: string | null | undefined, patterns: string[]): boolean {

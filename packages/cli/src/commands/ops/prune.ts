@@ -8,7 +8,8 @@ import { log } from '@let/core/utils/logger';
 import { defineCommand } from 'citty';
 import { isJsonMode, ok } from '../../envelope.js';
 import { createTable, formatScoreWithSignal, printKeyValues, subheader } from '../../output/index.js';
-import { loadExistingListings, saveListingsFile } from '../shared.js';
+import { loadExistingListings } from '../shared-read.js';
+import { saveListingsFile } from '../shared-write.js';
 
 /** Prompt user for confirmation */
 async function promptConfirm(message: string): Promise<boolean> {
