@@ -16,6 +16,7 @@
 
 import { defineCommand, runMain } from 'citty';
 import { assessCommand } from './commands/assess.js';
+import { configCommand } from './commands/config/index.js';
 import { fetchCommand } from './commands/fetch.js';
 import { healthCommand } from './commands/health/index.js';
 import { helpCommand } from './commands/help.js';
@@ -40,6 +41,7 @@ const main = defineCommand({
 	subCommands: {
 		fetch: fetchCommand,
 		assess: assessCommand,
+		config: configCommand,
 		view: viewCommand,
 		output: outputCommand,
 		ops: opsCommand,
