@@ -1,7 +1,126 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.3.14/schema.json",
-	"extends": ["/Users/han/.config/biome/biome.json"],
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
 	"files": {
-		"includes": ["!**/fixtures/**/*.html", "!**/.cache"]
+		"ignoreUnknown": true,
+		"includes": [
+			"**/*.ts",
+			"**/*.tsx",
+			"**/*.js",
+			"**/*.jsx",
+			"**/*.mjs",
+			"**/*.cjs",
+			"**/*.json",
+			"**/*.jsonc",
+			"**/*.md",
+			"**/*.sh",
+			"**/*.zsh",
+			"**/*.bash",
+			"**/*rc",
+			"**/config",
+			"!**/node_modules",
+			"!**/build",
+			"!**/dist",
+			"!**/.svelte-kit",
+			"!**/tmp",
+			"!**/.tmp",
+			"!**/temp",
+			"!**/.temp",
+			"!**/.archive",
+			"!**/fixtures/**/*.html",
+			"!**/.cache"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"formatWithErrors": false,
+		"indentStyle": "tab",
+		"indentWidth": 4,
+		"lineWidth": 200,
+		"lineEnding": "lf",
+		"attributePosition": "auto"
+	},
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"json": {
+		"parser": {
+			"allowComments": true,
+			"allowTrailingCommas": false
+		},
+		"formatter": {
+			"trailingCommas": "none"
+		}
+	},
+	"javascript": {
+		"globals": ["Bun"],
+		"formatter": {
+			"quoteStyle": "single",
+			"jsxQuoteStyle": "double",
+			"trailingCommas": "all",
+			"semicolons": "always",
+			"arrowParentheses": "always",
+			"quoteProperties": "asNeeded"
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"complexity": {
+				"noForEach": "off",
+				"useOptionalChain": "warn",
+				"noExcessiveCognitiveComplexity": "warn",
+				"useLiteralKeys": "off"
+			},
+			"correctness": {
+				"noUnusedVariables": "error",
+				"noUnusedImports": "error",
+				"useExhaustiveDependencies": "warn"
+			},
+			"suspicious": {
+				"noExplicitAny": "error",
+				"noConsole": "error",
+				"noShadowRestrictedNames": "error",
+				"noDoubleEquals": "error",
+				"noGlobalIsNan": "error",
+				"noVar": "error",
+				"noAssignInExpressions": "error",
+				"noUnknownAtRules": "off"
+			},
+			"style": {
+				"useImportType": "warn",
+				"useExportType": "warn",
+				"useConst": "error",
+				"useNodejsImportProtocol": "error",
+				"useTemplate": "warn",
+				"noNonNullAssertion": "error"
+			},
+			"a11y": {
+				"useSemanticElements": "warn"
+			},
+			"nursery": {
+				"useSortedClasses": {
+					"level": "warn",
+					"options": {
+						"attributes": ["className", "class", "classList"],
+						"functions": ["clsx", "cva", "tw", "cn"]
+					}
+				}
+			}
+		}
 	}
 }
