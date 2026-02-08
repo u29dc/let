@@ -352,7 +352,17 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(exitCode).toBe(0);
 	});
 
-	test('13. view list --json (post-assess) -> shows assessed score', async () => {
+	test('13. ops prune --inactive --dry-run --json -> returns prune preview', async () => {
+		const { stdout } = await run(['ops', 'prune', '--inactive', '--dry-run', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
+		expect(parsed['ok']).toBe(true);
+		const data = parsed['data'] as Record<string, unknown>;
+		expect(data['mode']).toBe('inactive');
+		expect(typeof data['removed']).toBe('number');
+		expect(typeof data['remaining']).toBe('number');
+	});
+
+	test('14. view list --json (post-assess) -> shows assessed score', async () => {
 		const { stdout } = await run(['view', 'list', '--json'], ENV);
 		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);

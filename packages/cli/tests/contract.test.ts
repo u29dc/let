@@ -270,6 +270,24 @@ describe('JSON envelope contracts', () => {
 		expect(parsed['ok']).toBe(true);
 	});
 
+	test('ops prune --inactive --json (no inactive)', async () => {
+		const { stdout } = await run(['ops', 'prune', '--inactive', '--json'], ENV);
+		const parsed = assertValidEnvelope(stdout, 'ops.prune');
+		expect(parsed['ok']).toBe(true);
+		const data = parsed['data'] as Record<string, unknown>;
+		expect(data['removed']).toBe(0);
+		expect(data['mode']).toBe('inactive');
+	});
+
+	test('ops prune --min-score 100 --dry-run --json', async () => {
+		const { stdout } = await run(['ops', 'prune', '--min-score', '100', '--dry-run', '--json'], ENV);
+		const parsed = assertValidEnvelope(stdout, 'ops.prune');
+		expect(parsed['ok']).toBe(true);
+		const data = parsed['data'] as Record<string, unknown>;
+		expect(data['dryRun']).toBe(true);
+		expect(data['removed']).toBe(1);
+	});
+
 	test('export json --json', async () => {
 		const outputPath = join(TEMP_DIR, 'test-export.json');
 		const { stdout } = await run(['export', 'json', '--output', outputPath, '--json'], ENV);
@@ -349,10 +367,10 @@ describe('Search fixture tests', () => {
 // ---------------------------------------------------------------------------
 
 describe('Registry drift', () => {
-	test('tools catalog has exactly 15 registered tools', async () => {
+	test('tools catalog has exactly 17 registered tools', async () => {
 		const { stdout } = await run(['tools', '--json'], ENV);
 		const parsed = JSON.parse(stdout);
-		expect(parsed['data']['tools'].length).toBe(15);
+		expect(parsed['data']['tools'].length).toBe(17);
 	});
 
 	test('every registered tool name matches a routable command', async () => {
@@ -369,6 +387,8 @@ describe('Registry drift', () => {
 			'export.json',
 			'export.notion',
 			'fetch',
+			'ops.prune',
+			'ops.verify',
 			'score.compute',
 			'score.explain',
 			'search.diff',
@@ -409,6 +429,22 @@ describe('Registry drift', () => {
 		expect(paramNames).toContain('--property-types');
 		const outputFields: string[] = discoverTool['outputFields'];
 		expect(outputFields).toContain('idsByLocation');
+	});
+
+	test('assess.submit has inputSchema in catalog', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
+		const submit = parsed['data']['tools'].find((t: { name: string }) => t.name === 'assess.submit');
+		expect(submit['inputSchema']).toBeDefined();
+		expect(submit['inputSchema']['required']).toContain('maintenance');
+	});
+
+	test('view.list has outputSchema in catalog', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
+		const viewList = parsed['data']['tools'].find((t: { name: string }) => t.name === 'view.list');
+		expect(viewList['outputSchema']).toBeDefined();
+		expect(viewList['outputSchema']['listings']).toHaveProperty('type', 'array');
 	});
 
 	test('tools and health are infrastructure, not in catalog', async () => {
