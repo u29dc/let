@@ -10,7 +10,7 @@ import { loadConfig, resetConfigCache } from '@let/core/config';
 import { paths } from '@let/core/paths';
 import { type ApiSearchParams, searchListingsApi, setApiDelay, setApiMaxRetries } from '@let/core/pipeline/fetch';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 function dedupeIds(ids: string[]): string[] {
@@ -126,6 +126,7 @@ export const searchDiscoverCommand = defineToolCommand(
 
 				log.cli.info(`Discovered ${ids.length} unique listing IDs across ${locations.length} location(s)`);
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('search.discover', 'SEARCH_ERROR', `Search failed: ${message}`, 'Check config and network', start);

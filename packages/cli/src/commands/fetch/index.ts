@@ -13,7 +13,7 @@ import { setApiDelay, setApiMaxRetries, setFetchDelay, setFetchMaxRetries } from
 import { recalcAssessedScores, scoreListingsWithConfig } from '@let/core/pipeline/score';
 import type { Listing, ListingsFile } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 import { processListing } from '../shared-write.js';
 
@@ -161,6 +161,7 @@ export const fetchNewCommand = defineToolCommand(
 					log.cli.warn(`Failed: ${failed.map((f) => f.id).join(', ')}`);
 				}
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('fetch', 'FETCH_ERROR', `Fetch failed: ${message}`, 'Check config and network', start);

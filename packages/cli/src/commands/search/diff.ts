@@ -8,7 +8,7 @@
 import { loadListingsFile } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 function parseInputIds(raw: string): string[] {
@@ -102,6 +102,7 @@ export const searchDiffCommand = defineToolCommand(
 					log.cli.info(`New: ${newIds.join(', ')}`);
 				}
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('search.diff', 'DB_ERROR', `Failed to check listings: ${message}`, 'Check database path', start);

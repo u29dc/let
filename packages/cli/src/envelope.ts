@@ -47,6 +47,42 @@ export type Envelope<T> = SuccessEnvelope<T> | ErrorEnvelope;
 const BLOCKING_CODES = new Set(['NO_CONFIG', 'NO_SOURCES', 'SCHEMA_MISMATCH']);
 
 // ---------------------------------------------------------------------------
+// Capture mode (test-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown instead of process.exit() when capture mode is enabled.
+ * Tests catch this to inspect the envelope without spawning a subprocess.
+ */
+export class EnvelopeCapture extends Error {
+	constructor(
+		public readonly envelope: string,
+		public readonly exitCode: number,
+	) {
+		super('EnvelopeCapture');
+		this.name = 'EnvelopeCapture';
+	}
+}
+
+let captureModeDepth = 0;
+let jsonModeOverrideDepth = 0;
+
+/** Enable or disable capture mode. Ref-counted for concurrent test safety. */
+export function setCaptureMode(enabled: boolean): void {
+	captureModeDepth += enabled ? 1 : -1;
+}
+
+/** Override isJsonMode() without mutating process.argv. Ref-counted for concurrent test safety. */
+export function setJsonModeOverride(enabled: boolean): void {
+	jsonModeOverrideDepth += enabled ? 1 : -1;
+}
+
+/** Re-throw EnvelopeCapture in command catch blocks so it propagates to the test harness. */
+export function rethrowCapture(e: unknown): void {
+	if (e instanceof EnvelopeCapture) throw e;
+}
+
+// ---------------------------------------------------------------------------
 // isJsonMode
 // ---------------------------------------------------------------------------
 
@@ -55,6 +91,7 @@ const BLOCKING_CODES = new Set(['NO_CONFIG', 'NO_SOURCES', 'SCHEMA_MISMATCH']);
  * Fast check, no citty dependency.
  */
 export function isJsonMode(): boolean {
+	if (jsonModeOverrideDepth > 0) return true;
 	return process.argv.includes('--json');
 }
 
@@ -74,7 +111,9 @@ export function ok<T>(tool: string, data: T, start: number, extra?: Partial<Pick
 	if (extra?.hasMore !== undefined) meta.hasMore = extra.hasMore;
 
 	const envelope: SuccessEnvelope<T> = { ok: true, data, meta };
-	process.stdout.write(`${JSON.stringify(envelope)}\n`);
+	const json = JSON.stringify(envelope);
+	if (captureModeDepth > 0) throw new EnvelopeCapture(json, 0);
+	process.stdout.write(`${json}\n`);
 	process.exit(0);
 }
 
@@ -92,6 +131,23 @@ export function fail(tool: string, code: string, message: string, hint: string, 
 		error: { code, message, hint },
 		meta: { tool, elapsed },
 	};
-	process.stdout.write(`${JSON.stringify(envelope)}\n`);
-	process.exit(BLOCKING_CODES.has(code) ? 2 : 1);
+	const json = JSON.stringify(envelope);
+	const exitCode = BLOCKING_CODES.has(code) ? 2 : 1;
+	if (captureModeDepth > 0) throw new EnvelopeCapture(json, exitCode);
+	process.stdout.write(`${json}\n`);
+	process.exit(exitCode);
+}
+
+// ---------------------------------------------------------------------------
+// emitRaw
+// ---------------------------------------------------------------------------
+
+/**
+ * Emit a pre-built JSON envelope string and exit.
+ * Used by commands (e.g. health) that build their own envelope.
+ */
+export function emitRaw(json: string, exitCode: number): never {
+	if (captureModeDepth > 0) throw new EnvelopeCapture(json, exitCode);
+	process.stdout.write(`${json}\n`);
+	process.exit(exitCode);
 }

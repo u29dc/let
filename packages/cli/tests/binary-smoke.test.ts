@@ -157,13 +157,26 @@ describe('Binary smoke tests', () => {
 		expect(existsSync(BINARY_PATH)).toBe(true);
 	});
 
+	// Single tools --json invocation covering all tool catalog assertions
 	test('tools --json from arbitrary cwd', () => {
 		const { stdout, exitCode } = runBinary(['tools', '--json']);
 		expect(exitCode).toBe(0);
 		const parsed = assertValidEnvelope(stdout, 'tools');
 		expect(parsed['ok']).toBe(true);
-		expect(Array.isArray(parsed['data']['tools'])).toBe(true);
-		expect(parsed['data']['tools'].length).toBeGreaterThan(0);
+		const toolNames: string[] = parsed['data']['tools'].map((t: { name: string }) => t.name);
+		expect(toolNames.length).toBeGreaterThan(0);
+
+		// Expected commands registered via defineToolCommand
+		const expected = ['config.show', 'config.validate', 'view.list', 'view.detail', 'fetch', 'score.explain', 'score.compute'];
+		for (const name of expected) {
+			expect(toolNames).toContain(name);
+		}
+
+		// Legacy names that should NOT appear
+		const legacy = ['help', 'output', 'output.json', 'output.notion', 'ops.enrich'];
+		for (const name of legacy) {
+			expect(toolNames).not.toContain(name);
+		}
 	});
 
 	test('health --json from arbitrary cwd', () => {
@@ -192,29 +205,5 @@ describe('Binary smoke tests', () => {
 		expect(exitCode).toBe(0);
 		const parsed = assertValidEnvelope(stdout, 'config.validate');
 		expect(parsed['ok']).toBe(true);
-	});
-
-	test('tools catalog includes expected commands', () => {
-		const { stdout } = runBinary(['tools', '--json']);
-		const parsed = JSON.parse(stdout);
-		const toolNames = parsed['data']['tools'].map((t: { name: string }) => t.name);
-
-		// Commands registered via defineToolCommand (tools/health use defineCommand, not in registry)
-		const expected = ['config.show', 'config.validate', 'view.list', 'view.detail', 'fetch', 'score.explain', 'score.compute'];
-		for (const name of expected) {
-			expect(toolNames).toContain(name);
-		}
-	});
-
-	test('no legacy command names in tools catalog', () => {
-		const { stdout } = runBinary(['tools', '--json']);
-		const parsed = JSON.parse(stdout);
-		const toolNames = parsed['data']['tools'].map((t: { name: string }) => t.name);
-
-		// Legacy names that should NOT appear
-		const legacy = ['help', 'output', 'output.json', 'output.notion', 'ops.enrich'];
-		for (const name of legacy) {
-			expect(toolNames).not.toContain(name);
-		}
 	});
 });

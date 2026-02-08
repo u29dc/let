@@ -8,7 +8,7 @@ import { loadListingsFile } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { queryListings } from '@let/core/pipeline/view';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 export const assessCandidatesCommand = defineToolCommand(
@@ -84,6 +84,7 @@ export const assessCandidatesCommand = defineToolCommand(
 					log.cli.info(`  ${c.portalId ?? c.id} | ${c.address} | score: ${c.score ?? '--'}`);
 				}
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('assess.candidates', 'DB_ERROR', `Failed to load listings: ${message}`, 'Check database path', start);

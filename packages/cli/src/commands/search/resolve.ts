@@ -7,7 +7,7 @@
 
 import { lookupLocation } from '@let/core/pipeline/fetch';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 export const searchResolveCommand = defineToolCommand(
@@ -67,6 +67,7 @@ export const searchResolveCommand = defineToolCommand(
 					log.cli.info(`  ${loc.displayName} → ${loc.locationIdentifier}`);
 				}
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('search.resolve', 'NETWORK_ERROR', `Location lookup failed: ${message}`, 'Check network connectivity', start);

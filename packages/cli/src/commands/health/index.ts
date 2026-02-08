@@ -10,7 +10,7 @@ import { loadListingsFile } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { log } from '@let/core/utils/logger';
 import { defineCommand } from 'citty';
-import { isJsonMode } from '../../envelope.js';
+import { emitRaw, isJsonMode } from '../../envelope.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -313,8 +313,7 @@ export const healthCommand = defineCommand({
 			};
 			const elapsed = Math.round(performance.now() - start);
 			const envelope = { ok: true, data, meta: { tool: 'health', elapsed } };
-			process.stdout.write(`${JSON.stringify(envelope)}\n`);
-			process.exit(status === 'blocked' ? 2 : 0);
+			emitRaw(JSON.stringify(envelope), status === 'blocked' ? 2 : 0);
 		}
 
 		printTextOutput(p, checks, status, summary);

@@ -2,19 +2,20 @@
  * LET-035: Parity gate test
  *
  * Demonstrates end-to-end loop using only new commands:
- *   tools → health → config show → search diff → view list →
- *   score explain → score compute → assess context → assess submit → view detail
+ *   tools -> health -> config show -> search diff -> view list ->
+ *   score explain -> score compute -> assess context -> assess submit -> view detail
  *
  * Network-dependent commands (search discover, fetch) are excluded.
  * Uses a seeded SQLite database in a temp directory.
+ *
+ * Uses in-process execution via harness for speed (~40ms vs ~650ms subprocess).
  */
 
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
-const CLI_ENTRY = join(import.meta.dirname, '..', 'src', 'index.ts');
+import { run } from './harness.js';
 
 // ---------------------------------------------------------------------------
 // Temp dir setup
@@ -200,26 +201,12 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 const ENV = {
-	...process.env,
 	LET_DATA_DIR: DATA_DIR,
 	LET_CONFIG_DIR: CONFIG_DIR,
 	LET_CACHE_DIR: CACHE_DIR,
 	LET_SOURCES_DIR: SOURCES_DIR,
 	LET_JSON: '1',
 };
-
-function run(args: string[]): { stdout: string; stderr: string; exitCode: number } {
-	const result = Bun.spawnSync(['bun', 'run', CLI_ENTRY, ...args], { env: ENV });
-	return {
-		stdout: result.stdout.toString().trim(),
-		stderr: result.stderr.toString().trim(),
-		exitCode: result.exitCode,
-	};
-}
-
-function parseJson(stdout: string): Record<string, unknown> {
-	return JSON.parse(stdout);
-}
 
 // ---------------------------------------------------------------------------
 // Parity gate chain
@@ -229,9 +216,9 @@ const LISTING_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const PORTAL_ID = '170448131';
 
 describe('parity gate: end-to-end with new commands', () => {
-	test('1. tools --json → returns tool catalog', () => {
-		const { stdout } = run(['tools', '--json']);
-		const parsed = parseJson(stdout);
+	test('1. tools --json -> returns tool catalog', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		expect(parsed['meta']).toHaveProperty('tool', 'tools');
 		const data = parsed['data'] as Record<string, unknown>;
@@ -239,9 +226,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect((data['tools'] as unknown[]).length).toBeGreaterThan(0);
 	});
 
-	test('2. health --json → returns health status', () => {
-		const { stdout } = run(['health', '--json']);
-		const parsed = parseJson(stdout);
+	test('2. health --json -> returns health status', async () => {
+		const { stdout } = await run(['health', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(data['status']).toMatch(/^(ready|degraded|blocked)$/);
@@ -249,9 +236,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(Array.isArray(data['checks'])).toBe(true);
 	});
 
-	test('3. config show --json → returns config', () => {
-		const { stdout } = run(['config', 'show', '--json']);
-		const parsed = parseJson(stdout);
+	test('3. config show --json -> returns config', async () => {
+		const { stdout } = await run(['config', 'show', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		const config = data['config'] as Record<string, unknown>;
@@ -260,18 +247,18 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(config).toHaveProperty('fetch');
 	});
 
-	test('4. config validate --json → config is valid', () => {
-		const { stdout, exitCode } = run(['config', 'validate', '--json']);
-		const parsed = parseJson(stdout);
+	test('4. config validate --json -> config is valid', async () => {
+		const { stdout, exitCode } = await run(['config', 'validate', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(data['valid']).toBe(true);
 		expect(exitCode).toBe(0);
 	});
 
-	test('5. search diff --json → classifies IDs as new/known', () => {
-		const { stdout } = run(['search', 'diff', `${PORTAL_ID},999999999`, '--json']);
-		const parsed = parseJson(stdout);
+	test('5. search diff --json -> classifies IDs as new/known', async () => {
+		const { stdout } = await run(['search', 'diff', `${PORTAL_ID},999999999`, '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(Array.isArray(data['new'])).toBe(true);
@@ -281,9 +268,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(data['new']).toContain('999999999');
 	});
 
-	test('6. view list --json → returns ranked listings', () => {
-		const { stdout } = run(['view', 'list', '--json']);
-		const parsed = parseJson(stdout);
+	test('6. view list --json -> returns ranked listings', async () => {
+		const { stdout } = await run(['view', 'list', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(data['total']).toBe(1);
@@ -294,9 +281,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(listings[0]).toHaveProperty('score');
 	});
 
-	test('7. view detail --json → returns full listing', () => {
-		const { stdout } = run(['view', 'detail', LISTING_ID, '--json']);
-		const parsed = parseJson(stdout);
+	test('7. view detail --json -> returns full listing', async () => {
+		const { stdout } = await run(['view', 'detail', LISTING_ID, '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		const listing = data['listing'] as Record<string, unknown>;
@@ -305,9 +292,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(listing['price']).toBe(1000);
 	});
 
-	test('8. score explain --json → returns score breakdown', () => {
-		const { stdout } = run(['score', 'explain', LISTING_ID, '--json']);
-		const parsed = parseJson(stdout);
+	test('8. score explain --json -> returns score breakdown', async () => {
+		const { stdout } = await run(['score', 'explain', LISTING_ID, '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(data).toHaveProperty('overall');
@@ -315,9 +302,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(data).toHaveProperty('penalties');
 	});
 
-	test('9. score compute --json → rescores all listings', () => {
-		const { stdout } = run(['score', 'compute', '--json']);
-		const parsed = parseJson(stdout);
+	test('9. score compute --json -> rescores all listings', async () => {
+		const { stdout } = await run(['score', 'compute', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(data['total']).toBe(1);
@@ -325,9 +312,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(typeof data['avgScore']).toBe('number');
 	});
 
-	test('10. assess candidates --json → returns unassessed listings', () => {
-		const { stdout } = run(['assess', 'candidates', '--json']);
-		const parsed = parseJson(stdout);
+	test('10. assess candidates --json -> returns unassessed listings', async () => {
+		const { stdout } = await run(['assess', 'candidates', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(Array.isArray(data['candidates'])).toBe(true);
@@ -336,9 +323,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(candidates.length).toBe(1);
 	});
 
-	test('11. assess context --json → returns assessment bundle', () => {
-		const { stdout } = run(['assess', 'context', LISTING_ID, '--json']);
-		const parsed = parseJson(stdout);
+	test('11. assess context --json -> returns assessment bundle', async () => {
+		const { stdout } = await run(['assess', 'context', LISTING_ID, '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(data).toHaveProperty('listing');
@@ -346,7 +333,7 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(data).toHaveProperty('assessmentSchema');
 	});
 
-	test('12. assess submit --json → saves assessment', () => {
+	test('12. assess submit --json -> saves assessment', async () => {
 		const assessment = JSON.stringify({
 			maintenance: 'good',
 			lightAndSpace: 'Bright rooms with south-facing windows',
@@ -356,8 +343,8 @@ describe('parity gate: end-to-end with new commands', () => {
 			reasoning: 'Good value 3-bed terrace with garden in TestCity',
 			scoreAdjustment: 3,
 		});
-		const { stdout, exitCode } = run(['assess', 'submit', LISTING_ID, assessment, '--json']);
-		const parsed = parseJson(stdout);
+		const { stdout, exitCode } = await run(['assess', 'submit', LISTING_ID, assessment, '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		expect(data['id']).toBe(LISTING_ID);
@@ -366,9 +353,9 @@ describe('parity gate: end-to-end with new commands', () => {
 		expect(exitCode).toBe(0);
 	});
 
-	test('13. view list --json (post-assess) → shows assessed score', () => {
-		const { stdout } = run(['view', 'list', '--json']);
-		const parsed = parseJson(stdout);
+	test('13. view list --json (post-assess) -> shows assessed score', async () => {
+		const { stdout } = await run(['view', 'list', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
 		const listings = data['listings'] as Record<string, unknown>[];

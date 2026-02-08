@@ -11,7 +11,7 @@ import { paths } from '@let/core/paths';
 import { recalcAssessedScores, scoreListingsWithConfig } from '@let/core/pipeline/score';
 import type { ListingsFile } from '@let/core/schema';
 import { log, setQuietMode } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 export const scoreComputeCommand = defineToolCommand(
@@ -84,6 +84,7 @@ export const scoreComputeCommand = defineToolCommand(
 
 				log.cli.info(`Rescored ${stats.scored} listings, avg score: ${stats.avgScore}`);
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('score.compute', 'SCORE_ERROR', `Scoring failed: ${message}`, 'Check config and database', start);

@@ -11,7 +11,7 @@ import { createNotionPage, updateNotionPage, validateDatabase } from '@let/core/
 import { queryListings } from '@let/core/pipeline/view';
 import type { Listing, ListingsFile } from '@let/core/schema';
 import { log, setQuietMode } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 type NotionConfig = { apiKey: string; databaseId: string };
@@ -164,6 +164,7 @@ export const exportNotionCommand = defineToolCommand(
 				if (jsonMode) ok('export.notion', { ...stats, total: filtered.length }, start);
 				log.cli.success('Notion export complete', stats);
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) fail('export.notion', 'EXPORT_ERROR', `Export failed: ${message}`, 'Check credentials and network', start);
 				log.cli.error(`Export failed: ${message}`);

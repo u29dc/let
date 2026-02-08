@@ -9,7 +9,7 @@ import { loadListingsFile } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { formatTableRow, queryListings, type SortField } from '@let/core/pipeline/view';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 const VALID_SORT_FIELDS: SortField[] = ['score', 'price', 'bedrooms', 'date'];
@@ -107,6 +107,7 @@ export const viewListCommand = defineToolCommand(
 				const { renderTable } = await import('./index.js');
 				renderTable(filtered);
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('view.list', 'DB_ERROR', `Failed to load listings: ${message}`, 'Check database path', start);

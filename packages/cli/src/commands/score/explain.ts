@@ -8,7 +8,7 @@ import { loadListingsFile } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { findListingById } from '@let/core/pipeline/view';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 function buildBreakdown(listing: { id: string; scores: NonNullable<import('@let/core/schema').Listing['scores']>; assessedScore: number | null }) {
@@ -119,6 +119,7 @@ export const scoreExplainCommand = defineToolCommand(
 				log.cli.info(`    Pets: ${breakdown.penalties.pets}`);
 				log.cli.info(`    Combined: ${breakdown.penalties.combined}`);
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('score.explain', 'DB_ERROR', `Failed to load listings: ${message}`, 'Check database path', start);

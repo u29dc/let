@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { ConfigSchema, resetConfigCache } from '@let/core/config';
 import { paths } from '@let/core/paths';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { emitRaw, fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 export const configValidateCommand = defineToolCommand(
@@ -73,8 +73,7 @@ export const configValidateCommand = defineToolCommand(
 					const data = { valid: false, path: configPath, errors };
 					const elapsed = Math.round(performance.now() - start);
 					const envelope = { ok: true, data, meta: { tool: 'config.validate', elapsed } };
-					process.stdout.write(`${JSON.stringify(envelope)}\n`);
-					process.exit(1);
+					emitRaw(JSON.stringify(envelope), 1);
 				}
 
 				log.cli.error(`Config invalid: ${configPath}`);
@@ -83,6 +82,7 @@ export const configValidateCommand = defineToolCommand(
 				}
 				process.exit(1);
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('config.validate', 'INVALID_CONFIG', `Failed to parse config: ${message}`, 'Check TOML syntax', start);

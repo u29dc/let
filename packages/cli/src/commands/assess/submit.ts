@@ -11,7 +11,7 @@ import { calculateAssessedScore, normalizeAssessment } from '@let/core/pipeline/
 import { findListingById } from '@let/core/pipeline/view';
 import { AssessmentSchema } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { emitRaw, fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 function parseAssessmentJson(raw: string) {
@@ -47,8 +47,7 @@ function handleParseError(jsonMode: boolean, parseError: string, start: number):
 function handleValidationErrors(jsonMode: boolean, errors: Array<{ path: string; message: string }>, start: number): never {
 	if (jsonMode) {
 		const envelope = { ok: true, data: { valid: false, errors }, meta: { tool: 'assess.submit', elapsed: Math.round(performance.now() - start) } };
-		process.stdout.write(`${JSON.stringify(envelope)}\n`);
-		process.exit(1);
+		emitRaw(JSON.stringify(envelope), 1);
 	}
 	log.cli.error('Assessment validation failed:');
 	for (const err of errors) {
@@ -138,6 +137,7 @@ export const assessSubmitCommand = defineToolCommand(
 
 				log.cli.info(`Assessment saved for ${args.id}: assessed=${listing.assessedScore} (algo=${algoScore} + adj=${normalized.scoreAdjustment})`);
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('assess.submit', 'SUBMIT_ERROR', `Assessment failed: ${message}`, 'Check input and database', start);

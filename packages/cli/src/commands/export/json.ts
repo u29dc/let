@@ -9,7 +9,7 @@ import { writeFileSync } from 'node:fs';
 import { loadListingsFile } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 export const exportJsonCommand = defineToolCommand(
@@ -58,6 +58,7 @@ export const exportJsonCommand = defineToolCommand(
 
 				log.cli.success('JSON export saved', { path: outputPath, listings: data.listings.length });
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('export.json', 'EXPORT_ERROR', `Export failed: ${message}`, 'Check database path', start);

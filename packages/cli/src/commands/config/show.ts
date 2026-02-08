@@ -9,7 +9,7 @@ import { loadConfig, resetConfigCache } from '@let/core/config';
 import type { DerivedPaths } from '@let/core/paths';
 import { paths } from '@let/core/paths';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 const VALID_SECTIONS = ['search', 'fetch', 'scoring'] as const;
@@ -89,6 +89,7 @@ export const configShowCommand = defineToolCommand(
 				log.cli.info(`Config: ${configPath}`);
 				log.cli.info(JSON.stringify(data.config, null, 2));
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				const isNotFound = message.includes('No such file') || message.includes('ENOENT');
 

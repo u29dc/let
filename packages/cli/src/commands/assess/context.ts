@@ -11,7 +11,7 @@ import { loadListingsFile } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { findListingById } from '@let/core/pipeline/view';
 import { log } from '@let/core/utils/logger';
-import { fail, isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
 function resolveMediaPaths(listing: import('@let/core/schema').Listing, cacheDir: string) {
@@ -143,6 +143,7 @@ export const assessContextCommand = defineToolCommand(
 				log.cli.info(`  Notes: ${listing.notes.length}`);
 				log.cli.info(`  Description: ${listing.description.slice(0, 100)}...`);
 			} catch (error) {
+				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);
 				if (jsonMode) {
 					fail('assess.context', 'DB_ERROR', `Failed to load listings: ${message}`, 'Check database path', start);

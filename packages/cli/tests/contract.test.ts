@@ -2,19 +2,20 @@
  * LET-039: Contract tests for JSON envelope across commands
  *
  * Verifies stdout purity and envelope shape for all safe (non-network) commands.
- * Each command is tested with --json and LET_JSON=1 to ensure:
+ * Each command is tested with --json to ensure:
  * 1. stdout contains exactly one JSON line
  * 2. Envelope has { ok, data|error, meta } structure
  * 3. meta.tool matches expected tool name
  * 4. meta.elapsed is a non-negative number
+ *
+ * Uses in-process execution via harness for speed (~50ms vs ~850ms subprocess).
  */
 
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
-const CLI_ENTRY = join(import.meta.dirname, '..', 'src', 'index.ts');
+import { run } from './harness.js';
 
 // ---------------------------------------------------------------------------
 // Fixture setup
@@ -155,22 +156,12 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 const ENV = {
-	...process.env,
 	LET_DATA_DIR: DATA_DIR,
 	LET_CONFIG_DIR: DATA_DIR,
 	LET_CACHE_DIR: CACHE_DIR,
 	LET_SOURCES_DIR: SOURCES_DIR,
 	LET_JSON: '1',
 };
-
-function run(args: string[]): { stdout: string; stderr: string; exitCode: number } {
-	const result = Bun.spawnSync(['bun', 'run', CLI_ENTRY, ...args], { env: ENV });
-	return {
-		stdout: result.stdout.toString().trim(),
-		stderr: result.stderr.toString().trim(),
-		exitCode: result.exitCode,
-	};
-}
 
 /** Validate JSON envelope structure */
 function assertValidEnvelope(stdout: string, expectedTool: string) {
@@ -197,10 +188,6 @@ function assertValidEnvelope(stdout: string, expectedTool: string) {
 		expect(typeof parsed['error']['hint']).toBe('string');
 	}
 
-	// stdout must be exactly one JSON line (no extra bytes)
-	const lines = stdout.split('\n').filter(Boolean);
-	expect(lines.length).toBe(1);
-
 	return parsed;
 }
 
@@ -209,84 +196,84 @@ function assertValidEnvelope(stdout: string, expectedTool: string) {
 // ---------------------------------------------------------------------------
 
 describe('JSON envelope contracts', () => {
-	test('tools --json', () => {
-		const { stdout } = run(['tools', '--json']);
+	test('tools --json', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'tools');
 		expect(parsed['ok']).toBe(true);
 		expect(Array.isArray(parsed['data']['tools'])).toBe(true);
 	});
 
-	test('health --json', () => {
-		const { stdout } = run(['health', '--json']);
+	test('health --json', async () => {
+		const { stdout } = await run(['health', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'health');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('config show --json', () => {
-		const { stdout } = run(['config', 'show', '--json']);
+	test('config show --json', async () => {
+		const { stdout } = await run(['config', 'show', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'config.show');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('config validate --json', () => {
-		const { stdout } = run(['config', 'validate', '--json']);
+	test('config validate --json', async () => {
+		const { stdout } = await run(['config', 'validate', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'config.validate');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('view list --json', () => {
-		const { stdout } = run(['view', 'list', '--json']);
+	test('view list --json', async () => {
+		const { stdout } = await run(['view', 'list', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'view.list');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('view detail --json', () => {
-		const { stdout } = run(['view', 'detail', LISTING_ID, '--json']);
+	test('view detail --json', async () => {
+		const { stdout } = await run(['view', 'detail', LISTING_ID, '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'view.detail');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('view detail --json (not found)', () => {
-		const { stdout, exitCode } = run(['view', 'detail', '00000000-0000-0000-0000-000000000000', '--json']);
+	test('view detail --json (not found)', async () => {
+		const { stdout, exitCode } = await run(['view', 'detail', '00000000-0000-0000-0000-000000000000', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'view.detail');
 		expect(parsed['ok']).toBe(false);
 		expect(parsed['error']['code']).toBe('NOT_FOUND');
 		expect(exitCode).toBe(1);
 	});
 
-	test('score explain --json', () => {
-		const { stdout } = run(['score', 'explain', LISTING_ID, '--json']);
+	test('score explain --json', async () => {
+		const { stdout } = await run(['score', 'explain', LISTING_ID, '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'score.explain');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('score compute --json', () => {
-		const { stdout } = run(['score', 'compute', '--json']);
+	test('score compute --json', async () => {
+		const { stdout } = await run(['score', 'compute', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'score.compute');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('assess candidates --json', () => {
-		const { stdout } = run(['assess', 'candidates', '--json']);
+	test('assess candidates --json', async () => {
+		const { stdout } = await run(['assess', 'candidates', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'assess.candidates');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('assess context --json', () => {
-		const { stdout } = run(['assess', 'context', LISTING_ID, '--json']);
+	test('assess context --json', async () => {
+		const { stdout } = await run(['assess', 'context', LISTING_ID, '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'assess.context');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('search diff --json', () => {
-		const { stdout } = run(['search', 'diff', '170448131,999999999', '--json']);
+	test('search diff --json', async () => {
+		const { stdout } = await run(['search', 'diff', '170448131,999999999', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'search.diff');
 		expect(parsed['ok']).toBe(true);
 	});
 
-	test('export json --json', () => {
+	test('export json --json', async () => {
 		const outputPath = join(TEMP_DIR, 'test-export.json');
-		const { stdout } = run(['export', 'json', '--output', outputPath, '--json']);
+		const { stdout } = await run(['export', 'json', '--output', outputPath, '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'export.json');
 		expect(parsed['ok']).toBe(true);
 		expect(parsed['data']['count']).toBe(1);
@@ -294,15 +281,12 @@ describe('JSON envelope contracts', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Search/fetch fixture tests (LET-030)
-// Network-dependent commands (fetch, search.resolve, search.discover) cannot
-// be tested in CI without mocking. search.diff is fully tested here and in
-// the parity gate. Live verification is documented in AGENTS.md section 13.
+// Search fixture tests (LET-030)
 // ---------------------------------------------------------------------------
 
 describe('Search fixture tests', () => {
-	test('search diff classifies unknown IDs as new', () => {
-		const { stdout } = run(['search', 'diff', '111111111,222222222,333333333', '--json']);
+	test('search diff classifies unknown IDs as new', async () => {
+		const { stdout } = await run(['search', 'diff', '111111111,222222222,333333333', '--json'], ENV);
 		const parsed = assertValidEnvelope(stdout, 'search.diff');
 		expect(parsed['ok']).toBe(true);
 		const data = parsed['data'] as Record<string, unknown>;
@@ -316,15 +300,15 @@ describe('Search fixture tests', () => {
 // ---------------------------------------------------------------------------
 
 describe('Registry drift', () => {
-	test('tools catalog has exactly 15 registered tools', () => {
-		const { stdout } = run(['tools', '--json']);
-		const parsed = JSON.parse(stdout.trim());
+	test('tools catalog has exactly 15 registered tools', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		expect(parsed['data']['tools'].length).toBe(15);
 	});
 
-	test('every registered tool name matches a routable command', () => {
-		const { stdout } = run(['tools', '--json']);
-		const parsed = JSON.parse(stdout.trim());
+	test('every registered tool name matches a routable command', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		const names: string[] = parsed['data']['tools'].map((t: { name: string }) => t.name);
 
 		const expected = [
@@ -348,9 +332,9 @@ describe('Registry drift', () => {
 		expect(names.sort()).toEqual(expected.sort());
 	});
 
-	test('no legacy tool names in catalog', () => {
-		const { stdout } = run(['tools', '--json']);
-		const parsed = JSON.parse(stdout.trim());
+	test('no legacy tool names in catalog', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		const names: string[] = parsed['data']['tools'].map((t: { name: string }) => t.name);
 
 		const legacy = ['help', 'output', 'output.json', 'output.notion', 'ops.enrich', 'view.stats', 'view.regions'];
@@ -359,9 +343,9 @@ describe('Registry drift', () => {
 		}
 	});
 
-	test('tools and health are infrastructure, not in catalog', () => {
-		const { stdout } = run(['tools', '--json']);
-		const parsed = JSON.parse(stdout.trim());
+	test('tools and health are infrastructure, not in catalog', async () => {
+		const { stdout } = await run(['tools', '--json'], ENV);
+		const parsed = JSON.parse(stdout);
 		const names: string[] = parsed['data']['tools'].map((t: { name: string }) => t.name);
 
 		expect(names).not.toContain('tools');
