@@ -28,8 +28,16 @@ function parseCommaSeparated(value: string): string[] {
 	return value === 'none' ? [] : value.split(',').map((t) => t.trim());
 }
 
-function applyFilterOverrides(filters: SearchFilters, args: Record<string, unknown>): SearchFilters {
+function applyFilterOverrides(filters: SearchFilters, args: Record<string, unknown>, isAdHoc = false): SearchFilters {
 	let result = filters;
+
+	// Clear config defaults for ad-hoc searches unless explicitly overridden
+	if (isAdHoc) {
+		if (typeof args['must-have'] !== 'string') result = { ...result, mustHave: [] };
+		if (typeof args['dont-show'] !== 'string') result = { ...result, dontShow: [] };
+		if (typeof args['property-types'] !== 'string') result = { ...result, propertyTypes: [] };
+	}
+
 	const propertyTypes = args['property-types'];
 	const mustHave = args['must-have'];
 	const dontShow = args['dont-show'];
@@ -63,6 +71,7 @@ function buildSearchParams(locationId: string, filters: SearchFilters, maxPerLoc
 
 async function searchLocations(filters: SearchFilters, locations: SearchConfig['locations'], maxPerLocation: number) {
 	const allIds: string[] = [];
+	const idsByLocation: Record<string, string[]> = {};
 	const locationResults: Array<{ name: string; id: string; count: number }> = [];
 
 	for (const loc of locations) {
@@ -72,15 +81,17 @@ async function searchLocations(filters: SearchFilters, locations: SearchConfig['
 
 		if (result.success) {
 			allIds.push(...result.listingIds);
+			idsByLocation[loc.name] = result.listingIds;
 			locationResults.push({ name: loc.name, id: loc.id, count: result.listingIds.length });
 			log.cli.info(`  Found ${result.listingIds.length} of ${result.totalResults} total`);
 		} else {
 			log.cli.warn(`  Search failed for ${loc.name}: ${result.error}`);
+			idsByLocation[loc.name] = [];
 			locationResults.push({ name: loc.name, id: loc.id, count: 0 });
 		}
 	}
 
-	return { ids: dedupeIds(allIds), locationResults };
+	return { ids: dedupeIds(allIds), idsByLocation, locationResults };
 }
 
 export const searchDiscoverCommand = defineToolCommand(
@@ -88,7 +99,7 @@ export const searchDiscoverCommand = defineToolCommand(
 		name: 'search.discover',
 		command: 'let search discover',
 		category: 'search',
-		outputFields: ['ids', 'total', 'locations'],
+		outputFields: ['ids', 'idsByLocation', 'total', 'locations'],
 		idempotent: true,
 		rateLimit: 'config fetch.delayMs per request',
 		example: 'let search discover --location REGION^904 --property-types flat --must-have none --json',
@@ -148,6 +159,7 @@ export const searchDiscoverCommand = defineToolCommand(
 				setFetchMaxRetries(config.fetch.maxRetries);
 
 				let locations = config.search.locations;
+				const isAdHoc = !!args.location;
 				if (args.location) {
 					locations = [{ id: args.location, name: args['location-name'] || args.location }];
 				} else if (args.region) {
@@ -162,13 +174,13 @@ export const searchDiscoverCommand = defineToolCommand(
 					}
 				}
 
-				const filters = applyFilterOverrides(config.search.filters, args);
+				const filters = applyFilterOverrides(config.search.filters, args, isAdHoc);
 
 				const maxPerLocation = args.limit ? Number.parseInt(args.limit, 10) : config.fetch.maxListings;
-				const { ids, locationResults } = await searchLocations(filters, locations, maxPerLocation);
+				const { ids, idsByLocation, locationResults } = await searchLocations(filters, locations, maxPerLocation);
 
 				if (jsonMode) {
-					ok('search.discover', { ids, total: ids.length, locations: locationResults }, start);
+					ok('search.discover', { ids, idsByLocation, total: ids.length, locations: locationResults }, start);
 				}
 
 				log.cli.info(`Discovered ${ids.length} unique listing IDs across ${locations.length} location(s)`);
