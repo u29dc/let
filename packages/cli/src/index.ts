@@ -17,10 +17,12 @@
 import { defineCommand, runMain } from 'citty';
 import { assessCommand } from './commands/assess.js';
 import { fetchCommand } from './commands/fetch.js';
+import { healthCommand } from './commands/health/index.js';
 import { helpCommand } from './commands/help.js';
 import { opsCommand } from './commands/ops/index.js';
 import { outputCommand } from './commands/output/index.js';
 import { setupSignalHandlers } from './commands/shared-read.js';
+import { toolsCommand } from './commands/tools/index.js';
 import { viewCommand } from './commands/view/index.js';
 
 // Setup graceful shutdown (minimal import from shared-read)
@@ -42,6 +44,8 @@ const main = defineCommand({
 		output: outputCommand,
 		ops: opsCommand,
 		help: helpCommand,
+		tools: toolsCommand,
+		health: healthCommand,
 	},
 });
 
