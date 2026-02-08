@@ -7,18 +7,7 @@
  * let view regions       - Compare regions by aggregated metrics
  */
 
-import {
-	computeRegionStats,
-	computeStats,
-	findListingById,
-	formatTableRow,
-	queryListings,
-	type RegionSortField,
-	type RegionStats,
-	type SortField,
-	sortRegionStats,
-	truncate,
-} from '@let/core/pipeline/view';
+import { computeRegionStats, computeStats, formatTableRow, type RegionSortField, type RegionStats, sortRegionStats, truncate } from '@let/core/pipeline/view';
 import type { Listing } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
 import { defineCommand } from 'citty';
@@ -43,18 +32,6 @@ import { loadExistingListings } from '../shared-read.js';
 
 /** Standard key width for all detail view sections */
 const KEY_WIDTH = 14;
-
-/** Valid sort fields */
-const VALID_SORT_FIELDS: SortField[] = ['score', 'price', 'bedrooms', 'date'];
-
-/** Parse and validate sort field */
-function parseSortField(value: string): SortField {
-	if (VALID_SORT_FIELDS.includes(value as SortField)) {
-		return value as SortField;
-	}
-	log.cli.warn(`Invalid sort field "${value}", using "score"`, { valid: VALID_SORT_FIELDS });
-	return 'score';
-}
 
 /** Format percentile for factors */
 function formatPercentile(value: number | null | undefined): string {
@@ -384,119 +361,6 @@ function renderStats(listings: Listing[]): void {
 }
 
 /**
- * let view list - Display listings in table format
- */
-const viewList = defineCommand({
-	meta: {
-		name: 'list',
-		description: 'Display listings in table format',
-	},
-	args: {
-		top: {
-			type: 'string',
-			description: 'Limit to top N by score',
-			default: '20',
-		},
-		'min-score': {
-			type: 'string',
-			description: 'Minimum score threshold (0-100)',
-		},
-		sort: {
-			type: 'string',
-			description: 'Sort by: score, price, bedrooms, date',
-			default: 'score',
-		},
-		asc: {
-			type: 'boolean',
-			description: 'Ascending order (default: descending)',
-			default: false,
-		},
-		region: {
-			type: 'string',
-			description: 'Filter by region name',
-		},
-		type: {
-			type: 'string',
-			description: 'Filter by property type (comma-separated: flat,terraced,semi)',
-		},
-	},
-	async run({ args }) {
-		const { listings } = loadExistingListings();
-
-		if (listings.length === 0) {
-			log.cli.warn('No listings found. Run "let fetch" first.');
-			return;
-		}
-
-		const top = Number.parseInt(args.top, 10);
-		const minScore = args['min-score'] ? Number.parseInt(args['min-score'], 10) : undefined;
-		const sortField = parseSortField(args.sort);
-		const desc = !args.asc;
-
-		const filtered = queryListings(listings, { top: Number.isNaN(top) ? 20 : top, minScore, region: args.region, type: args.type }, sortField, desc);
-
-		if (filtered.length === 0) {
-			log.cli.warn('No listings match your filters');
-			return;
-		}
-
-		log.cli.info(`Showing ${filtered.length} of ${listings.length} listings`, {
-			sort: sortField,
-			order: desc ? 'desc' : 'asc',
-			...(minScore !== undefined && { minScore }),
-			...(args.region && { region: args.region }),
-			...(args.type && { type: args.type }),
-		});
-
-		renderTable(filtered);
-	},
-});
-
-/**
- * let view detail <id> - View full listing details
- */
-const viewDetail = defineCommand({
-	meta: {
-		name: 'detail',
-		description: 'View full details for a specific listing',
-	},
-	args: {
-		id: {
-			type: 'positional',
-			description: 'Listing ID',
-			required: true,
-		},
-		open: {
-			type: 'boolean',
-			description: 'Open Rightmove URL in browser',
-			default: false,
-		},
-	},
-	async run({ args }) {
-		const { listings } = loadExistingListings();
-
-		if (listings.length === 0) {
-			log.cli.warn('No listings found. Run "let fetch" first.');
-			return;
-		}
-
-		const listing = findListingById(listings, args.id);
-
-		if (!listing) {
-			log.cli.error('Listing not found', { id: args.id });
-			process.exit(1);
-		}
-
-		renderDetail(listing);
-
-		if (args.open) {
-			log.cli.info('Opening in browser', { url: listing.url });
-			await Bun.$`open ${listing.url}`.quiet();
-		}
-	},
-});
-
-/**
  * let view stats - View aggregate statistics
  */
 const viewStats = defineCommand({
@@ -616,15 +480,21 @@ const viewRegions = defineCommand({
 
 /**
  * Main view command with subcommands
+ *
+ * list and detail use new path-resolved commands (defineToolCommand);
+ * stats and regions remain legacy for now.
  */
+import { viewDetailCommand } from './detail.js';
+import { viewListCommand } from './list.js';
+
 export const viewCommand = defineCommand({
 	meta: {
 		name: 'view',
 		description: 'Display listings and analytics',
 	},
 	subCommands: {
-		list: viewList,
-		detail: viewDetail,
+		list: viewListCommand,
+		detail: viewDetailCommand,
 		stats: viewStats,
 		regions: viewRegions,
 	},

@@ -10,7 +10,7 @@ import { loadListingsFile, saveListingsFile as saveToDb } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { recalcAssessedScores, scoreListingsWithConfig } from '@let/core/pipeline/score';
 import type { ListingsFile } from '@let/core/schema';
-import { log } from '@let/core/utils/logger';
+import { log, setQuietMode } from '@let/core/utils/logger';
 import { fail, isJsonMode, ok } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
 
@@ -39,6 +39,7 @@ export const scoreComputeCommand = defineToolCommand(
 		async run() {
 			const start = performance.now();
 			const jsonMode = isJsonMode();
+			if (jsonMode) setQuietMode(true);
 			const p = paths();
 			const dbPath = p.derived.database;
 
