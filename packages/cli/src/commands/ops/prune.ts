@@ -5,9 +5,9 @@
 import * as readline from 'node:readline/promises';
 import type { Listing, ListingsFile } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
-import { defineCommand } from 'citty';
-import { isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { createTable, formatScoreWithSignal, printKeyValues, subheader } from '../../output/index.js';
+import { defineToolCommand } from '../../tool.js';
 import { loadExistingListings } from '../shared-read.js';
 import { saveListingsFile } from '../shared-write.js';
 
@@ -91,7 +91,7 @@ type PruneArgs = {
 };
 
 /** Prune listings by region pattern match */
-async function pruneByRegion(existing: ExistingListings, region: string, args: PruneArgs): Promise<void> {
+async function pruneByRegion(existing: ExistingListings, region: string, args: PruneArgs, jsonMode: boolean, start: number): Promise<void> {
 	const regionPatterns = region
 		.split(',')
 		.map((r) => r.trim().toLowerCase())
@@ -110,18 +110,20 @@ async function pruneByRegion(existing: ExistingListings, region: string, args: P
 	log.cli.info('Prune by region', { patterns: regionPatterns, removing: toRemove.length, keeping: toKeep.length });
 
 	if (toRemove.length === 0) {
+		if (jsonMode) ok('ops.prune', { removed: 0, remaining: existing.listings.length, mode: 'region', dryRun: false }, start);
 		log.cli.success('No listings found in specified regions');
 		return;
 	}
 
-	displayRemovalPreview(toRemove);
+	if (!jsonMode) displayRemovalPreview(toRemove);
 
 	if (args['dry-run']) {
+		if (jsonMode) ok('ops.prune', { removed: toRemove.length, remaining: toKeep.length, mode: 'region', dryRun: true }, start);
 		log.cli.info('Dry run - no changes made');
 		return;
 	}
 
-	if (!args.force) {
+	if (!args.force && !jsonMode) {
 		const confirmed = await promptConfirm(`Remove ${toRemove.length} listings from ${regionPatterns.join(', ')}? (y/N) `);
 		if (!confirmed) {
 			log.cli.info('Aborted');
@@ -143,6 +145,7 @@ async function pruneByRegion(existing: ExistingListings, region: string, args: P
 		listings: toKeep,
 	};
 	await saveListingsFile(output);
+	if (jsonMode) ok('ops.prune', { removed: toRemove.length, remaining: toKeep.length, mode: 'region', dryRun: false }, start);
 	log.cli.success('Pruned by region', { removed: toRemove.length, remaining: toKeep.length });
 }
 
@@ -152,7 +155,7 @@ async function pruneInactive(existing: ExistingListings, args: PruneArgs, jsonMo
 	const toKeep = existing.listings.filter((l) => l.status !== 'inactive');
 
 	if (toRemove.length === 0) {
-		if (jsonMode) ok('ops.prune', { removed: 0, remaining: existing.listings.length, mode: 'inactive' }, start);
+		if (jsonMode) ok('ops.prune', { removed: 0, remaining: existing.listings.length, mode: 'inactive', dryRun: args['dry-run'] }, start);
 		log.cli.success('No inactive listings to prune');
 		return;
 	}
@@ -174,48 +177,51 @@ async function pruneInactive(existing: ExistingListings, args: PruneArgs, jsonMo
 	log.cli.success('Pruned inactive', { removed: toRemove.length, remaining: toKeep.length });
 }
 
-/** Prune listings by score threshold */
-async function pruneByScore(existing: ExistingListings, args: PruneArgs): Promise<void> {
-	let cutoff: number;
-	let mode: string;
-
+/** Parse score cutoff from args, returning cutoff value and mode string */
+function parseScoreCutoff(existing: ExistingListings, args: PruneArgs, jsonMode: boolean, start: number): { cutoff: number; mode: string } {
 	if (args.bottom) {
 		const pct = Number.parseInt(args.bottom, 10);
 		if (Number.isNaN(pct) || pct < 1 || pct > 100) {
+			if (jsonMode) fail('ops.prune', 'VALIDATION_ERROR', 'Invalid --bottom value', 'Provide 1-100', start);
 			log.cli.error('Invalid --bottom value', { value: args.bottom, expected: '1-100' });
 			process.exit(1);
 		}
 		const cutoffIdx = Math.floor(existing.listings.length * (pct / 100));
 		const cutoffListing = quickselect([...existing.listings], cutoffIdx, (a, b) => (a.scores?._overall ?? 0) - (b.scores?._overall ?? 0));
-		cutoff = cutoffListing?.scores?._overall ?? 0;
-		mode = `bottom ${pct}%`;
-	} else {
-		cutoff = Number.parseInt(args['min-score'], 10);
-		if (Number.isNaN(cutoff) || cutoff < 0 || cutoff > 100) {
-			log.cli.error('Invalid --min-score value', { value: args['min-score'], expected: '0-100' });
-			process.exit(1);
-		}
-		mode = `score < ${cutoff}`;
+		return { cutoff: cutoffListing?.scores?._overall ?? 0, mode: `bottom ${pct}%` };
 	}
+	const cutoff = Number.parseInt(args['min-score'], 10);
+	if (Number.isNaN(cutoff) || cutoff < 0 || cutoff > 100) {
+		if (jsonMode) fail('ops.prune', 'VALIDATION_ERROR', 'Invalid --min-score value', 'Provide 0-100', start);
+		log.cli.error('Invalid --min-score value', { value: args['min-score'], expected: '0-100' });
+		process.exit(1);
+	}
+	return { cutoff, mode: `score < ${cutoff}` };
+}
 
+/** Prune listings by score threshold */
+async function pruneByScore(existing: ExistingListings, args: PruneArgs, jsonMode: boolean, start: number): Promise<void> {
+	const { cutoff, mode } = parseScoreCutoff(existing, args, jsonMode, start);
 	const toRemove = existing.listings.filter((l) => (l.scores?._overall ?? 0) < cutoff);
 	const toKeep = existing.listings.filter((l) => (l.scores?._overall ?? 0) >= cutoff);
 
 	log.cli.info('Prune preview', { mode, removing: toRemove.length, keeping: toKeep.length });
 
 	if (toRemove.length === 0) {
+		if (jsonMode) ok('ops.prune', { removed: 0, remaining: existing.listings.length, mode, dryRun: false }, start);
 		log.cli.success('Nothing to prune');
 		return;
 	}
 
-	displayRemovalPreview(toRemove);
+	if (!jsonMode) displayRemovalPreview(toRemove);
 
 	if (args['dry-run']) {
+		if (jsonMode) ok('ops.prune', { removed: toRemove.length, remaining: toKeep.length, mode, dryRun: true }, start);
 		log.cli.info('Dry run - no changes made');
 		return;
 	}
 
-	if (!args.force) {
+	if (!args.force && !jsonMode) {
 		const confirmed = await promptConfirm(`Remove ${toRemove.length} listings? (y/N) `);
 		if (!confirmed) {
 			log.cli.info('Aborted');
@@ -231,71 +237,96 @@ async function pruneByScore(existing: ExistingListings, args: PruneArgs): Promis
 		listings: toKeep,
 	};
 	await saveListingsFile(output);
+	if (jsonMode) ok('ops.prune', { removed: toRemove.length, remaining: toKeep.length, mode, dryRun: false }, start);
 	log.cli.success('Pruned', { removed: toRemove.length, remaining: toKeep.length });
 }
 
 /**
  * let ops prune - Remove low-scoring listings from data file
  */
-export const pruneCommand = defineCommand({
-	meta: {
-		name: 'prune',
-		description: 'Remove low-scoring listings from data file',
+export const pruneCommand = defineToolCommand(
+	{
+		name: 'ops.prune',
+		command: 'let ops prune',
+		category: 'ops',
+		outputSchema: {
+			removed: { type: 'number', description: 'Listings removed' },
+			remaining: { type: 'number', description: 'Listings remaining' },
+			mode: { type: 'string', description: 'Prune mode: inactive, region, score < N, bottom N%, or none' },
+			dryRun: { type: 'boolean', description: 'Whether changes were actually saved' },
+		},
+		idempotent: false,
+		rateLimit: null,
+		example: 'let ops prune --inactive --json',
 	},
-	args: {
-		'min-score': {
-			type: 'string',
-			description: 'Remove listings below this score',
-			default: '50',
+	{
+		meta: {
+			name: 'prune',
+			description: 'Remove listings by score, region, or status',
 		},
-		bottom: {
-			type: 'string',
-			description: 'Remove bottom N% (overrides min-score)',
+		args: {
+			'min-score': {
+				type: 'string',
+				description: 'Remove listings below this score',
+				default: '50',
+			},
+			bottom: {
+				type: 'string',
+				description: 'Remove bottom N% (overrides min-score)',
+			},
+			region: {
+				type: 'string',
+				description: 'Remove all listings from these regions (comma-separated)',
+			},
+			inactive: {
+				type: 'boolean',
+				description: 'Remove inactive listings',
+				default: false,
+			},
+			'dry-run': {
+				type: 'boolean',
+				description: 'Preview without removing',
+				default: false,
+			},
+			force: {
+				type: 'boolean',
+				description: 'Skip confirmation prompt',
+				default: false,
+			},
+			json: {
+				type: 'boolean',
+				description: 'Output as JSON envelope',
+				default: false,
+			},
 		},
-		region: {
-			type: 'string',
-			description: 'Remove all listings from these regions (comma-separated)',
-		},
-		inactive: {
-			type: 'boolean',
-			description: 'Remove inactive listings',
-			default: false,
-		},
-		'dry-run': {
-			type: 'boolean',
-			description: 'Preview without removing',
-			default: false,
-		},
-		force: {
-			type: 'boolean',
-			description: 'Skip confirmation prompt',
-			default: false,
-		},
-		json: {
-			type: 'boolean',
-			description: 'Output as JSON envelope',
-			default: false,
-		},
-	},
-	async run({ args }) {
-		const start = performance.now();
-		const jsonMode = isJsonMode();
-		const existing = loadExistingListings();
-		if (existing.listings.length === 0) {
-			if (jsonMode) ok('ops.prune', { removed: 0, remaining: 0, mode: 'none' }, start);
-			log.cli.warn('No listings to prune');
-			return;
-		}
+		async run({ args }) {
+			const start = performance.now();
+			const jsonMode = isJsonMode();
+			try {
+				const existing = loadExistingListings();
+				if (existing.listings.length === 0) {
+					if (jsonMode) ok('ops.prune', { removed: 0, remaining: 0, mode: 'none', dryRun: false }, start);
+					log.cli.warn('No listings to prune');
+					return;
+				}
 
-		if (args.inactive) {
-			await pruneInactive(existing, args, jsonMode, start);
-			return;
-		}
+				if (args.inactive) {
+					await pruneInactive(existing, args, jsonMode, start);
+					return;
+				}
 
-		if (args.region) {
-			await pruneByRegion(existing, args.region, args);
-		} else {
-			await pruneByScore(existing, args);
-		}
+				if (args.region) {
+					await pruneByRegion(existing, args.region, args, jsonMode, start);
+				} else {
+					await pruneByScore(existing, args, jsonMode, start);
+				}
+			} catch (error) {
+				rethrowCapture(error);
+				const message = error instanceof Error ? error.message : String(error);
+				if (jsonMode) fail('ops.prune', 'PRUNE_ERROR', `Pruning failed: ${message}`, 'Check configuration', start);
+				log.cli.error(`Pruning failed: ${message}`);
+				process.exit(1);
+			}
+		},
 	},
-});
+);

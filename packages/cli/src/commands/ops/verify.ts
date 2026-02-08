@@ -6,9 +6,9 @@ import { paths } from '@let/core/paths';
 import { buildListingUrl, fetchWithRateLimit, setFetchDelay } from '@let/core/pipeline/fetch';
 import type { Listing, ListingsFile } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
-import { defineCommand } from 'citty';
-import { isJsonMode, ok } from '../../envelope.js';
+import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { printKeyValues, section } from '../../output/index.js';
+import { defineToolCommand } from '../../tool.js';
 import { loadExistingListings } from '../shared-read.js';
 import { saveListingsFile } from '../shared-write.js';
 
@@ -177,72 +177,105 @@ function printVerifySummary(total: number, inactive: number, errors: number): vo
 	printKeyValues(rows, { keyWidth: 7 });
 }
 
+/** Core verify logic extracted for cognitive complexity */
+async function executeVerify(parsed: VerifyArgs, jsonMode: boolean, start: number): Promise<void> {
+	setFetchDelay(parsed.delay);
+	log.cli.info('Verify listings', { dryRun: parsed.dryRun, region: parsed.region ?? 'all', delay: parsed.delay });
+
+	const existing = loadExistingListings();
+	const emptyResult = { checked: 0, active: 0, inactive: 0, errors: 0, dryRun: parsed.dryRun, results: [] as VerifyResult[] };
+
+	if (existing.listings.length === 0) {
+		if (jsonMode) ok('ops.verify', emptyResult, start);
+		log.cli.warn('No listings to verify');
+		return;
+	}
+
+	const toVerify = filterListingsForVerify(existing.listings, parsed.region, parsed.limit);
+	if (toVerify.length === 0) {
+		if (jsonMode) ok('ops.verify', emptyResult, start);
+		log.cli.success('No listings to verify (all already have status)');
+		return;
+	}
+
+	log.cli.info('Verifying listings', { count: toVerify.length, total: existing.listings.length });
+
+	const { results, inactive, errors } = await runVerification(toVerify);
+	const active = results.length - inactive - errors;
+
+	if (!jsonMode) printVerifySummary(results.length, inactive, errors);
+
+	if (parsed.dryRun) {
+		if (jsonMode) ok('ops.verify', { checked: results.length, active, inactive, errors, dryRun: true, results }, start);
+		log.cli.info('Dry run - no changes saved');
+		return;
+	}
+
+	applyInactiveStatus(existing.listings, results);
+
+	const output: ListingsFile = {
+		updatedAt: new Date().toISOString(),
+		searchUrls: existing.searchUrls,
+		locations: existing.locations,
+		lastSearchTotal: existing.lastSearchTotal,
+		listings: existing.listings,
+	};
+
+	await saveListingsFile(output);
+
+	if (jsonMode) ok('ops.verify', { checked: results.length, active, inactive, errors, dryRun: false, results }, start);
+	log.cli.success('Verification complete', { path: paths().derived.database, inactive });
+}
+
 /**
  * let ops verify - Check if listings are still active on Rightmove
  */
-export const verifyCommand = defineCommand({
-	meta: {
-		name: 'verify',
-		description: 'Check if listings are still active on Rightmove',
+export const verifyCommand = defineToolCommand(
+	{
+		name: 'ops.verify',
+		command: 'let ops verify',
+		category: 'ops',
+		outputSchema: {
+			checked: { type: 'number', description: 'Listings checked' },
+			active: { type: 'number', description: 'Still active on portal' },
+			inactive: { type: 'number', description: 'No longer available' },
+			errors: { type: 'number', description: 'Fetch/check errors' },
+			dryRun: { type: 'boolean', description: 'Whether changes were actually saved' },
+			results: { type: 'array', items: 'VerifyResult', description: 'Per-listing: { id, rightmoveId, status, error? }' },
+		},
+		idempotent: true,
+		rateLimit: 'config fetch.delayMs per request',
+		example: 'let ops verify --dry-run --limit 10 --json',
 	},
-	args: {
-		'dry-run': { type: 'boolean', description: 'Preview without updating', default: false },
-		region: { type: 'string', description: 'Only verify listings from specific region' },
-		limit: { type: 'string', description: 'Max listings to check' },
-		delay: { type: 'string', description: 'Delay between requests in ms', default: '3000' },
-		json: { type: 'boolean', description: 'Output as JSON envelope', default: false },
+	{
+		meta: {
+			name: 'verify',
+			description: 'Check if listings are still active on Rightmove',
+		},
+		args: {
+			'dry-run': { type: 'boolean', description: 'Preview without updating', default: false },
+			region: { type: 'string', description: 'Only verify listings from specific region' },
+			limit: { type: 'string', description: 'Max listings to check' },
+			delay: { type: 'string', description: 'Delay between requests in ms', default: '3000' },
+			json: { type: 'boolean', description: 'Output as JSON envelope', default: false },
+		},
+		async run({ args }) {
+			const start = performance.now();
+			const jsonMode = isJsonMode();
+			try {
+				const parsed = parseVerifyArgs(args);
+				if (!parsed) {
+					if (jsonMode) fail('ops.verify', 'VALIDATION_ERROR', 'Invalid arguments', 'Check --delay and --limit values', start);
+					process.exit(1);
+				}
+				await executeVerify(parsed, jsonMode, start);
+			} catch (error) {
+				rethrowCapture(error);
+				const message = error instanceof Error ? error.message : String(error);
+				if (jsonMode) fail('ops.verify', 'VERIFY_ERROR', `Verification failed: ${message}`, 'Check network connectivity', start);
+				log.cli.error(`Verification failed: ${message}`);
+				process.exit(1);
+			}
+		},
 	},
-	async run({ args }) {
-		const start = performance.now();
-		const jsonMode = isJsonMode();
-		const parsed = parseVerifyArgs(args);
-		if (!parsed) return;
-
-		setFetchDelay(parsed.delay);
-		log.cli.info('Verify listings', { dryRun: parsed.dryRun, region: parsed.region ?? 'all', delay: parsed.delay });
-
-		const existing = loadExistingListings();
-		const emptyResult = { checked: 0, active: 0, inactive: 0, errors: 0, results: [] };
-
-		if (existing.listings.length === 0) {
-			if (jsonMode) ok('ops.verify', emptyResult, start);
-			log.cli.warn('No listings to verify');
-			return;
-		}
-
-		const toVerify = filterListingsForVerify(existing.listings, parsed.region, parsed.limit);
-		if (toVerify.length === 0) {
-			if (jsonMode) ok('ops.verify', emptyResult, start);
-			log.cli.success('No listings to verify (all already have status)');
-			return;
-		}
-
-		log.cli.info('Verifying listings', { count: toVerify.length, total: existing.listings.length });
-
-		const { results, inactive, errors } = await runVerification(toVerify);
-		const active = results.length - inactive - errors;
-
-		if (!jsonMode) printVerifySummary(results.length, inactive, errors);
-
-		if (parsed.dryRun) {
-			if (jsonMode) ok('ops.verify', { checked: results.length, active, inactive, errors, dryRun: true, results }, start);
-			log.cli.info('Dry run - no changes saved');
-			return;
-		}
-
-		applyInactiveStatus(existing.listings, results);
-
-		const output: ListingsFile = {
-			updatedAt: new Date().toISOString(),
-			searchUrls: existing.searchUrls,
-			locations: existing.locations,
-			lastSearchTotal: existing.lastSearchTotal,
-			listings: existing.listings,
-		};
-
-		await saveListingsFile(output);
-
-		if (jsonMode) ok('ops.verify', { checked: results.length, active, inactive, errors, results }, start);
-		log.cli.success('Verification complete', { path: paths().derived.database, inactive });
-	},
-});
+);
