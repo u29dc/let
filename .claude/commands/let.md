@@ -1,150 +1,213 @@
-# Property Search Agent
+# Property Search Agent (`/let`)
 
 Autonomous property search pipeline using the `let` CLI toolbelt. Discovers listings, fetches selectively, triages by score, deep-dives top candidates with photo/map analysis, writes assessments, and produces a final report.
 
+## Core principles
+
+- **Config is the baseline**: use it as the default preference set.
+- **Overrides are allowed (and must be explicit)**: for ad-hoc requests (new city, flats vs houses, relaxing garden), prefer one-off CLI overrides rather than editing config. Always report overrides in the final output and do not persist them unless asked.
+- **Scores are advisory**: use algorithmic scores for triage; apply judgment based on photos, layout, and neighborhood research.
+- **Deterministic contracts**: use `--json` for tool calls; treat stdout as the contract and stderr as logs.
+
 ## Prerequisites
 
-Run from the repository root. The CLI binary should be built (`bun run build:cli`) or use `bun run let` directly.
+Run from the repository root. Use the compiled binary (`bun run build:cli` then `bin/let ...`) or run via `bun run let ...`.
 
-## 1. Orient
-
-```bash
-let tools --json               # discover available commands
-let health --json              # check prerequisites
-let config show --json         # understand locations, scoring weights, filters
-```
-
-If health returns `status: "blocked"`: execute fix commands from `checks[].fix`, re-check. If `status: "degraded"`: proceed with partial enrichment (scoring works with lower confidence).
-
-## 2. Discover
+## 0) Orient (always)
 
 ```bash
-let search discover --json                     # find portal IDs across all configured locations
-let search diff <comma-separated-ids> --json   # classify new vs known
+let tools --json
+let health --json
+let config show --json
 ```
 
-Use IDs from discover step. The diff command tells you which are new vs already in the database.
+If `health.status == "blocked"`: execute fix commands from `checks[].fix`, then re-run `health`.  
+If `health.status == "degraded"`: proceed (enrichment/scoring still works, but confidence may be lower).
 
-## 3. Acquire
+## 1) Define request mode (baseline vs override)
+
+### Baseline mode (default)
+
+Use config locations + filters as-is.
+
+### Override mode (ad-hoc)
+
+Used for prompts like:
+
+- “check flats in Manchester”
+- “compare Manchester, Liverpool, Sheffield”
+- “flats around York within ~30 min of York city centre”
+
+Rules:
+
+- Prefer CLI overrides. Do not edit config unless there is no tool support.
+- Always record in your final report:
+    - `Overrides applied:` (bullet list)
+    - `What stayed from config:` (short bullet list)
+
+## 2) Discover (IDs only, no persistence)
+
+Definition: **“new listings” = portal IDs not present in the SQLite DB yet**.
 
 ```bash
-let fetch <new-ids> --json                     # fetch in batches of 10-15
+let search discover --json
+let search diff <comma-separated-ids> --json
 ```
 
-Check `failed[]` in response -- retry once for transient errors, skip permanent (404). Each fetch includes parse, enrich (EPC, broadband, area metrics), and re-score of entire database.
+Guidance:
 
-## 4. Triage
+- If DB is empty, `diff.new` may be “everything.” Start by fetching a small sample first (5–10) to calibrate.
+- Prefer repeated small loops over one giant run: discover → diff → fetch → triage → repeat.
+
+## 3) Acquire (fetch + enrich + score + persist)
 
 ```bash
-let view list --top 30 --json                  # ranked overview
+let fetch <new-ids> --json
 ```
 
-Classify by algorithm score:
-- **>= 80**: Must assess (high priority)
-- **65-79**: Assess if time permits
-- **< 65**: Skip unless specific interest
+Batching guidance:
 
-## 5. Assess
+- Start with batches of **5–10** IDs for fast feedback, then increase to **10–15** once stable.
+- If you see rate limiting, increase delay and retry once (don’t spam).
+- Treat missing/removed listings as normal; skip after one retry if clearly permanent.
+
+Failure handling policy:
+
+- If some IDs fail, continue the run.
+- If media is missing (because images were skipped or not cached), mark the assessment as lower confidence or re-fetch just the top 1–2 without skipping media (if available).
+
+## 4) Triage (ranked overview)
 
 ```bash
-let assess candidates --json                   # queue of unassessed listings
-let assess context <id> --json                 # get everything needed for assessment
+let view list --top 30 --json
 ```
 
-### Batch Assessment via Parallel Subagents
+Suggested triage tiers (algorithm score):
 
-For efficiency, partition candidate IDs across 5-10 subagents (2-3 listings each) using the Task tool with `subagent_type=general-purpose`. Each subagent gets disjoint IDs; writes are per-listing atomic.
+- **>= 80**: must assess
+- **65–79**: assess if time permits
+- **< 65**: skip unless a specific feature is compelling
 
-**Subagent prompt template** (replace `{IDS}` with comma-separated listing IDs):
+Practical note:
+
+- Prefer to assess a smaller number deeply (2–5) rather than shallowly reviewing 30.
+
+## 5) Assess (deep dive + write judgment back)
+
+Queue + context:
+
+```bash
+let assess candidates --json
+let assess context <id> --json
+```
+
+How to use assessment context correctly:
+
+- Do **not** guess cache paths.
+- Use the `media.*` paths returned by `assess context` to locate images/maps/floorplans (those paths are the source of truth).
+- Use the included assessment schema as your contract for submission fields.
+
+What to look for:
+
+- Maintenance (condition, damp indicators, DIY quality)
+- Light and space (windows, layout flow, ceiling height, storage)
+- Missing photos/floorplan (red flags)
+- Neighborhood via maps (busy roads, green space, density, industrial sites)
+- Quick web research where needed (schools, safety, amenities, transport)
+
+Submit assessment:
+
+```bash
+let assess submit <id> --data '{...}' --json
+```
+
+Assessment rules:
+
+- Keep it evidence-based.
+- If you adjust the score, explain why in 1–2 sentences.
+- If media was missing, state that and lower confidence.
+
+### Batch assessment via parallel subagents (optional)
+
+For speed, split candidate IDs across 5–10 subagents (2–3 listings each). Each subagent gets disjoint IDs; writes are per-listing atomic.
+
+Subagent prompt template (replace `{IDS}`):
 
 ```
 Assess listings: {IDS}
 
-For each ID:
-1. Run `let assess context {id} --json` to get listing details, score breakdown, and media paths
-2. Glob `.cache/{id}/*.webp` then Read each image (property photos, satellite, street map)
-3. Analyze: maintenance quality, natural light, spaciousness, what photos show/hide, neighborhood from maps
-4. Submit: `let assess submit {id} --data '{"maintenance":"...","lightAndSpace":"...","photoAnalysis":"...","neighborhoodAnalysis":"...","recommendation":"...","familySuitability":"...","reasoning":"...","scoreAdjustment":0}' --json`
+For each listing ID:
+1) Run `let assess context {id} --json`
+2) Use the returned `media` paths (do not guess cache directories)
+3) Review images/maps; do a quick neighborhood web check if needed
+4) Submit: `let assess submit {id} --data '<valid assessment JSON>' --json`
 
-Assessment guidance:
-
-MAINTENANCE (from photos): excellent (pristine, renovated) / good (clean, no issues) / fair (dated but functional) / poor (neglected, damage)
-LIGHT/SPACE: window size, brightness, ceiling height, room proportions, layout flow, south-facing
-PHOTOS: missing rooms = red flag, awkward angles, wide-angle distortion, dark/edited, damage signs
-NEIGHBORHOOD (maps show ~10min walk radius with red pin): green space, density, industrial concerns, busy roads, walkability
-FAMILY: safe play areas, storage, school/park proximity, quiet indicators
-RECOMMENDATION: strong-recommend / recommend / neutral / avoid
-SCORE ADJUSTMENT (-30 to +30): positive = better than algorithm suggests, negative = worse, 0 = no change
-
-No coordination needed - your IDs are unique.
+Guidance:
+* Maintenance: excellent / good / fair / poor
+* Light/space: brightness, layout, proportions
+* Photos: missing rooms = red flag
+* Neighborhood: busy roads, green space, walkability
+* Recommendation: strong-recommend / recommend / neutral / avoid
+* Score adjustment: -30 to +30
 ```
 
-### Image Cache
-
-| Aspect | Detail |
-| ------ | ------ |
-| Location | `.cache/{id}/` |
-| Photos | `{id}-photo-{hash}.webp` |
-| Maps | `{id}-satellite-{hash}.webp`, `{id}-street-{hash}.webp` |
-| Format | WebP 900-1200px, maps show ~10min walk radius |
-
-## 6. Report
+## 6) Report (shortlist + comparison + next steps)
 
 ```bash
-let view list --top 20 --json                  # final rankings with assessed scores
-let view detail <id> --json                    # full property data for top picks
-let score explain <id> --json                  # score breakdown
+let view list --top 20 --json
+let view detail <id> --json
+let score explain <id> --json
 ```
 
-### Report Structure
+Report structure:
 
-**Overview**: total listings, regions, score distribution (80+/60-79/40-59/<40), price range, bedroom split, assessment coverage.
+- **Overview**: count of new fetched, assessed coverage, score distribution, price range.
+- **Top picks (3–5)**: for each:
+    - link
+    - algorithm vs assessed score (+ explanation if adjusted)
+    - key positives/negatives
+    - neighborhood notes
+    - clear next steps (viewing, questions to ask, watchlist)
+- **If comparing regions**:
+    - sample size per region
+    - average score and “best value” examples
+    - a short verdict per region (fit vs tradeoffs)
 
-**Top Properties** (table, top 10):
+## Common “natural language” intents (how to run them)
 
-| Rank | Property | Region | Price | Beds | Size | EPC | Garden | Algo | Assessed | AI Rec | Notes |
-| ---- | -------- | ------ | ----- | ---- | ---- | --- | ------ | ---- | -------- | ------ | ----- |
+- “Top 5 new homes”:
+    - Baseline mode
+    - Discover → diff → fetch new (small batches) → triage → assess top 2–3 → report top 5
 
-- Property: `[Address](https://www.rightmove.co.uk/properties/{id})`
-- AI Rec: SR (strong-recommend) / R (recommend) / N (neutral) / A (avoid) / - (not assessed)
+- “Compare Manchester, Liverpool, Sheffield”:
+    - Override mode
+    - For each city: resolve → discover → fetch small sample → triage → produce region summary → compare
 
-**Region Comparison** (table):
+- “Flats around York, ~30 min drive to York city centre”:
+    - Override mode (property type = flats)
+    - Use available location tools to discover surrounding towns and compare
+    - If no travel-time primitive exists, approximate and label it as an approximation
 
-| Region | Count | Avg Score | Best Value | Verdict |
-| ------ | ----- | --------- | ---------- | ------- |
+## Error recovery
 
-**Deep Dives** (top 3-5):
+| Error Code         | Action                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| `NO_CONFIG`        | Create config from template. Cannot proceed without it.                                     |
+| `NO_SOURCES`       | Run `fix[]` commands if you want full enrichment; you may proceed with degraded confidence. |
+| `NO_DATABASE`      | Normal on first run. Proceed to fetch; DB will be created.                                  |
+| `RATE_LIMITED`     | Wait, increase delay, retry once.                                                           |
+| `NOT_FOUND`        | Listing removed from portal. Skip and continue.                                             |
+| `VALIDATION_ERROR` | Fix assessment JSON according to schema.                                                    |
+| `API_ERROR`        | Log, skip affected enrichment, continue with available data.                                |
 
-```
-**#1: [Address](link)** - Price/mo, X bed, Xsqm
-- EPC X | Broadband X% | X.Xmi to [Station]
-- Score: Algo X → Assessed X (adjustment +/-Y)
-- AI: [maintenance], [recommendation], [key reasoning]
-- Why it ranks: [1 sentence]
-```
+## Score interpretation
 
-**Recommendations**: must-view (top 3 with links), watch list, needs assessment, search refinements.
-
-## Error Recovery
-
-| Error Code | Action |
-| ---------- | ------ |
-| `NO_CONFIG` | Tell user to create config from template. Cannot proceed. |
-| `NO_SOURCES` | Tell user: run `fix[]` commands. Continue without -- lower confidence. |
-| `NO_DATABASE` | Normal on first run. Proceed to discover + fetch. |
-| `RATE_LIMITED` | Wait 60s, retry with `--delay 5000`. |
-| `NOT_FOUND` | Listing removed from portal. Skip and continue. |
-| `VALIDATION_ERROR` | Fix assessment JSON (check enums, string lengths, scoreAdjustment range). |
-| `API_ERROR` | Log, skip affected enrichment, continue with available data. |
-
-## Score Interpretation
-
-| Range | Meaning |
-| ----- | ------- |
-| 85-100 | Exceptional -- strong across all dimensions |
-| 70-84 | Good -- strong in most areas, minor weaknesses |
-| 55-69 | Average -- mixed, moderate penalties |
-| 40-54 | Below average -- significant weaknesses |
-| < 40 | Poor -- major penalties |
+| Range  | Meaning                                       |
+| ------ | --------------------------------------------- |
+| 85–100 | Exceptional — strong across all dimensions    |
+| 70–84  | Good — strong in most areas, minor weaknesses |
+| 55–69  | Average — mixed, moderate penalties           |
+| 40–54  | Below average — significant weaknesses        |
+| < 40   | Poor — major penalties                        |
 
 Scores are percentile-relative within the current database. The agent adds value by detecting what photos reveal, researching neighborhoods, and identifying tradeoffs the algorithm cannot weigh.
