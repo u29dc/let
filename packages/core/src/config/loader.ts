@@ -164,9 +164,9 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
 			B: 45,
 			C: 70,
 			D: 100,
-			E: 150,
-			F: 200,
-			G: 250,
+			E: 400,
+			F: 450,
+			G: 500,
 		},
 	},
 	location: {
