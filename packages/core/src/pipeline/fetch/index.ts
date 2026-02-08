@@ -18,6 +18,7 @@ export {
 	lookupLocation,
 	resetApiRateLimiter,
 	searchListingsApi,
+	searchListingsHtml,
 	setApiDelay,
 	setApiMaxRetries,
 	tokenizeLocation,

@@ -8,7 +8,7 @@
 import type { SearchConfig, SearchFilters } from '@let/core/config';
 import { loadConfig, resetConfigCache } from '@let/core/config';
 import { paths } from '@let/core/paths';
-import { type ApiSearchParams, searchListingsApi, setApiDelay, setApiMaxRetries } from '@let/core/pipeline/fetch';
+import { type ApiSearchParams, searchListingsApi, setApiDelay, setApiMaxRetries, setFetchDelay, setFetchMaxRetries } from '@let/core/pipeline/fetch';
 import { log } from '@let/core/utils/logger';
 import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
@@ -103,6 +103,8 @@ export const searchDiscoverCommand = defineToolCommand(
 
 				setApiDelay(config.fetch.delayMs);
 				setApiMaxRetries(config.fetch.maxRetries);
+				setFetchDelay(config.fetch.delayMs);
+				setFetchMaxRetries(config.fetch.maxRetries);
 
 				let locations = config.search.locations;
 				if (args.region) {

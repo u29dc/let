@@ -42,7 +42,9 @@ export {
 	lookupLocation,
 	resetRateLimiter,
 	searchListingsApi,
+	searchListingsHtml,
 	setFetchDelay,
+	setFetchMaxRetries,
 } from './fetch/index.js';
 // Re-export output stage
 export {

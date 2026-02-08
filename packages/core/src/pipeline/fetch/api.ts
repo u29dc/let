@@ -7,7 +7,8 @@
  */
 
 import { log } from '@let/core/utils/logger';
-import { createResettableRateLimiter, sleep } from './html.js';
+import { scrapeSearchResults } from '../parse/index.js';
+import { buildSearchUrl, createResettableRateLimiter, fetchWithRateLimit, sleep } from './html.js';
 
 /** Default delay between API requests (milliseconds) */
 export const API_DELAY_MS = 1000;
@@ -349,7 +350,55 @@ export function buildSearchApiUrl(params: ApiSearchParams): string {
 }
 
 /**
- * Search listings via Rightmove API
+ * Search listings via Rightmove HTML scraping
+ *
+ * Fetches the search results HTML page and extracts listing IDs from __NEXT_DATA__.
+ * Returns ApiSearchResult shape but with empty properties array (HTML only yields IDs).
+ *
+ * @param params - Search parameters
+ * @returns Listing IDs or error
+ */
+export async function searchListingsHtml(params: ApiSearchParams): Promise<ApiSearchResult> {
+	const url = buildSearchUrl(params);
+
+	log.fetch.info('Searching via HTML', { location: params.locationIdentifier });
+	log.fetch.debug('HTML URL', { url });
+
+	const fetchResult = await fetchWithRateLimit(url);
+
+	if (!fetchResult.success) {
+		return { success: false, error: fetchResult.error };
+	}
+
+	const scrapeResult = scrapeSearchResults(fetchResult.html);
+
+	if (!scrapeResult.success) {
+		return { success: false, error: scrapeResult.error };
+	}
+
+	log.fetch.success('HTML search complete', {
+		total: scrapeResult.totalResults,
+		returned: scrapeResult.listingIds.length,
+	});
+
+	return {
+		success: true,
+		properties: [],
+		totalResults: scrapeResult.totalResults,
+		listingIds: scrapeResult.listingIds,
+	};
+}
+
+/** HTTP status codes that should trigger HTML fallback (non-retryable client/server errors) */
+function shouldFallback(status: number | undefined): boolean {
+	return status === 403 || status === 404 || status === 410;
+}
+
+/**
+ * Search listings via Rightmove API with automatic HTML fallback
+ *
+ * Tries the REST API first. If it returns a non-retryable error (403, 404, 410),
+ * automatically falls back to HTML scraping.
  *
  * @param params - Search parameters
  * @returns Array of properties with listing IDs
@@ -363,6 +412,10 @@ export async function searchListingsApi(params: ApiSearchParams): Promise<ApiSea
 	const result = await apiFetch<ApiSearchResponse>(url);
 
 	if (!result.success) {
+		if (shouldFallback(result.status)) {
+			log.fetch.warn('API returned non-retryable error, falling back to HTML', { status: result.status, error: result.error });
+			return searchListingsHtml(params);
+		}
 		return { success: false, error: result.error };
 	}
 
