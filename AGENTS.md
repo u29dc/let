@@ -3,6 +3,7 @@
 This is an **agent-native CLI toolbelt**. The `let` binary exposes atomic, composable primitives that an AI agent orchestrates via a single `/let` skill. The agent discovers listings, fetches selectively, triages by score, deep-dives top candidates with photo/map analysis, writes assessments, and produces a final report. No human sequencing required.
 
 **Key principles**:
+
 - **Primitives, not workflows**: each command does one thing. The agent composes `search discover` + `search diff` + `fetch <ids>` instead of a monolithic batch fetch
 - **Judgment stays with the agent**: scoring and enrichment are deterministic; the agent adds value through photo analysis, neighborhood research, and tradeoff reasoning
 - **Structured contracts**: every command supports `--json` outputting exactly one JSON envelope to stdout. Stderr is for logs only. The agent reads stdout, ignores stderr
@@ -168,6 +169,7 @@ Commands defined via `defineToolCommand()` register metadata in a global `toolRe
 Single source of truth: `packages/core/src/paths.ts`. Cached singleton, CLI primes at startup with overrides.
 
 **Precedence** (highest to lowest):
+
 1. CLI flags (`--data-dir`, `--config-dir`, `--cache-dir`, `--sources-dir`)
 2. Category env vars (`LET_DATA_DIR`, `LET_CONFIG_DIR`, `LET_CACHE_DIR`, `LET_SOURCES_DIR`)
 3. `LET_HOME` env var (base for data/cache/config/sources)
@@ -204,31 +206,31 @@ Domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTI
 
 ### Registered Tools (15, via `defineToolCommand`)
 
-| Tool | Command | Description | Idempotent | Rate Limited |
-| ---- | ------- | ----------- | ---------- | ------------ |
-| `assess.candidates` | `let assess candidates` | List unassessed listings ranked by score | Yes | No |
-| `assess.context` | `let assess context <id>` | Assessment context bundle (listing + scores + media paths) | Yes | No |
-| `assess.submit` | `let assess submit <id> <json>` | Write assessment back to DB | No | No |
-| `config.show` | `let config show` | Show parsed configuration | Yes | No |
-| `config.validate` | `let config validate` | Validate config file | Yes | No |
-| `export.json` | `let export json` | Export listings DB to JSON file | Yes | No |
-| `export.notion` | `let export notion` | Sync listings to Notion database | No | 3 req/s |
-| `fetch` | `let fetch <ids>` | Fetch/parse/enrich/score/persist by portal IDs | No | config delayMs |
-| `score.compute` | `let score compute` | Rescore all listings | Yes | No |
-| `score.explain` | `let score explain <id>` | Score breakdown for one listing | Yes | No |
-| `search.diff` | `let search diff <ids>` | Compare portal IDs against known listings | Yes | No |
-| `search.discover` | `let search discover` | Discover listing IDs from configured locations | Yes | config delayMs |
-| `search.resolve` | `let search resolve <location>` | Resolve location name to REGION identifier | Yes | 1 req |
-| `view.detail` | `let view detail <id>` | Full listing details | Yes | No |
-| `view.list` | `let view list` | Ranked listings table with filters/sorting | Yes | No |
+| Tool                | Command                         | Description                                                | Idempotent | Rate Limited   |
+| ------------------- | ------------------------------- | ---------------------------------------------------------- | ---------- | -------------- |
+| `assess.candidates` | `let assess candidates`         | List unassessed listings ranked by score                   | Yes        | No             |
+| `assess.context`    | `let assess context <id>`       | Assessment context bundle (listing + scores + media paths) | Yes        | No             |
+| `assess.submit`     | `let assess submit <id> <json>` | Write assessment back to DB                                | No         | No             |
+| `config.show`       | `let config show`               | Show parsed configuration                                  | Yes        | No             |
+| `config.validate`   | `let config validate`           | Validate config file                                       | Yes        | No             |
+| `export.json`       | `let export json`               | Export listings DB to JSON file                            | Yes        | No             |
+| `export.notion`     | `let export notion`             | Sync listings to Notion database                           | No         | 3 req/s        |
+| `fetch`             | `let fetch <ids>`               | Fetch/parse/enrich/score/persist by portal IDs             | No         | config delayMs |
+| `score.compute`     | `let score compute`             | Rescore all listings                                       | Yes        | No             |
+| `score.explain`     | `let score explain <id>`        | Score breakdown for one listing                            | Yes        | No             |
+| `search.diff`       | `let search diff <ids>`         | Compare portal IDs against known listings                  | Yes        | No             |
+| `search.discover`   | `let search discover`           | Discover listing IDs from configured locations             | Yes        | config delayMs |
+| `search.resolve`    | `let search resolve <location>` | Resolve location name to REGION identifier                 | Yes        | 1 req          |
+| `view.detail`       | `let view detail <id>`          | Full listing details                                       | Yes        | No             |
+| `view.list`         | `let view list`                 | Ranked listings table with filters/sorting                 | Yes        | No             |
 
 ### Infrastructure Commands (not in registry)
 
-| Command | Description |
-| ------- | ----------- |
-| `let tools` | Capability discovery from registry |
-| `let health` | Prerequisite checks with remediation |
-| `let ops prune` | Remove listings by criteria |
+| Command          | Description                              |
+| ---------------- | ---------------------------------------- |
+| `let tools`      | Capability discovery from registry       |
+| `let health`     | Prerequisite checks with remediation     |
+| `let ops prune`  | Remove listings by criteria              |
 | `let ops verify` | Check if listings still active on portal |
 
 ### Common Flags
@@ -262,18 +264,18 @@ let ops verify --dry-run --limit 10 --json
 
 10 local SQLite databases built from government/open data sources. Located in `sources/db/` (gitignored). Built via `bun run sources:build` or individually.
 
-| Database | Table | Key Columns | Rows | Used By |
-| -------- | ----- | ----------- | ---- | ------- |
-| postcodes | postcodes | postcode, lat, lng, lsoa_code, msoa_code | ~2.7M | Base lookup for all enrichment |
-| deprivation | imd | lsoa_code, rank, decile, score | ~33K | Area metrics (IMD) |
-| census | tenure | lsoa_code, total_households, social_housing_pct | ~35K | Area metrics (housing) |
-| population | population | lsoa_code, population | ~35K | Area metrics |
-| income | income | msoa_code, income_bhc, income_ahc | ~7K | Area metrics |
-| broadband | postcodes + aggregates | postcode, gigabit_availability | ~1.5M | Broadband enrichment |
-| flood | flood | postcode, risk, source | varies | Flood risk |
-| crime | crime_12m | lsoa_code, total, violent, burglary, robbery | varies | Crime stats |
-| naptan | stops | atco_code, common_name, stop_type, lat, lng | ~434K | Not actively queried |
-| uprn | uprn | uprn, lat, lng | varies | Not actively queried |
+| Database    | Table                  | Key Columns                                     | Rows   | Used By                        |
+| ----------- | ---------------------- | ----------------------------------------------- | ------ | ------------------------------ |
+| postcodes   | postcodes              | postcode, lat, lng, lsoa_code, msoa_code        | ~2.7M  | Base lookup for all enrichment |
+| deprivation | imd                    | lsoa_code, rank, decile, score                  | ~33K   | Area metrics (IMD)             |
+| census      | tenure                 | lsoa_code, total_households, social_housing_pct | ~35K   | Area metrics (housing)         |
+| population  | population             | lsoa_code, population                           | ~35K   | Area metrics                   |
+| income      | income                 | msoa_code, income_bhc, income_ahc               | ~7K    | Area metrics                   |
+| broadband   | postcodes + aggregates | postcode, gigabit_availability                  | ~1.5M  | Broadband enrichment           |
+| flood       | flood                  | postcode, risk, source                          | varies | Flood risk                     |
+| crime       | crime_12m              | lsoa_code, total, violent, burglary, robbery    | varies | Crime stats                    |
+| naptan      | stops                  | atco_code, common_name, stop_type, lat, lng     | ~434K  | Not actively queried           |
+| uprn        | uprn                   | uprn, lat, lng                                  | varies | Not actively queried           |
 
 Schema validation tests in `packages/core/tests/sources.test.ts` — automatically skipped if DB file doesn't exist.
 
