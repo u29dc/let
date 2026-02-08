@@ -5,10 +5,9 @@
  * and persists to database.
  */
 
-import { loadListingsFile, saveListingsFile as saveToDb } from '@let/core/db';
+import { findListingByIdFromDb, updateListingAssessment } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { calculateAssessedScore, normalizeAssessment } from '@let/core/pipeline/assess';
-import { findListingById } from '@let/core/pipeline/view';
 import { AssessmentSchema } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
 import { emitRaw, fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
@@ -110,23 +109,19 @@ export const assessSubmitCommand = defineToolCommand(
 				const { assessment, errors } = validateAssessment(parsed);
 				if (errors) handleValidationErrors(jsonMode, errors, start);
 
-				const data = loadListingsFile(dbPath);
-				const listings = data.listings ?? [];
-				const listing = findListingById(listings, args.id);
+				const listing = findListingByIdFromDb(dbPath, args.id);
 				if (!listing) handleNotFound(jsonMode, args.id, start);
 
 				const normalized = normalizeAssessment(assessment);
-				listing.assessment = normalized;
-				listing.assessedAt = new Date().toISOString();
-
 				const algoScore = listing.scores?._overall ?? 0;
-				listing.assessedScore = calculateAssessedScore(algoScore, normalized);
+				const assessedScore = calculateAssessedScore(algoScore, normalized);
+				const assessedAt = new Date().toISOString();
 
-				saveToDb(dbPath, { ...data, updatedAt: new Date().toISOString(), listings });
+				updateListingAssessment(dbPath, listing.id, normalized, assessedScore, assessedAt);
 
 				const result = {
 					id: listing.id,
-					assessedScore: listing.assessedScore,
+					assessedScore,
 					algoScore,
 					scoreAdjustment: normalized.scoreAdjustment,
 				};
@@ -135,7 +130,7 @@ export const assessSubmitCommand = defineToolCommand(
 					ok('assess.submit', result, start);
 				}
 
-				log.cli.info(`Assessment saved for ${args.id}: assessed=${listing.assessedScore} (algo=${algoScore} + adj=${normalized.scoreAdjustment})`);
+				log.cli.info(`Assessment saved for ${args.id}: assessed=${assessedScore} (algo=${algoScore} + adj=${normalized.scoreAdjustment})`);
 			} catch (error) {
 				rethrowCapture(error);
 				const message = error instanceof Error ? error.message : String(error);

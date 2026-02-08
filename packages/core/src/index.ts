@@ -235,7 +235,7 @@ export {
 // DB
 // =============================================================================
 
-export { closeListingsDb, loadListingsFile, openListingsDb, saveListingsFile } from './db/index.js';
+export { closeListingsDb, findListingByIdFromDb, loadListingsFile, openListingsDb, saveListingsFile, updateListingAssessment } from './db/index.js';
 
 // =============================================================================
 // UTILS

@@ -6,6 +6,7 @@
 
 import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync } from 'node:fs';
+import type { Assessment } from '../schema/assessment.js';
 import { type Listing, ListingSchema, type ListingsFile, ListingsFileSchema } from '../schema/index.js';
 import schemaSQL from './schema.sql' with { type: 'text' };
 
@@ -714,4 +715,142 @@ function mapBy<T>(rows: T[], key: (row: T) => string): Map<string, T> {
 		map.set(key(row), row);
 	}
 	return map;
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Find a single listing by UUID or portal_rightmove ID directly from SQLite.
+ * Returns null if not found.
+ */
+export function findListingByIdFromDb(dbPath: string, id: string): Listing | null {
+	const db = openListingsDb(dbPath);
+	try {
+		const isUuid = UUID_REGEX.test(id);
+		const row = isUuid
+			? (db.query('SELECT * FROM listings WHERE id = ?').get(id) as ListingRow | null)
+			: (db.query('SELECT * FROM listings WHERE portal_rightmove = ?').get(id) as ListingRow | null);
+
+		if (!row) return null;
+
+		const listingId = row.id;
+		const images = db.query('SELECT * FROM images WHERE listing_id = ? ORDER BY position').all(listingId) as ImageRow[];
+		const notes = db.query('SELECT * FROM notes WHERE listing_id = ? ORDER BY position').all(listingId) as NoteRow[];
+		const stations = db.query('SELECT * FROM stations WHERE listing_id = ? ORDER BY position').all(listingId) as StationRow[];
+		const scoreRow = db.query('SELECT * FROM scores WHERE listing_id = ?').get(listingId) as ScoreRow | undefined;
+		const assessmentRow = db.query('SELECT * FROM assessments WHERE listing_id = ?').get(listingId) as AssessmentRow | undefined;
+
+		return ListingSchema.parse({
+			id: listingId,
+			portalIds: {
+				rightmove: row.portal_rightmove ?? undefined,
+				zoopla: row.portal_zoopla ?? undefined,
+				onthemarket: row.portal_onthemarket ?? undefined,
+			},
+			uprn: row.uprn,
+			uprnSource: row.uprn_source as Listing['uprnSource'],
+			uprnConfidence: row.uprn_confidence as Listing['uprnConfidence'],
+			url: row.url,
+			location: { lat: row.lat, lng: row.lng, pinType: row.pin_type },
+			postcode: row.postcode,
+			address: row.address,
+			region: row.region,
+			googleMapsUrl: row.google_maps_url,
+			googleMapsStreetViewUrl: row.google_maps_street_view_url,
+			area: {
+				lsoa: { code: row.area_lsoa_code, name: row.area_lsoa_name },
+				msoa: { code: row.area_msoa_code, name: row.area_msoa_name },
+				imd: { rank: row.imd_rank, decile: row.imd_decile, score: row.imd_score },
+				income: { bhc: row.income_bhc, ahc: row.income_ahc },
+				socialHousingPct: row.social_housing_pct,
+				population: row.population,
+				floodRisk: { level: row.flood_risk_level, source: row.flood_risk_source },
+				crime: {
+					count12m: row.crime_count_12m,
+					ratePer1k: row.crime_rate_per_1k,
+					violent12m: row.crime_violent_12m,
+					burglary12m: row.crime_burglary_12m,
+					robbery12m: row.crime_robbery_12m,
+					band: row.crime_band as Listing['area']['crime']['band'],
+					trend: row.crime_trend as Listing['area']['crime']['trend'],
+					updatedAt: row.crime_updated_at,
+				},
+			},
+			price: row.price,
+			priceDisplay: row.price_display,
+			bedrooms: row.bedrooms,
+			bathrooms: row.bathrooms,
+			propertyType: row.property_type,
+			description: row.description,
+			notes: notes.map((note) => note.note),
+			images: images.map((image) => ({ remote: image.remote, local: image.local })),
+			floorplan: { remote: row.floorplan_remote, local: row.floorplan_local },
+			epc: { remote: row.epc_remote, local: row.epc_local },
+			mapViews: {
+				satellite: { remote: row.map_satellite_remote, local: row.map_satellite_local },
+				street: { remote: row.map_street_remote, local: row.map_street_local },
+			},
+			epcRating: row.epc_rating,
+			floorAreaSqm: row.floor_area_sqm,
+			epcLodgementDate: row.epc_lodgement_date,
+			epcAddressMatch: row.epc_address_match === null ? null : row.epc_address_match === 1,
+			epcSearchUrl: row.epc_search_url,
+			nearestStations: stations.map((station) => ({
+				name: station.name,
+				distance: station.distance,
+				unit: station.unit,
+			})),
+			gigabitAvailability: row.gigabit_availability,
+			listedDate: row.listed_date,
+			lettings: { availableDate: row.available_date, deposit: row.deposit },
+			agent: { name: row.agent_name, phone: row.agent_phone },
+			assessment: buildAssessment(assessmentRow),
+			assessedAt: row.assessed_at,
+			assessedScore: row.assessed_score,
+			scores: buildScores(scoreRow),
+			fetchedAt: row.fetched_at,
+			extractionStatus: row.extraction_status,
+			status: row.status,
+			notionPageId: row.notion_page_id ?? undefined,
+		});
+	} finally {
+		closeListingsDb(db);
+	}
+}
+
+/**
+ * Atomically update assessment data for a single listing.
+ * Uses a targeted UPDATE + UPSERT instead of full-DB rewrite.
+ */
+export function updateListingAssessment(dbPath: string, listingId: string, assessment: Assessment, assessedScore: number, assessedAt: string): void {
+	const db = openListingsDb(dbPath);
+	try {
+		const tx = db.transaction(() => {
+			db.run('UPDATE listings SET assessed_at = ?, assessed_score = ? WHERE id = ?', [assessedAt, assessedScore, listingId]);
+
+			db.run('DELETE FROM assessments WHERE listing_id = ?', [listingId]);
+
+			db.run(
+				`INSERT INTO assessments (
+					listing_id, maintenance, light_and_space, photo_analysis, tradeoffs,
+					neighborhood_analysis, recommendation, family_suitability, reasoning, score_adjustment
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				[
+					listingId,
+					assessment.maintenance,
+					assessment.lightAndSpace,
+					assessment.photoAnalysis,
+					assessment.tradeoffs ?? null,
+					assessment.neighborhoodAnalysis ?? null,
+					assessment.recommendation,
+					assessment.familySuitability,
+					assessment.reasoning,
+					assessment.scoreAdjustment,
+				],
+			);
+		});
+		tx();
+	} finally {
+		closeListingsDb(db);
+	}
 }
