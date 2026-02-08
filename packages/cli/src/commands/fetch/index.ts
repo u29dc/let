@@ -6,16 +6,16 @@
  */
 
 import { loadConfig, resetConfigCache } from '@let/core/config';
-import { loadListingsFile } from '@let/core/db';
+import { loadListingsFile, upsertListings } from '@let/core/db';
 import { paths } from '@let/core/paths';
 import { closeAreaDbs, closeBroadbandDb } from '@let/core/pipeline/enrich';
 import { setApiDelay, setApiMaxRetries, setFetchDelay, setFetchMaxRetries } from '@let/core/pipeline/fetch';
 import { recalcAssessedScores, scoreListingsWithConfig } from '@let/core/pipeline/score';
-import type { Listing, ListingsFile } from '@let/core/schema';
+import type { Listing } from '@let/core/schema';
 import { log } from '@let/core/utils/logger';
 import { fail, isJsonMode, ok, rethrowCapture } from '../../envelope.js';
 import { defineToolCommand } from '../../tool.js';
-import { processListing, saveListingsFile } from '../shared-write.js';
+import { deduplicateListings, processListing } from '../shared-write.js';
 
 type FetchedItem = { id: string; address: string; score: number | null };
 type FailedItem = { id: string; error: string };
@@ -64,6 +64,16 @@ function updateFetchedScores(fetched: FetchedItem[], scored: Listing[]) {
 	for (const item of fetched) {
 		const listing = scored.find((l) => l.portalIds.rightmove === item.id);
 		if (listing) item.score = listing.scores?._overall ?? null;
+	}
+}
+
+function validateInputIds(ids: string[], jsonMode: boolean, start: number): void {
+	if (ids.length === 0) {
+		if (jsonMode) {
+			fail('fetch', 'VALIDATION_ERROR', 'No IDs provided', 'Provide comma-separated portal IDs', start);
+		}
+		log.cli.error('No IDs provided');
+		process.exit(1);
 	}
 }
 
@@ -124,13 +134,7 @@ export const fetchNewCommand = defineToolCommand(
 			const dbPath = p.derived.database;
 			const inputIds = parseInputIds(args.ids);
 
-			if (inputIds.length === 0) {
-				if (jsonMode) {
-					fail('fetch', 'VALIDATION_ERROR', 'No IDs provided', 'Provide comma-separated portal IDs', start);
-				}
-				log.cli.error('No IDs provided');
-				process.exit(1);
-			}
+			validateInputIds(inputIds, jsonMode, start);
 
 			try {
 				resetConfigCache();
@@ -143,22 +147,28 @@ export const fetchNewCommand = defineToolCommand(
 				const existing = loadExisting(dbPath);
 				const { fetched, failed, newListings } = await fetchListings(inputIds, { skipImages: args['skip-images'], skipEpc: args['skip-epc'], region: args.region });
 
+				// Deduplicate: carry over persistent fields from existing listings to re-fetched ones
 				const merged = [...existing.listings, ...newListings];
-				const scored = scoreListingsWithConfig(merged, config as unknown as Record<string, unknown>);
+				const { uniqueListings, removed, replaced } = deduplicateListings(merged);
+				if (removed > 0) {
+					log.cli.warn('Duplicate listings resolved before save', { removed, replaced, remaining: uniqueListings.length });
+				}
+
+				const scored = scoreListingsWithConfig(uniqueListings, config as unknown as Record<string, unknown>);
 				recalcAssessedScores(scored);
 				updateFetchedScores(fetched, scored);
 
-				const output: ListingsFile = {
-					updatedAt: new Date().toISOString(),
-					searchUrls: existing.searchUrls,
-					locations: existing.locations,
-					lastSearchTotal: existing.lastSearchTotal,
-					listings: scored,
-				};
+				// Partition scored listings into new inserts vs updated re-fetches
+				const existingIds = new Set(existing.listings.map((l) => l.id));
+				const trulyNew = scored.filter((l) => !existingIds.has(l.id));
+				// Re-fetched listings have the same UUID (carried over by deduplicateListings)
+				// but contain fresh data that must be written back
+				const inputRightmoveIds = new Set(inputIds);
+				const updated = scored.filter((l) => existingIds.has(l.id) && l.portalIds.rightmove != null && inputRightmoveIds.has(l.portalIds.rightmove));
 
 				let saveError: string | undefined;
 				try {
-					await saveListingsFile(output);
+					upsertListings(dbPath, trulyNew, updated, scored, { updatedAt: new Date().toISOString(), lastSearchTotal: existing.lastSearchTotal }, existing.searchUrls, existing.locations);
 				} catch (error) {
 					saveError = error instanceof Error ? error.message : String(error);
 					log.cli.error(`Save failed: ${saveError}`);
