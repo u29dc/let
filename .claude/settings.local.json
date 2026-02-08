@@ -1,6 +1,7 @@
 {
 	"permissions": {
 		"allow": [
+			"Skill(let)",
 			"Bash(let:*)",
 			"Bash(bin/let:*)",
 

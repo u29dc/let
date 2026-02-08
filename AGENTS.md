@@ -80,7 +80,7 @@ This is an **agent-native CLI toolbelt**. The `let` binary exposes atomic, compo
 │   └── sources/                     # individual source builders (broadband, postcodes, etc.)
 ├── .let/
 │   ├── cache/                       # {portalId}/data.json, images, maps (gitignored)
-│   ├── data/                        # let.db, let.db.bak, let.db.json, let.config.toml
+│   ├── data/                        # let.db, let.db.bak, let.db.json, let.config.toml, let.context.md
 │   └── sources/                     # *.db source databases (gitignored, built by build:sources)
 ├── .claude/
 │   └── skills/
@@ -222,10 +222,10 @@ Domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTI
 
 ### Infrastructure Commands (not in registry)
 
-| Command          | Description                              |
-| ---------------- | ---------------------------------------- |
-| `let tools`      | Capability discovery from registry       |
-| `let health`     | Prerequisite checks with remediation     |
+| Command      | Description                          |
+| ------------ | ------------------------------------ |
+| `let tools`  | Capability discovery from registry   |
+| `let health` | Prerequisite checks with remediation |
 
 ### Common Flags
 

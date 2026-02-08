@@ -4,7 +4,7 @@ Error codes returned in the JSON envelope `error.code` field when `ok: false`.
 
 | Code               | Meaning                          | Recovery Action                                                             |
 | ------------------ | -------------------------------- | --------------------------------------------------------------------------- |
-| `NO_CONFIG`        | Config file not found            | Create from `templates/config.toml`. See `references/init.md`.              |
+| `NO_CONFIG`        | Config file not found            | Create from `templates/let.config.toml`. See `references/init.md`.          |
 | `NO_SOURCES`       | Source databases missing         | Proceed degraded or build from repo. See `references/init.md`.              |
 | `NO_DATABASE`      | Listings DB not found            | Normal on first run. Fetch creates the DB automatically.                    |
 | `SCHEMA_MISMATCH`  | DB schema incompatible           | Delete the database file and re-fetch. Schema has changed.                  |

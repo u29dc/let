@@ -4,12 +4,12 @@ Full pipeline protocol for the `let` CLI. Follow these phases in order. All comm
 
 > All examples use `bin/let` -- the compiled binary at the repo root. Build with `bun run build:cli` if missing.
 
-## Core principles
+## Principles
 
-- **Config is the baseline**: use it as the default preference set.
-- **Overrides are explicit**: for ad-hoc requests (new city, flats vs houses, relaxing garden), prefer one-off CLI flags rather than editing config. Always report overrides in the final output and do not persist them unless asked.
-- **Scores are advisory**: use algorithmic scores for triage; apply judgment based on photos, layout, and neighborhood research.
-- **Deterministic contracts**: every `--json` command outputs exactly one JSON envelope to stdout.
+- **Config is the baseline** -- use it as the default preference set
+- **Overrides are explicit** -- for ad-hoc requests (new city, flats vs houses, relaxing garden), prefer one-off CLI flags rather than editing config. Always report overrides in the final output and do not persist them unless asked
+- **Scores are advisory** -- use algorithmic scores for triage; apply judgment based on photos, layout, and neighborhood research
+- **Deterministic contracts** -- every `--json` command outputs exactly one JSON envelope to stdout
 
 ## Phase 0: Orient (always)
 
@@ -36,12 +36,10 @@ Used for prompts like:
 - "compare Manchester, Liverpool, Sheffield"
 - "flats around York within ~30 min of York city centre"
 
-Rules:
+Prefer CLI overrides -- do not edit config unless there is no tool support. Always record in your final report:
 
-- Prefer CLI overrides. Do not edit config unless there is no tool support.
-- Always record in your final report:
-    - `Overrides applied:` (bullet list)
-    - `What stayed from config:` (short bullet list)
+- `Overrides applied:` (bullet list)
+- `What stayed from config:` (short bullet list)
 
 Available override flags for `search discover`:
 
@@ -60,7 +58,7 @@ For fetch: `--region <name>` assigns region to fetched listings (use displayName
 
 ## Phase 2: Discover
 
-Definition: **"new listings" = portal IDs not present in the SQLite DB yet**.
+**New listings** -- portal IDs not present in the SQLite DB yet.
 
 ```bash
 bin/let search discover --json
@@ -76,10 +74,7 @@ bin/let fetch <sheffield-ids> --region Sheffield --json
 bin/let fetch <stamford-ids> --region Stamford --json
 ```
 
-Guidance:
-
-- If DB is empty, `diff.new` may be "everything." Start by fetching a small sample first (5-10) to calibrate.
-- Prefer repeated small loops over one giant run: discover, diff, fetch, triage, repeat.
+If DB is empty, `diff.new` may be "everything." Start by fetching a small sample first (5-10) to calibrate. Prefer repeated small loops over one giant run: discover, diff, fetch, triage, repeat.
 
 ## Phase 3: Acquire (fetch + enrich + score + persist)
 
@@ -87,16 +82,9 @@ Guidance:
 bin/let fetch <new-ids> --json
 ```
 
-Batching guidance:
+**Batching** -- start with batches of **5-10** IDs for fast feedback, then increase to **10-15** once stable. If you see rate limiting, increase delay and retry once (do not spam). Treat missing/removed listings as normal; skip after one retry if clearly permanent.
 
-- Start with batches of **5-10** IDs for fast feedback, then increase to **10-15** once stable.
-- If you see rate limiting, increase delay and retry once (do not spam).
-- Treat missing/removed listings as normal; skip after one retry if clearly permanent.
-
-Failure handling:
-
-- If some IDs fail, continue the run.
-- If media is missing (images skipped or not cached), mark the assessment as lower confidence or re-fetch just the top 1-2 without skipping media.
+**Failure handling** -- if some IDs fail, continue the run. If media is missing (images skipped or not cached), mark the assessment as lower confidence or re-fetch just the top 1-2 without skipping media.
 
 ## Phase 4: Triage (ranked overview)
 
@@ -106,9 +94,9 @@ bin/let view list --top 30 --json
 
 Suggested triage tiers (algorithm score):
 
-- **>= 80**: must assess
-- **65-79**: assess if time permits
-- **< 65**: skip unless a specific feature is compelling
+- **>= 80** -- must assess
+- **65-79** -- assess if time permits
+- **< 65** -- skip unless a specific feature is compelling
 
 Prefer to assess a smaller number deeply (2-5) rather than shallowly reviewing 30.
 
@@ -123,9 +111,9 @@ bin/let assess context <id> --json
 
 How to use assessment context correctly:
 
-- Do **not** guess cache paths.
-- Use the `media.*` paths returned by `assess context` to locate images/maps/floorplans (those paths are the source of truth).
-- Use the included assessment schema as your contract for submission fields.
+- Do **not** guess cache paths
+- Use the `media.*` paths returned by `assess context` to locate images/maps/floorplans (those paths are the source of truth)
+- Use the included assessment schema as your contract for submission fields
 
 What to look for:
 
@@ -143,9 +131,9 @@ bin/let assess submit <id> '<assessment-json>' --json
 
 Assessment rules:
 
-- Keep it evidence-based.
-- If you adjust the score, explain why in 1-2 sentences.
-- If media was missing, state that and lower confidence.
+- Keep it evidence-based
+- If you adjust the score, explain why in 1-2 sentences
+- If media was missing, state that and lower confidence
 
 ### Batch assessment via parallel subagents (optional)
 
@@ -199,15 +187,15 @@ Columns surface the key decision factors: price, neighbourhood safety, deprivati
     - Average score and "best value" examples
     - A short verdict per region (fit vs tradeoffs)
 
-## Common intent mappings
+## Intent mappings
 
-- **"Top 5 new homes"**: Baseline mode. Discover, diff, fetch new (small batches), triage, assess top 2-3, report top 5.
+- **"Top 5 new homes"** -- baseline mode. Discover, diff, fetch new (small batches), triage, assess top 2-3, report top 5
 
-- **"Compare Manchester, Liverpool, Sheffield"**: Override mode. For each city: resolve, discover, fetch small sample, triage, produce region summary, compare.
+- **"Compare Manchester, Liverpool, Sheffield"** -- override mode. For each city: resolve, discover, fetch small sample, triage, produce region summary, compare
 
-- **"Flats around York, ~30 min drive to city centre"**: Override mode (property type = flats). Use available location tools to discover surrounding towns and compare. If no travel-time primitive exists, approximate and label it as an approximation.
+- **"Flats around York, ~30 min drive to city centre"** -- override mode (property type = flats). Use available location tools to discover surrounding towns and compare. If no travel-time primitive exists, approximate and label it as an approximation
 
-## Error recovery
+## Errors
 
 | Error Code         | Action                                                                                      |
 | ------------------ | ------------------------------------------------------------------------------------------- |
