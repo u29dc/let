@@ -57,10 +57,10 @@ Unblocks after: LET-014..024 (Stage 2 commands registered via defineToolCommand)
 | [x]  | LET-040 | Add CI matrix for Linux + macOS                                           | Testing + CI section                                               | CI builds, runs unit/contract tests, builds binary, runs smoke tests for tools/health in `--json`                                |
 | [x]  | LET-041 | Cleanup: remove legacy CLI commands and files                             | Stage 6                                                            | Legacy entrypoints removed; only new surface remains; `tools` shows only new commands                                            |
 | [x]  | LET-042 | Cleanup: remove obsolete imports/constants/path helpers                   | Stage 6                                                            | No dead path code remains; everything uses shared `@let/core/paths`                                                              |
-| [ ]  | LET-043 | Binary smoke tests in installed-binary mode paths                         | Stage 6 + Pathing                                                  | `bin/let health --json` works from arbitrary directory; resolved OS paths correct                                                |
-| [ ]  | LET-044 | Add `/let` skill file for Claude Code                                     | Stage 7 · `.claude/commands/let.md`                                | Skill implements orient→discover→diff→fetch→triage→context→assess→report loop; includes recovery table                           |
-| [ ]  | LET-045 | Update repo docs (`CLAUDE.md`) to reflect new toolbelt                    | Stage 7                                                            | Docs list new surface, how to run, how to bootstrap sources, how to verify                                                       |
-| [ ]  | LET-046 | Add optional live E2E verification notes (network-enabled)                | Web access note + Testing                                          | Document a live run procedure; keep CI deterministic; include rate-limit guidance                                                |
+| [x]  | LET-043 | Binary smoke tests in installed-binary mode paths                         | Stage 6 + Pathing                                                  | `bin/let health --json` works from arbitrary directory; resolved OS paths correct                                                |
+| [x]  | LET-044 | Add `/let` skill file for Claude Code                                     | Stage 7 · `.claude/commands/let.md`                                | Skill implements orient→discover→diff→fetch→triage→context→assess→report loop; includes recovery table                           |
+| [x]  | LET-045 | Update repo docs (`CLAUDE.md`) to reflect new toolbelt                    | Stage 7                                                            | Docs list new surface, how to run, how to bootstrap sources, how to verify                                                       |
+| [x]  | LET-046 | Add optional live E2E verification notes (network-enabled)                | Web access note + Testing                                          | Document a live run procedure; keep CI deterministic; include rate-limit guidance                                                |
 
 ## Update Log (append-only)
 
@@ -77,3 +77,5 @@ Unblocks after: LET-014..024 (Stage 2 commands registered via defineToolCommand)
 - 2026-02-08T05:00Z LET-039 a7a12f7 Contract tests: 13 JSON envelope tests validating stdout purity and shape
 - 2026-02-08T05:10Z LET-040 2a2f6fd CI matrix: quality (ubuntu+macos) and smoke (build binary, verify JSON) jobs
 - 2026-02-08T05:30Z LET-041..042 7e09266 Legacy cleanup: remove assess.ts, fetch.ts, help.ts, output/, enrich.ts, shared.ts
+- 2026-02-08T05:45Z LET-043 1bdc6e6 Binary smoke tests: 7 tests verify compiled binary from arbitrary dir
+- 2026-02-08T06:00Z LET-044..046 f2a7254 Skill file, CLAUDE.md update, live E2E notes, assess/summarize syntax
