@@ -1,0 +1,73 @@
+{
+	"permissions": {
+		"allow": [
+			"Bash(bin/let:*)",
+			"Bash(bun:*)",
+			"Bash(git:*)",
+			"Bash(rg:*)",
+			"Bash(sed:*)",
+			"Bash(awk:*)",
+			"Bash(cat:*)",
+			"Bash(ls:*)",
+			"Bash(cp:*)",
+			"Bash(mkdir:*)",
+			"Bash(mktemp:*)",
+
+			"WebFetch(domain:rightmove.co.uk)",
+			"WebFetch(domain:www.rightmove.co.uk)",
+			"WebFetch(domain:media.rightmove.co.uk)",
+
+			"WebFetch(domain:epc.opendatacommunities.org)",
+			"WebFetch(domain:guides.opendatacommunities.org)",
+
+			"WebFetch(domain:api.notion.com)",
+			"WebFetch(domain:www.notion.so)",
+			"WebFetch(domain:developers.notion.com)",
+
+			"WebFetch(domain:api.mapbox.com)",
+			"WebFetch(domain:docs.mapbox.com)",
+
+			"WebFetch(domain:api.postcodes.io)",
+			"WebFetch(domain:postcodes.io)",
+
+			"WebFetch(domain:data.police.uk)",
+
+			"WebFetch(domain:www.ofsted.gov.uk)",
+			"WebFetch(domain:reports.ofsted.gov.uk)",
+			"WebFetch(domain:get-information-schools.service.gov.uk)",
+			"WebFetch(domain:find-school-performance-data.service.gov.uk)",
+			"WebFetch(domain:find-and-use-an-api.education.gov.uk)",
+
+			"WebFetch(domain:www.nationalrail.co.uk)",
+			"WebFetch(domain:tfl.gov.uk)",
+			"WebFetch(domain:api.tfl.gov.uk)",
+
+			"WebFetch(domain:www.gov.uk)",
+			"WebFetch(domain:www.api.gov.uk)",
+			"WebFetch(domain:api.gov.uk)",
+			"WebFetch(domain:www.ons.gov.uk)",
+			"WebFetch(domain:developer.ons.gov.uk)",
+			"WebFetch(domain:geoportal.statistics.gov.uk)",
+			"WebFetch(domain:www.nomisweb.co.uk)",
+
+			"WebFetch(domain:environment.data.gov.uk)",
+			"WebFetch(domain:landregistry.data.gov.uk)",
+			"WebFetch(domain:use-land-property-data.service.gov.uk)",
+			"WebFetch(domain:landregistry.github.io)",
+
+			"WebFetch(domain:planning.data.gov.uk)",
+			"WebFetch(domain:www.planning.data.gov.uk)",
+
+			"WebFetch(domain:transportapi.com)",
+			"WebFetch(domain:api.transportapi.com)",
+
+			"WebFetch(domain:api.thinkbroadband.com)",
+			"WebFetch(domain:thinkbroadband.com)",
+
+			"WebFetch(domain:naptan.api.dft.gov.uk)",
+			"WebFetch(domain:wiki.openraildata.com)",
+			"WebFetch(domain:www.movable-type.co.uk)",
+			"WebFetch(domain:www.datawharf.io)"
+		]
+	}
+}

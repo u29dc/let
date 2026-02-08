@@ -26,6 +26,7 @@ bin/
 .cache/
 .claude/*
 !.claude/commands/
+!.claude/settings.local.json
 sources/db/
 sources/**/*.db-*
 data/
