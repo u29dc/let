@@ -276,7 +276,7 @@ function statusLabel(status: string): string {
 
 function printTextOutput(p: ReturnType<typeof paths>, checks: HealthCheck[], status: string, summary: { ok: number; blocking: number; degraded: number }): void {
 	log.cli.info(`Health: ${statusLabel(status)}`);
-	log.cli.info(`Paths: config=${p.resolved.config} data=${p.resolved.data} cache=${p.resolved.cache} sources=${p.resolved.sources} isDev=${p.resolved.isDev}`);
+	log.cli.info(`Paths: config=${p.resolved.config} data=${p.resolved.data} cache=${p.resolved.cache} sources=${p.resolved.sources}`);
 	for (const check of checks) printCheck(check);
 	log.cli.info(`Summary: ${summary.ok} ok, ${summary.blocking} blocking, ${summary.degraded} degraded`);
 }
@@ -307,7 +307,7 @@ export const healthCommand = defineCommand({
 		if (jsonMode) {
 			const data = {
 				status,
-				paths: { config: p.resolved.config, data: p.resolved.data, cache: p.resolved.cache, sources: p.resolved.sources, isDev: p.resolved.isDev },
+				paths: { config: p.resolved.config, data: p.resolved.data, cache: p.resolved.cache, sources: p.resolved.sources },
 				checks,
 				summary,
 			};

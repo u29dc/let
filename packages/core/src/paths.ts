@@ -7,14 +7,11 @@
  * Precedence (highest to lowest):
  *  1. CLI flags (PathOverrides)
  *  2. Category env vars (LET_DATA_DIR, LET_CONFIG_DIR, etc.)
- *  3. Dev mode detection (monorepo root via package.json marker)
- *  4. Binary location detection (compiled binary in {skill}/.let/bin/)
- *  5. OS defaults (XDG on Linux, ~/Library on macOS)
+ *  3. LET_HOME or TOOLS_HOME env var, defaulting to ~/.tools/let
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,12 +33,10 @@ export interface ResolvedPaths {
 	cache: string;
 	/** Directory containing *.db source databases */
 	sources: string;
-	/** True when running from monorepo checkout */
-	isDev: boolean;
 }
 
 export interface DerivedPaths {
-	/** Config file path (let.config.toml in dev, config.toml installed) */
+	/** Config file path (let.config.toml) */
 	configFile: string;
 	/** Template config file path (dev only) */
 	templateFile: string;
@@ -62,91 +57,6 @@ export interface DerivedPaths {
 }
 
 // ---------------------------------------------------------------------------
-// Dev mode detection
-// ---------------------------------------------------------------------------
-
-/**
- * Walk up from startDir (max levels) looking for a package.json with
- * name "let" and a workspaces field. Returns the monorepo root or null.
- */
-function detectMonorepoRoot(startDir: string, maxLevels = 5): string | null {
-	let dir = startDir;
-	for (let i = 0; i < maxLevels; i++) {
-		const pkgPath = join(dir, 'package.json');
-		if (existsSync(pkgPath)) {
-			try {
-				const raw = readFileSync(pkgPath, 'utf-8');
-				const pkg = JSON.parse(raw) as Record<string, unknown>;
-				if (pkg['name'] === 'let' && pkg['workspaces']) {
-					return dir;
-				}
-			} catch {
-				// Ignore parse errors
-			}
-		}
-		const parent = join(dir, '..');
-		if (parent === dir) break; // filesystem root
-		dir = parent;
-	}
-	return null;
-}
-
-// ---------------------------------------------------------------------------
-// Binary location detection (skill package)
-// ---------------------------------------------------------------------------
-
-/**
- * When running as a compiled binary at {skill}/.let/bin/let_*, detect the
- * .let/ directory by walking two levels up: bin/ -> .let/ -> {skill}/.
- * Validates that {skill}/SKILL.md exists. Returns the .let/ directory or null.
- *
- * Safety: non-compiled Bun's execPath points to ~/.bun/bin/bun (no .let parent),
- * and the monorepo bin/let binary's parent has package.json (no SKILL.md),
- * so detection falls through in both cases.
- */
-function detectBinaryHome(): string | null {
-	const binDir = dirname(process.execPath);
-	if (basename(binDir) !== 'bin') return null;
-	const dotLet = dirname(binDir);
-	if (basename(dotLet) !== '.let') return null;
-	const skillRoot = dirname(dotLet);
-	if (existsSync(join(skillRoot, 'SKILL.md'))) return dotLet;
-	return null;
-}
-
-// ---------------------------------------------------------------------------
-// OS defaults
-// ---------------------------------------------------------------------------
-
-function linuxDefaults(): { config: string; data: string; cache: string; sources: string } {
-	const home = homedir();
-	const configHome = process.env['XDG_CONFIG_HOME'] || join(home, '.config');
-	const dataHome = process.env['XDG_DATA_HOME'] || join(home, '.local', 'share');
-	const cacheHome = process.env['XDG_CACHE_HOME'] || join(home, '.cache');
-	return {
-		config: join(configHome, 'let'),
-		data: join(dataHome, 'let'),
-		cache: join(cacheHome, 'let'),
-		sources: join(dataHome, 'let', 'sources'),
-	};
-}
-
-function darwinDefaults(): { config: string; data: string; cache: string; sources: string } {
-	const home = homedir();
-	const appSupport = join(home, 'Library', 'Application Support', 'let');
-	return {
-		config: appSupport,
-		data: appSupport,
-		cache: join(home, 'Library', 'Caches', 'let'),
-		sources: join(appSupport, 'sources'),
-	};
-}
-
-function osDefaults(): { config: string; data: string; cache: string; sources: string } {
-	return platform() === 'darwin' ? darwinDefaults() : linuxDefaults();
-}
-
-// ---------------------------------------------------------------------------
 // Resolution
 // ---------------------------------------------------------------------------
 
@@ -158,7 +68,7 @@ function resolveAbsoluteOrCwd(value: string): string {
  * Build derived paths from resolved directories.
  */
 function buildDerived(resolved: ResolvedPaths): DerivedPaths {
-	const configFileName = resolved.isDev ? 'let.config.toml' : 'config.toml';
+	const configFileName = 'let.config.toml';
 	return {
 		configFile: join(resolved.config, configFileName),
 		templateFile: join(resolved.config, 'let.config.template.toml'),
@@ -187,38 +97,18 @@ let cached: { resolved: ResolvedPaths; derived: DerivedPaths } | null = null;
 type DirSet = { config: string; data: string; cache: string; sources: string };
 
 /**
- * Compute base defaults from dev detection, binary location, or OS conventions.
+ * Compute base defaults from LET_HOME / TOOLS_HOME, defaulting to ~/.tools/let.
  */
-function resolveDefaults(): { defaults: DirSet; isDev: boolean } {
-	const monorepoRoot = detectMonorepoRoot(process.cwd());
-	const isDev = monorepoRoot !== null;
-
-	if (isDev && monorepoRoot) {
-		return {
-			defaults: {
-				config: join(monorepoRoot, '.let', 'data'),
-				data: join(monorepoRoot, '.let', 'data'),
-				cache: join(monorepoRoot, '.let', 'cache'),
-				sources: join(monorepoRoot, '.let', 'sources'),
-			},
-			isDev,
-		};
-	}
-
-	const binaryHome = detectBinaryHome();
-	if (binaryHome) {
-		return {
-			defaults: {
-				config: join(binaryHome, 'data'),
-				data: join(binaryHome, 'data'),
-				cache: join(binaryHome, 'cache'),
-				sources: join(binaryHome, 'sources'),
-			},
-			isDev: false,
-		};
-	}
-
-	return { defaults: osDefaults(), isDev: false };
+function resolveDefaults(): { defaults: DirSet } {
+	const letHome = process.env['LET_HOME'] || join(process.env['TOOLS_HOME'] || join(homedir(), '.tools'), 'let');
+	return {
+		defaults: {
+			config: join(letHome, 'data'),
+			data: join(letHome, 'data'),
+			cache: join(letHome, 'cache'),
+			sources: join(letHome, 'sources'),
+		},
+	};
 }
 
 /**
@@ -237,7 +127,7 @@ function envOrDefault(envKey: string, fallback: string): string {
 export function resolvePaths(overrides?: PathOverrides): { resolved: ResolvedPaths; derived: DerivedPaths } {
 	if (cached && !overrides) return cached;
 
-	const { defaults, isDev } = resolveDefaults();
+	const { defaults } = resolveDefaults();
 
 	// Apply category env vars over defaults
 	const resolved: ResolvedPaths = {
@@ -245,7 +135,6 @@ export function resolvePaths(overrides?: PathOverrides): { resolved: ResolvedPat
 		data: envOrDefault('LET_DATA_DIR', defaults.data),
 		cache: envOrDefault('LET_CACHE_DIR', defaults.cache),
 		sources: envOrDefault('LET_SOURCES_DIR', defaults.sources),
-		isDev,
 	};
 
 	// Apply CLI flag overrides (highest priority)

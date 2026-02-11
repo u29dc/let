@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod/v4';
+import { paths } from '../paths.js';
 import { log } from '../utils/logger.js';
 import type { Config, ScoringConfig } from './types.js';
 import { RIGHTMOVE_SEARCH_TYPES } from './types.js';
@@ -330,7 +331,7 @@ export function parseScoringConfig(rawConfig: Record<string, unknown>): ScoringC
  * Standalone loader when only scoring config is needed.
  */
 export async function loadScoringConfig(configPath?: string): Promise<ScoringConfig> {
-	const path = configPath ?? `${process.cwd()}/data/let.config.toml`;
+	const path = configPath ?? paths().derived.configFile;
 
 	try {
 		const file = Bun.file(path);

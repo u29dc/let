@@ -8,7 +8,7 @@
 import type { Database } from 'bun:sqlite';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, readdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 // ============================================================================
@@ -16,7 +16,13 @@ import { join, resolve } from 'node:path';
 // ============================================================================
 
 export const ROOT = resolve(import.meta.dirname, '..');
-export const SOURCES_DIR = join(ROOT, '.let', 'sources');
+
+function resolveSourcesDir(): string {
+	const letHome = process.env['LET_HOME'] || join(process.env['TOOLS_HOME'] || join(homedir(), '.tools'), 'let');
+	return join(letHome, 'sources');
+}
+
+export const SOURCES_DIR = resolveSourcesDir();
 
 // ============================================================================
 // Formatting

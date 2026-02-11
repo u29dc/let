@@ -57,7 +57,6 @@ describe('health command', () => {
 		expect(data.paths).toHaveProperty('data');
 		expect(data.paths).toHaveProperty('cache');
 		expect(data.paths).toHaveProperty('sources');
-		expect(typeof data.paths.isDev).toBe('boolean');
 
 		// Checks
 		expect(Array.isArray(data.checks)).toBe(true);

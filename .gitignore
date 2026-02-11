@@ -5,6 +5,7 @@ node_modules/
 dist/
 build/
 bin/
+/let
 *.bun-build
 *.tsbuildinfo
 .biome

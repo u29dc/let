@@ -6,9 +6,9 @@
  *
  * Covers:
  * 1. Binary exists after build
- * 2. `bin/let tools --json` returns valid envelope from arbitrary cwd
- * 3. `bin/let health --json` returns valid envelope from arbitrary cwd
- * 4. `bin/let config show --json` works with explicit LET_DATA_DIR
+ * 2. `let tools --json` returns valid envelope from arbitrary cwd
+ * 3. `let health --json` returns valid envelope from arbitrary cwd
+ * 4. `let config show --json` works with explicit LET_DATA_DIR
  * 5. JSON envelope structure is correct (ok, meta.tool, meta.elapsed)
  */
 
@@ -18,28 +18,33 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const PROJECT_ROOT = join(import.meta.dirname, '..', '..', '..');
-const BINARY_PATH = join(PROJECT_ROOT, 'bin', 'let');
 
 // Arbitrary temp directory to run from (NOT inside the monorepo)
 const WORK_DIR = join(tmpdir(), `let-smoke-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 const DATA_DIR = join(WORK_DIR, 'data');
+const BINARY_PATH = join(WORK_DIR, 'let');
 
 // ---------------------------------------------------------------------------
 // Setup: build binary + create temp fixture
 // ---------------------------------------------------------------------------
 
 beforeAll(() => {
-	// Build binary
-	const build = Bun.spawnSync(['bun', 'run', 'build:cli'], { cwd: PROJECT_ROOT });
+	// Create temp directory first so build can write binary there
+	mkdirSync(DATA_DIR, { recursive: true });
+
+	// Build binary into WORK_DIR via LET_HOME
+	const build = Bun.spawnSync(['bun', 'run', 'build:cli'], {
+		cwd: PROJECT_ROOT,
+		env: { ...process.env, LET_HOME: WORK_DIR },
+	});
 	if (build.exitCode !== 0) {
 		throw new Error(`Binary build failed: ${build.stderr.toString()}`);
 	}
 
-	// Create temp directory with minimal config
-	// In installed (non-dev) mode, config file is named config.toml
-	mkdirSync(DATA_DIR, { recursive: true });
+	// Write minimal config fixture
+	// Config file is always named let.config.toml
 	writeFileSync(
-		join(DATA_DIR, 'config.toml'),
+		join(DATA_DIR, 'let.config.toml'),
 		`
 [search]
 locations = [{ id = "REGION^1234", name = "TestCity" }]
@@ -123,7 +128,7 @@ afterAll(() => {
 function runBinary(args: string[], env?: Record<string, string>): { stdout: string; stderr: string; exitCode: number } {
 	const result = Bun.spawnSync([BINARY_PATH, ...args], {
 		cwd: WORK_DIR,
-		env: { ...process.env, ...env },
+		env: { ...process.env, LET_HOME: WORK_DIR, ...env },
 	});
 	return {
 		stdout: result.stdout.toString().trim(),
