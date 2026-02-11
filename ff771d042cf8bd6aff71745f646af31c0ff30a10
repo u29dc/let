@@ -1,0 +1,50 @@
+packages/core/src/paths.ts
+  9023b80323b3545c 10,100,103,106-109
+packages/core/src/config/loader.ts
+  9023b80323b3545c 9,334
+scripts/utils.ts
+  9023b80323b3545c 11,19-25
+packages/cli/tests/binary-smoke.test.ts
+  9023b80323b3545c 9-11,25,32-35,37-38,44-45,47,131
+.gitignore
+  cda3777d18370909 8
+packages/core/tests/paths.test.ts
+  9023b80323b3545c 5,8-9,13-14,18-19,26-32,36-37,41-52,54-56,59,61-63,68-69,75,81,87,93,100,106,112,118
+packages/cli/src/commands/health/index.ts
+  9023b80323b3545c 279,310
+package.json
+  9023b80323b3545c 19,21-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.1",
+  "base_commit_sha": "ff771d042cf8bd6aff71745f646af31c0ff30a10",
+  "prompts": {
+    "9023b80323b3545c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1eac866c-1b4d-4dee-9cf3-6ee1493d8ad6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Han <han@u29dc.com>",
+      "messages": [],
+      "total_additions": 105,
+      "total_deletions": 168,
+      "accepted_lines": 91,
+      "overriden_lines": 0
+    },
+    "cda3777d18370909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e70eb753-aa77-44ce-a15a-c365b4d4964f",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Han <han@u29dc.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
