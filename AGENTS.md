@@ -1,337 +1,193 @@
-## 1. Philosophy
+## 1. Documentation
 
-This is an **agent-native CLI toolbelt**. The `let` binary exposes atomic, composable primitives that an AI agent orchestrates via a single `/let` skill. The agent discovers listings, fetches selectively, triages by score, deep-dives top candidates with photo/map analysis, writes assessments, and produces a final report. No human sequencing required.
+- Purpose: run `let` as an agent-native property search toolbelt; compose primitives and keep decisions in the agent.
+- Source priority: executable contracts first, then code, then prose.
+- Runtime truth commands:
+    - `:let tools --json`
+    - `:let health --json`
+    - `:let config show --json`
+- JSON-mode contract: in `--json` mode, write exactly one envelope JSON object to stdout and write logs only to stderr.
+- Agent skill entry: `.claude/skills/let/SKILL.md`.
+- Core references:
+    - Runtime: `https://bun.sh/docs/llms.txt`
+    - Validation: `https://zod.dev/llms.txt`
+    - EPC: `https://epc.opendatacommunities.org/docs/api`
+    - Postcodes: `https://postcodes.io/docs`
+    - Notion: `https://developers.notion.com/llms.txt`
+    - Mapbox: `https://docs.mapbox.com/llms.txt`
 
-**Key principles**:
+## 2. Repository Structure
 
-- **Primitives, not workflows**: each command does one thing. The agent composes `search discover` + `search diff` + `fetch <ids>` instead of a monolithic batch fetch
-- **Judgment stays with the agent**: scoring and enrichment are deterministic; the agent adds value through photo analysis, neighborhood research, and tradeoff reasoning
-- **Structured contracts**: every command supports `--json` outputting exactly one JSON envelope to stdout. Stderr is for logs only. The agent reads stdout, ignores stderr
-- **Self-describing**: `let tools --json` returns the full catalog with parameters, examples, and output fields. `let health --json` reports prerequisites with fix commands
-
-## 2. Documentation
-
-- **Runtime**: [`bun.com/llms.txt`](https://bun.com/llms.txt)
-- **Libraries**: [`zod.dev/llms.txt`](https://zod.dev/llms.txt)
-- **APIs**: [`epc.opendatacommunities.org/docs/api`](https://epc.opendatacommunities.org/docs/api), [`postcodes.io/docs`](https://postcodes.io/docs), [`developers.notion.com/llms.txt`](https://developers.notion.com/llms.txt), [`docs.mapbox.com/llms.txt`](https://docs.mapbox.com/llms.txt)
-
-## 3. Repository Structure
-
-```
+```text
 .
-├── bin/
-│   └── let                          # compiled CLI binary (bun run build:cli)
+├── $LET_HOME/let (compiled binary)
 ├── packages/
-│   ├── cli/
-│   │   ├── src/
-│   │   │   ├── index.ts             # citty root: 10 subcommand groups
-│   │   │   ├── envelope.ts          # JSON envelope: ok()/fail()/isJsonMode()
-│   │   │   ├── tool.ts              # defineToolCommand() + toolRegistry[]
-│   │   │   ├── output/
-│   │   │   │   └── index.ts         # Terminal formatters (human-readable mode)
-│   │   │   └── commands/
-│   │   │       ├── shared-read.ts   # Read-only utilities (DB loading, paths)
-│   │   │       ├── shared-write.ts  # Write utilities (processListing, save)
-│   │   │       ├── assess/          # candidates, context, submit
-│   │   │       ├── config/          # show, validate
-│   │   │       ├── export/          # json, notion
-│   │   │       ├── fetch/           # fetch by portal IDs
-│   │   │       ├── health/          # prerequisite checks + remediation
-│   │   │       ├── ops/             # prune, verify
-│   │   │       ├── score/           # explain, compute
-│   │   │       ├── search/          # resolve, discover, diff
-│   │   │       ├── tools/           # capability discovery
-│   │   │       └── view/            # list, detail
-│   │   └── tests/
-│   │       ├── contract.test.ts     # JSON envelope contracts (13 tests)
-│   │       ├── parity-gate.test.ts  # E2E loop test (13 steps)
-│   │       └── binary-smoke.test.ts # Compiled binary tests (7 tests)
-│   └── core/
-│       ├── src/
-│       │   ├── index.ts
-│       │   ├── paths.ts             # Cross-platform path resolution (shared)
-│       │   ├── schema/
-│       │   │   ├── assessment.ts
-│       │   │   ├── listing.ts
-│       │   │   ├── search.ts
-│       │   │   └── index.ts
-│       │   ├── db/
-│       │   │   ├── index.ts
-│       │   │   └── schema.sql
-│       │   ├── pipeline/
-│       │   │   ├── index.ts
-│       │   │   ├── fetch/           # api.ts, html.ts, images.ts, maps.ts
-│       │   │   ├── parse/           # extract.ts, sanitize.ts
-│       │   │   ├── enrich/          # area.ts, broadband.ts, epc.ts, notes/
-│       │   │   ├── score/           # aggregate, composites, confidence, factors/, math/, penalties, regions
-│       │   │   ├── assess/          # scoring.ts, normalize.ts
-│       │   │   ├── view/            # formatters for table rows
-│       │   │   └── output/          # notion.ts export logic
-│       │   ├── config/              # loader.ts, types.ts
-│       │   └── utils/               # http.ts, logger.ts, terminal.ts
-│       └── tests/
-│           ├── sources.test.ts      # Source database schema validation (10 DBs)
-│           ├── paths.test.ts        # Path resolution tests
-│           └── ...                  # Unit tests for core modules
-├── scripts/
-│   ├── utils.ts                     # shared build utilities (progress, download, CSV, batch insert)
-│   ├── build-skill.ts               # cross-platform skill binary compiler
-│   ├── build-sources.ts             # parallel subprocess orchestrator with TUI
-│   └── sources/                     # individual source builders (broadband, postcodes, etc.)
-├── .let/
-│   ├── cache/                       # {portalId}/data.json, images, maps (gitignored)
-│   ├── data/                        # let.db, let.db.bak, let.db.json, let.config.toml, let.context.md
-│   └── sources/                     # *.db source databases (gitignored, built by build:sources)
-├── .claude/
-│   └── skills/
-│       └── let/                     # Agent Skill: autonomous search pipeline
-├── .env                             # API keys (EPC_API_KEY, NOTION_API_KEY, MAPBOX_ACCESS_TOKEN)
-├── package.json
-├── biome.json
-├── tsconfig.json
-├── commitlint.config.js
-└── lint-staged.config.js
+│   ├── cli/src/
+│   │   ├── index.ts
+│   │   ├── main.ts
+│   │   ├── envelope.ts
+│   │   ├── tool.ts
+│   │   └── commands/{assess,config,export,fetch,health,ops,score,search,tools,view}
+│   ├── cli/tests/
+│   ├── core/src/
+│   │   ├── paths.ts
+│   │   ├── db/{index.ts,schema.sql}
+│   │   ├── schema/
+│   │   ├── pipeline/{fetch,parse,enrich,score,assess,view,output}
+│   │   └── utils/
+│   └── core/tests/
+├── scripts/{build-sources.ts,sources/*}
+└── $LET_HOME/{data,cache,sources}
 ```
 
-## 4. Stack
+- CLI command registry source of truth: `packages/cli/src/tool.ts`.
+- CLI envelope contract source of truth: `packages/cli/src/envelope.ts`.
+- Path resolution source of truth: `packages/core/src/paths.ts`.
+- Domain schema source of truth: `packages/core/src/schema/*`, `packages/core/src/db/schema.sql`.
 
-| Layer      | Choice     | Notes                                           |
-| ---------- | ---------- | ----------------------------------------------- |
-| Runtime    | Bun        | Fast TypeScript execution, native fetch, sqlite |
-| Language   | TypeScript | Strict mode, noUncheckedIndexedAccess           |
-| Validation | Zod 4      | Schema validation, type inference               |
-| CLI        | citty      | UnJS CLI framework, nested subcommands          |
-| Config     | TOML       | Bun native parsing                              |
-| Linting    | Biome      | Format + lint                                   |
-| Commits    | commitlint | Conventional commits, mandatory scopes          |
-| Database   | SQLite     | Listings + source datasets via bun:sqlite       |
+## 3. Stack
 
-## 5. Commands
+| Layer      | Choice                  | Notes                                  |
+| ---------- | ----------------------- | -------------------------------------- |
+| Runtime    | Bun                     | CLI runtime, fetch, SQLite integration |
+| Language   | TypeScript              | strict mode with checked indexing      |
+| Validation | Zod 4                   | runtime schemas + type inference       |
+| CLI        | citty                   | nested command tree and typed args     |
+| Storage    | SQLite                  | local listing DB + source DBs          |
+| Config     | TOML                    | user config parsing                    |
+| Quality    | Biome + tsgo + bun test | lint, types, tests                     |
 
-- **Quick start**: copy `let.config.template.toml` to `.let/data/let.config.toml` and customize
-- **Install/Run**: `bun install`, `bun run let`, `bun run build:cli` (outputs `bin/let`)
-- **Sources**: `bun run build:sources` (supports `-- -o name1,name2`, `-- -c N`), `bun run build:source:{broadband|postcodes|deprivation|census|population|income|flood|naptan|uprn|crime}`
-- **Quality**: `bun run util:format`, `bun run util:lint`, `bun run util:lint:fix`, `bun run util:types`, `bun run util:check`, `bun test`, `bun run util:clean`
+- Optional environment keys: `EPC_API_KEY`, `NOTION_API_KEY`, `MAPBOX_ACCESS_TOKEN`.
+- Storage root: `$LET_HOME` (defaults to `~/.tools/let`).
 
-## 6. Architecture
+## 4. Commands
 
-### Pipeline
+- Bootstrap: `bun install`.
+- Agent entrypoint: `:let <command>` (shell alias for compiled binary).
+- Dev entrypoint: `bun run let <command>` (Bun dev runtime; development only).
+- Compiled binary build: `bun run build:cli`.
+- Source DB build: `bun run build:sources`.
+- Single-source build: `bun run build:source:{broadband|postcodes|deprivation|census|population|income|flood|naptan|uprn|crime}`.
+- Full quality gate: `bun run util:check`.
 
-Fetch -> Parse -> Enrich -> Score -> Assess -> View -> Output. CLI commands mirror each stage as an atomic tool. `let ops` holds maintenance tasks.
+- Infrastructure command `let tools`: capability discovery from `toolRegistry[]`; supports detail lookup by tool name.
+- Infrastructure command `let health`: prerequisites, source DB checks, key checks, directory writability checks, and fix commands.
 
-### Agent Loop
+- Tool `let config show`: load and display parsed config.
+- Tool `let config validate`: validate config and return structured errors.
+- Tool `let search resolve <location>`: resolve text to Rightmove location identifiers.
+- Tool `let search discover`: discover portal IDs for configured or overridden locations.
+- Tool `let search diff <ids>`: classify IDs as new vs known.
+- Tool `let fetch <ids>`: fetch, parse, enrich, score, and persist listings.
+- Tool `let view list`: ranked shortlist view with filtering and sort controls.
+- Tool `let view detail <id>`: full listing payload.
+- Tool `let score compute`: recompute scores for all listings.
+- Tool `let score explain <id>`: factor-level score and penalty breakdown.
+- Tool `let assess candidates`: unassessed listings ranked by score.
+- Tool `let assess context <id>`: assessment bundle including media paths and context fields.
+- Tool `let assess submit <id> <json>`: persist assessment and adjusted score.
+- Tool `let export json`: write DB snapshot as JSON.
+- Tool `let export notion`: sync selected listings to Notion.
+- Tool `let ops verify`: verify listing activity status on portal.
+- Tool `let ops prune`: prune listings by region, score, or inactive status.
 
-```
-Agent (/let skill)
-  |  let tools --json           # discover available commands
-  |  let health --json          # check prerequisites, run fix commands
-  |  let search discover --json # find portal IDs on Rightmove
-  |  let search diff --json     # classify new vs known
-  |  let fetch <ids> --json     # fetch + parse + enrich + score + persist
-  |  let view list --json       # triage by score
-  |  let assess context --json  # get listing + photos + maps for assessment
-  |  let assess submit --json   # write assessment back
-  |  let view detail --json     # final report data
-  v
-CLI Dispatcher (index.ts)
-  |  citty root with 10 subcommand groups
-  |  defineToolCommand() registers metadata -> toolRegistry[]
-  |  --json triggers JSON envelope output
-  v
-Core Library (@let/core) — domain logic unchanged
-  pipeline/{fetch,parse,enrich,score,assess,view,output}
-  schema/, db/, config/, utils/, paths.ts
-```
+- Common flags: `--json`, `--data-dir`, `--config-dir`, `--cache-dir`, `--sources-dir`.
+- Fetch/select flags: `--skip-images`, `--skip-epc`, `--top`, `--region`, `--min-score`, `--sort`, `--asc`.
+- Mutating safety flag: `--dry-run` for verification, prune, and Notion export preview.
 
-### JSON Envelope
-
-Every `--json` command outputs exactly one JSON line to stdout. No other stdout in JSON mode.
-
-```
-Success: { ok: true,  data: T,                         meta: { tool, elapsed, count?, total? } }
-Error:   { ok: false, error: { code, message, hint },  meta: { tool, elapsed } }
-```
-
-Exit codes: `0` success (including partial), `1` runtime error, `2` prerequisites blocked.
-
-### Tool Registry
-
-Commands defined via `defineToolCommand()` register metadata in a global `toolRegistry[]` array. `let tools --json` reads this to produce the catalog (17 tools). `tools` and `health` themselves use plain `defineCommand()` (not in registry — they are infrastructure, not tools).
-
-### Path Resolution
-
-Single source of truth: `packages/core/src/paths.ts`. Cached singleton, CLI primes at startup with overrides.
-
-**Precedence** (highest to lowest):
-
-1. CLI flags (`--data-dir`, `--config-dir`, `--cache-dir`, `--sources-dir`)
-2. Category env vars (`LET_DATA_DIR`, `LET_CONFIG_DIR`, `LET_CACHE_DIR`, `LET_SOURCES_DIR`)
-3. Dev mode detection (monorepo root via `package.json` marker) -- uses `{root}/.let/`
-4. Binary location detection (compiled binary in `{skill}/.let/bin/`)
-5. OS defaults (XDG on Linux, `~/Library/Application Support` on macOS)
-
-**Dev mode**: walks up from `process.cwd()` looking for `package.json` with `name: "let"` and `workspaces`. All generated artifacts live under `{root}/.let/`. Config file is `let.config.toml` in dev, `config.toml` when installed.
-
-### Enrichment
-
-- **EPC API**: energy rating, floor area, UPRN (requires `EPC_API_KEY`)
-- **Broadband**: local SQLite three-tier fallback (postcode -> outward -> area)
-- **Area metrics**: IMD, census tenure, population, income, flood, crime from local SQLite source databases
-- **Notes**: pattern-based extraction from listing description
-- **Maps**: Mapbox satellite + street view, cached WebP (requires `MAPBOX_ACCESS_TOKEN`)
-
-### Scoring
-
-Composites `affordability|location|liveability` aggregated by variance-adaptive formula using `adaptiveness` (0.5-10) and `adaptivenessFactor` (0.1-20). Penalties `epc|garden|pets` combined multiplicatively. Scores are percentile-relative within the current database.
-
-### Storage
-
-- **Database**: normalized SQLite in `.let/data/let.db`, schema in `packages/core/src/db/schema.sql`, `CREATE TABLE IF NOT EXISTS` on every open
-- **Backup**: automatic `let.db.bak` on each save
-- **Export**: `let export json` writes `let.db.json`, `let export notion` syncs to Notion
-- **Identity**: listing `id` is UUID, portal IDs in `portalIds.rightmove`
-- **Cache**: `.let/cache/{portalId}/data.json` (PAGE_MODEL), `.let/cache/{portalId}/*.webp` (images, maps)
-
-### Logging
-
-Domain loggers (CLI, FETCH, IMAGES_FETCH, MAPS_FETCH, PARSE, ENRICH, SCORE, NOTION) with structured key=value output to stderr. Never contaminates stdout in `--json` mode.
-
-## 7. CLI Tool Surface
-
-### Registered Tools (17, via `defineToolCommand`)
-
-| Tool                | Command                         | Description                                                | Idempotent | Rate Limited   |
-| ------------------- | ------------------------------- | ---------------------------------------------------------- | ---------- | -------------- |
-| `assess.candidates` | `let assess candidates`         | List unassessed listings ranked by score                   | Yes        | No             |
-| `assess.context`    | `let assess context <id>`       | Assessment context bundle (listing + scores + media paths) | Yes        | No             |
-| `assess.submit`     | `let assess submit <id> <json>` | Write assessment back to DB                                | No         | No             |
-| `config.show`       | `let config show`               | Show parsed configuration                                  | Yes        | No             |
-| `config.validate`   | `let config validate`           | Validate config file                                       | Yes        | No             |
-| `export.json`       | `let export json`               | Export listings DB to JSON file                            | Yes        | No             |
-| `export.notion`     | `let export notion`             | Sync listings to Notion database                           | No         | 3 req/s        |
-| `fetch`             | `let fetch <ids>`               | Fetch/parse/enrich/score/persist by portal IDs             | No         | config delayMs |
-| `ops.prune`         | `let ops prune`                 | Remove listings by score, region, or status                | No         | No             |
-| `ops.verify`        | `let ops verify`                | Check if listings are still active on Rightmove            | Yes        | config delayMs |
-| `score.compute`     | `let score compute`             | Rescore all listings                                       | Yes        | No             |
-| `score.explain`     | `let score explain <id>`        | Score breakdown for one listing                            | Yes        | No             |
-| `search.diff`       | `let search diff <ids>`         | Compare portal IDs against known listings                  | Yes        | No             |
-| `search.discover`   | `let search discover`           | Discover listing IDs from configured locations             | Yes        | config delayMs |
-| `search.resolve`    | `let search resolve <location>` | Resolve location name to REGION identifier                 | Yes        | 1 req          |
-| `view.detail`       | `let view detail <id>`          | Full listing details                                       | Yes        | No             |
-| `view.list`         | `let view list`                 | Ranked listings table with filters/sorting                 | Yes        | No             |
-
-### Infrastructure Commands (not in registry)
-
-| Command      | Description                          |
-| ------------ | ------------------------------------ |
-| `let tools`  | Capability discovery from registry   |
-| `let health` | Prerequisite checks with remediation |
-
-### Common Flags
-
-- `--json` (or `LET_JSON=1`) — JSON envelope output
-- `--data-dir`, `--config-dir`, `--cache-dir`, `--sources-dir` — path overrides
-- `--skip-images`, `--skip-epc` — skip optional enrichment steps
-- `--dry-run` — preview without writing (ops, export notion)
-- `--top N`, `--region`, `--min-score`, `--sort`, `--asc` — filtering/sorting
-
-### Examples
+- Recommended agent loop:
 
 ```bash
-let fetch 170448131,170448132 --json
-let view list --region Sheffield --top 10 --json
-let assess context <uuid> --json
-let export json --output backup.json --json
-let ops verify --dry-run --limit 10 --json
+:let tools --json
+:let health --json
+:let search discover --json
+:let search diff <id1>,<id2>,<id3> --json
+:let fetch <new-id> --json
+:let view list --json
+:let assess context <uuid> --json
+:let assess submit <uuid> '<assessment-json>' --json
+:let view detail <uuid> --json
+:let export json --output /tmp/let-export.json --json
 ```
 
-## 8. Data Model
+## 5. Architecture
 
-- **ListingSchema**: UUID `id`, `portalIds` (Rightmove/Zoopla/OnTheMarket), UPRN + source/confidence, address/location/region, Google Maps URLs, media (images, floorplan, epc), mapViews (satellite/street), scores, assessment, status
-- **Area metrics**: `lsoa`/`msoa` codes+names, IMD rank/decile/score, income (bhc/ahc), socialHousingPct, population, flood risk (level/source), crime stats (12m counts, rate per 1k, band/trend, updatedAt)
-- **Scores**: overall plus composites `affordability|location|liveability`, penalties `epc|garden|pets|combined`, factors (trueMonthlyCost, epcNumeric, stationMiles, gigabitPct, region priority, garden/heating/pet policy, propertyType, bedrooms)
-- **Assessment**: maintenance, lightAndSpace, photoAnalysis, tradeoffs, neighborhoodAnalysis, recommendation, familySuitability, reasoning, scoreAdjustment, assessedAt, assessedScore
-- **Status**: `active` or `inactive`, set to active on ingest, updated via `let ops verify`
-- **Media caching**: floorplan.local and epc.local remain null (document caching disabled)
+- System shape: CLI-only monorepo with command orchestration in `packages/cli` and domain logic in `packages/core`.
+- Pipeline contract: Fetch -> Parse -> Enrich -> Score -> Assess -> View -> Output.
+- Command design rule: primitives only; combine commands in the agent, not in CLI batch workflows.
+- Tool metadata contract: commands using `defineToolCommand()` auto-register in global `toolRegistry[]` for discoverability.
+- Infrastructure commands `tools` and `health` are intentionally outside the registry.
 
-## 9. Source Databases
+- Envelope contract:
+    - Success: `{ ok: true, data, meta: { tool, elapsed, count?, total?, hasMore? } }`
+    - Error: `{ ok: false, error: { code, message, hint }, meta: { tool, elapsed } }`
+    - Exit codes: `0` success, `1` runtime error, `2` blocked prerequisites.
 
-10 local SQLite databases built from government/open data sources. Located in `.let/sources/` (gitignored). Built via `bun run build:sources` or individually.
+- Path resolution precedence (high to low):
+    1. CLI overrides (`--data-dir`, `--config-dir`, `--cache-dir`, `--sources-dir`)
+    2. Env overrides (`LET_DATA_DIR`, `LET_CONFIG_DIR`, `LET_CACHE_DIR`, `LET_SOURCES_DIR`)
+    3. `LET_HOME` or `TOOLS_HOME` env var, defaulting to `~/.tools/let`
 
-| Database    | Table                  | Key Columns                                     | Rows   | Used By                        |
-| ----------- | ---------------------- | ----------------------------------------------- | ------ | ------------------------------ |
-| postcodes   | postcodes              | postcode, lat, lng, lsoa_code, msoa_code        | ~2.7M  | Base lookup for all enrichment |
-| deprivation | imd                    | lsoa_code, rank, decile, score                  | ~33K   | Area metrics (IMD)             |
-| census      | tenure                 | lsoa_code, total_households, social_housing_pct | ~35K   | Area metrics (housing)         |
-| population  | population             | lsoa_code, population                           | ~35K   | Area metrics                   |
-| income      | income                 | msoa_code, income_bhc, income_ahc               | ~7K    | Area metrics                   |
-| broadband   | postcodes + aggregates | postcode, gigabit_availability                  | ~1.5M  | Broadband enrichment           |
-| flood       | flood                  | postcode, risk, source                          | varies | Flood risk                     |
-| crime       | crime_12m              | lsoa_code, total, violent, burglary, robbery    | varies | Crime stats                    |
-| naptan      | stops                  | atco_code, common_name, stop_type, lat, lng     | ~434K  | Not actively queried           |
-| uprn        | uprn                   | uprn, lat, lng                                  | varies | Not actively queried           |
+- Data model contract:
+    - Listings carry internal UUID `id` plus portal IDs under `portalIds.rightmove`.
+    - Status lifecycle is `active|inactive`; verify command updates status.
+    - Scores include composites (`affordability|location|liveability`) and penalties (`epc|garden|pets`).
+    - Assessments are persisted payloads; later submission overwrites previous assessment.
 
-Schema validation tests in `packages/core/tests/sources.test.ts` — automatically skipped if DB file doesn't exist.
+- Storage contract:
+    - Primary DB: `$LET_HOME/data/let.db`
+    - Backup DB: `$LET_HOME/data/let.db.bak`
+    - JSON export: `$LET_HOME/data/let.db.json` or explicit `--output`
+    - Cache: `$LET_HOME/cache/{portalId}/data.json` and media artifacts
+    - Source DBs: `$LET_HOME/sources/{postcodes,broadband,deprivation,census,population,income,flood,crime,naptan,uprn}.db`
 
-## 10. Scraping
+- Enrichment and scraping contract:
+    - Search extraction from `__NEXT_DATA__`.
+    - Listing extraction from `window.PAGE_MODEL`.
+    - EPC, broadband, area metrics, and map snapshots are enrichment stages.
+    - HTML fallback path exists when API paths are blocked.
 
-- **Search results**: `__NEXT_DATA__` JSON at `props.pageProps.searchResults.properties[]`
-- **Listing page**: `window.PAGE_MODEL` JSON extracted via brace counting
-- **Field mapping**: `id` generated UUID, `portalIds.rightmove` from `propertyData.id`, `location` from propertyData, `postcode` from outcode+incode, `price` parsed from primaryPrice, `nearestStations` from propertyData
-- **Coordinates**: always on main listing page; `pinType: ACCURATE_POINT` means exact location
-- **REST API**: TypeAhead (`/typeAhead/uknostreet/{tokenized}/`) returns `locationIdentifier` (REGION^id); Search API (`/api/_search?...`) JSON properties; fallback to HTML if blocked; config `[fetch] useApi = false`
-- **HTML sanitization**: `<br>` to newlines, `</p>` to double newlines, strip tags, decode entities, normalize whitespace
-- **Rate limiting**: 3s delay between requests to avoid 429s. EPC API has no published limit. Mapbox has per-account token limits
+- Operational constraints:
+    - Rightmove requires request spacing; default behavior expects delay to avoid 429.
+    - Notion writes are rate-limited around 3 req/s.
+    - Source dataset builds are heavyweight and may degrade when upstream URLs expire.
 
-## 11. External APIs
+## 6. Quality
 
-- **EPC API**: `GET https://epc.opendatacommunities.org/api/v1/domestic/search?postcode={postcode}` with Basic auth; returns CSV with address, energy band, floor area, UPRN
-- **Postcodes.io**: `GET https://api.postcodes.io/postcodes?lon={lng}&lat={lat}&radius=100&limit=10` (fallback only)
-- **Notion API**: `POST https://api.notion.com/v1/pages` with image file objects, rate limited to 3 req/s, `notionPageId` stored in SQLite
-- **Mapbox Static Images**: satellite-v9 + streets-v12, zoom 15, cached WebP; token via `MAPBOX_ACCESS_TOKEN`
+- Required completion gates:
+    - zero type errors
+    - zero linter warnings
+    - passing tests
+    - successful CLI build (`bun run build:cli`)
 
-## 12. Quality
+- Standard checks:
+    - `bun run util:format`
+    - `bun run util:lint`
+    - `bun run util:types`
+    - `bun test`
+    - `bun run util:check`
 
-- **Pre-commit**: Husky + lint-staged runs `util:check` (format + lint + types + tests)
-- **Tests**: `packages/core/tests/*.test.ts` (unit), `packages/cli/tests/*.test.ts` (contract, parity gate, binary smoke)
-- **Source tests**: `packages/core/tests/sources.test.ts` validates schema for each source DB (auto-skipped if DB missing)
-- **CI**: GitHub Actions matrix (ubuntu + macos), quality job (format/lint/types/tests), smoke job (build binary, verify `tools --json` and `health --json`)
-- **Commits**: Conventional `type(scope): subject` with body bullets explaining why; scopes: `cli`, `scraper`, `schema`, `score`, `api`, `db`, `cache`, `changes`, `config`, `deps`
-- **All CI tests are deterministic**: seeded SQLite fixtures in temp directories, no network calls
+- Test surface:
+    - CLI: envelope, contract, parity-gate, fetch-partial, binary-smoke, health.
+    - Core: parse, sanitize, scraper, score, maps, EPC, source-schema, integration paths.
 
-## 13. Live E2E Verification
-
-Network-dependent procedure (not run in CI). Use for manual validation after changes.
+- Manual live E2E flow:
 
 ```bash
-# 1. Build binary
 bun run build:cli
-
-# 2. Orient
-bin/let tools --json          # should list 17 tools
-bin/let health --json         # check prerequisites, fix any blocked items
-bin/let config show --json    # verify config loaded
-
-# 3. Discover + diff (requires network, rate-limit 3s per request)
-bin/let search discover --json
-bin/let search diff <id1>,<id2>,<id3> --json
-
-# 4. Fetch (requires network + EPC API credentials in .env)
-bin/let fetch <new-id> --skip-images --json
-
-# 5. Verify data persisted
-bin/let view list --json
-bin/let view detail <uuid-from-step-4> --json
-bin/let score explain <uuid-from-step-4> --json
-
-# 6. Export
-bin/let export json --output /tmp/test-export.json --json
+:let tools --json
+:let health --json
+:let config show --json
+:let search discover --json
+:let search diff <id1>,<id2>,<id3> --json
+:let fetch <new-id> --skip-images --json
+:let view list --json
+:let view detail <uuid> --json
+:let score explain <uuid> --json
+:let export json --output /tmp/test-export.json --json
 ```
 
-## 14. Known Limitations
-
-- **Source databases require manual builds**: `bun run build:sources` downloads ~5-10GB from government sources. Some URLs expire (flood, broadband). Missing sources cause degraded enrichment (lower confidence scores), not failures
-- **Rightmove rate limits**: 429s after rapid requests. Default 3s delay between requests. Batch operations should use `--delay 5000`
-- **No migration system**: database schema changes require DB recreation. Health check detects incompatibility
-- **EPC address matching**: fuzzy match against address string; may miss on unusual addresses
-- **Assessment is write-once**: no diff/update semantics; re-submit overwrites entirely
+- Known risks to surface in agent output:
+    - source DB availability or staleness
+    - portal throttling and partial fetches
+    - schema incompatibility requiring DB recreation or restore

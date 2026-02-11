@@ -3,7 +3,7 @@
 		"allow": [
 			"Skill(let)",
 			"Bash(let:*)",
-			"Bash(bin/let:*)",
+			"Bash($LET_HOME/let:*)",
 
 			"Bash(bun:*)",
 			"Bash(git:*)",

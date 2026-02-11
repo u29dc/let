@@ -6,21 +6,33 @@ description: >-
     candidates (photos/maps + neighborhood research), and produce shortlists and
     region comparisons for a family's preferences.
 compatibility: >-
-    Designed for Claude Code with Bash access. Requires `bin/let` to be built
+    Designed for Claude Code with Bash access. Requires `:let` to be built
     (bun run build:cli). Network access for Rightmove; optional EPC/Mapbox/Notion
     keys enable richer enrichment and exports.
 allowed-tools: Bash Read Write WebSearch WebFetch
 ---
 
+## Invocation
+
+`:let` is a shell alias for the compiled binary. Use it directly in bash:
+
+    :let <command>
+
+NEVER use `bun run let` in agent workflows -- that is the dev entrypoint.
+
+If `:let` is not found, build it first: `bun run build:cli` (in the repo root).
+
 ## Orientation
 
-1. Read `.let/data/let.context.md` first (human context for the config: the user's situation, the current benchmark, what "100/100" means, and which tradeoffs are acceptable).
+> If `:let` is not found, run `bun run build:cli`.
+
+1. Read `$LET_HOME/data/let.context.md` first (human context for the config: the user's situation, the current benchmark, what "100/100" means, and which tradeoffs are acceptable).
 
 2. Then run the base checks:
 
-- `bin/let tools --json`
-- `bin/let health --json`
-- `bin/let config show --json`
+- `:let tools --json`
+- `:let health --json`
+- `:let config show --json`
 
 If health is blocked, follow the fix guidance in `references/init.md`.
 
@@ -68,7 +80,7 @@ Location:
 * Identifier (if available): {LOCATION_ID}
 
 Steps (use the tool catalog to confirm signatures):
-1) Orient quickly: `bin/let health --json` (ensure not blocked)
+1) Orient quickly: `:let health --json` (ensure not blocked)
 2) Discover listings for this location (baseline or override mode as appropriate)
 3) Diff new vs known
 4) Fetch a small batch (5–10), assign region name if relevant
@@ -84,7 +96,7 @@ Steps (use the tool catalog to confirm signatures):
 
 ## Self-describing CLI
 
-Run `bin/let tools --json` whenever you're uncertain about parameters or command signatures. Treat it as the source of truth.
+Run `:let tools --json` whenever you're uncertain about parameters or command signatures. Treat it as the source of truth.
 
 ## On-demand references
 
