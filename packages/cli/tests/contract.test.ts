@@ -367,10 +367,10 @@ describe('Search fixture tests', () => {
 // ---------------------------------------------------------------------------
 
 describe('Registry drift', () => {
-	test('tools catalog has exactly 17 registered tools', async () => {
+	test('tools catalog has exactly 18 registered tools', async () => {
 		const { stdout } = await run(['tools', '--json'], ENV);
 		const parsed = JSON.parse(stdout);
-		expect(parsed['data']['tools'].length).toBe(17);
+		expect(parsed['data']['tools'].length).toBe(18);
 	});
 
 	test('every registered tool name matches a routable command', async () => {
@@ -387,6 +387,7 @@ describe('Registry drift', () => {
 			'export.json',
 			'export.notion',
 			'fetch',
+			'ops.patch',
 			'ops.prune',
 			'ops.verify',
 			'score.compute',

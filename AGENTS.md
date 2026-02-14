@@ -88,11 +88,13 @@
 - Tool `let assess submit <id> <json>`: persist assessment and adjusted score.
 - Tool `let export json`: write DB snapshot as JSON.
 - Tool `let export notion`: sync selected listings to Notion.
+- Tool `let ops patch <id>`: override listing fields (address, postcode, coords, EPC) with auto re-enrichment and rescore.
 - Tool `let ops verify`: verify listing activity status on portal.
 - Tool `let ops prune`: prune listings by region, score, or inactive status.
 
 - Common flags: `--json`, `--data-dir`, `--config-dir`, `--cache-dir`, `--sources-dir`.
 - Fetch/select flags: `--skip-images`, `--skip-epc`, `--top`, `--region`, `--min-score`, `--sort`, `--asc`.
+- Patch flags: `--address`, `--postcode`, `--lat`, `--lng`, `--epc-rating`, `--floor-area`, `--skip-re-enrich`, `--skip-images`.
 - Mutating safety flag: `--dry-run` for verification, prune, and Notion export preview.
 
 - Recommended agent loop:
