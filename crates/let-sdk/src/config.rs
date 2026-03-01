@@ -125,7 +125,12 @@ pub struct PenaltyConfig {
     pub high_crime: f64,
     pub high_crime_threshold: f64,
     pub missing_data_penalty: f64,
+    #[serde(default = "default_garden_required")]
     pub garden_required: bool,
+}
+
+fn default_garden_required() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
