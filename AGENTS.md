@@ -8,7 +8,6 @@
     - `:let config show --json`
 - JSON contract: in `--json` mode emit exactly one envelope object to stdout; logs go to stderr only.
 - Skill entrypoint: `.claude/skills/let/SKILL.md`.
-- Maintenance policy: `docs/maintenance-policy.md`.
 - External APIs:
     - EPC: `https://epc.opendatacommunities.org/docs/api`
     - Postcodes: `https://postcodes.io/docs`
@@ -27,7 +26,6 @@
 │   │   └── src/{main,envelope,registry,commands/*}
 │   └── let-tui/
 │       └── src/{main,app,ui,theme}
-├── docs/
 ├── .claude/skills/let/
 └── $LET_HOME/{data,cache,sources}/
 ```
@@ -40,16 +38,16 @@
 
 ## 3. Stack
 
-| Layer | Choice | Notes |
-| --- | --- | --- |
-| Runtime | Rust | Native binaries for SDK/CLI/TUI |
-| Language | Rust 2024 | Strict lints, no unsafe |
-| CLI | clap | Typed command tree |
-| TUI | ratatui + crossterm | Dense cyan-themed terminal UI |
-| Storage | SQLite (rusqlite) | Listings DB + source DBs |
-| Parsing | csv + calamine + zip | Source ingest and transforms |
-| HTTP | reqwest (rustls) | Scraping + source downloads |
-| Quality | cargo fmt/clippy/test/build | Required completion gates |
+| Layer    | Choice                      | Notes                           |
+| -------- | --------------------------- | ------------------------------- |
+| Runtime  | Rust                        | Native binaries for SDK/CLI/TUI |
+| Language | Rust 2024                   | Strict lints, no unsafe         |
+| CLI      | clap                        | Typed command tree              |
+| TUI      | ratatui + crossterm         | Dense cyan-themed terminal UI   |
+| Storage  | SQLite (rusqlite)           | Listings DB + source DBs        |
+| Parsing  | csv + calamine + zip        | Source ingest and transforms    |
+| HTTP     | reqwest (rustls)            | Scraping + source downloads     |
+| Quality  | cargo fmt/clippy/test/build | Required completion gates       |
 
 - Optional environment keys: `EPC_API_KEY`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `MAPBOX_ACCESS_TOKEN`.
 - Storage root: `$LET_HOME` (default `~/.tools/let`).
