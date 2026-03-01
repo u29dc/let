@@ -88,7 +88,7 @@ pub enum PinType {
     ApproximatePoint,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AreaMetrics {
     pub lsoa: AreaCodeName,
     pub msoa: AreaCodeName,
@@ -98,21 +98,6 @@ pub struct AreaMetrics {
     pub population: Option<i64>,
     pub flood_risk: FloodRisk,
     pub crime: CrimeMetrics,
-}
-
-impl Default for AreaMetrics {
-    fn default() -> Self {
-        Self {
-            lsoa: AreaCodeName::default(),
-            msoa: AreaCodeName::default(),
-            imd: ImdMetrics::default(),
-            income: IncomeMetrics::default(),
-            social_housing_pct: None,
-            population: None,
-            flood_risk: FloodRisk::default(),
-            crime: CrimeMetrics::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -181,19 +166,10 @@ pub struct RemoteLocalAsset {
     pub local: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct MapViews {
     pub satellite: RemoteLocalAsset,
     pub street: RemoteLocalAsset,
-}
-
-impl Default for MapViews {
-    fn default() -> Self {
-        Self {
-            satellite: RemoteLocalAsset::default(),
-            street: RemoteLocalAsset::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

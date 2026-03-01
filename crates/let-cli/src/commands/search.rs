@@ -408,7 +408,7 @@ fn apply_filter_overrides(
             return Err(CommandError::runtime(
                 "INVALID_PROPERTY_TYPE",
                 format!("invalid property type(s): {}", invalid.join(", ")),
-                &format!("valid types: {}", RIGHTMOVE_SEARCH_TYPES.join(", ")),
+                format!("valid types: {}", RIGHTMOVE_SEARCH_TYPES.join(", ")),
             ));
         }
         next.property_types = property_types;

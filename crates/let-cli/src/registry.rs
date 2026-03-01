@@ -719,6 +719,7 @@ pub fn global_flags() -> &'static [GlobalFlag] {
     &FLAGS
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tool(
     name: &'static str,
     command: &'static str,
