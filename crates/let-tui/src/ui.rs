@@ -292,7 +292,7 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Th
     let media_items = app.context_rows();
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(area);
 
     let summary_lines = if let Some(listing) = app.selected_listing() {
