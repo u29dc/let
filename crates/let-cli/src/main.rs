@@ -265,17 +265,32 @@ enum OpsCommand {
         skip_images: bool,
     },
     /// Prune listings by score, region, or inactive status.
+    #[command(long_about = "Prune selector rules:\n\
+                      - No selector defaults to score < 50.\n\
+                      - --region alone prunes all listings matching the region filter.\n\
+                      - --region can be combined with --min-score or --bottom.\n\
+                      - --inactive can be combined only with optional --region.\n\
+                      - --bottom and --min-score are mutually exclusive.")]
     Prune {
+        /// Prune listings with score lower than this threshold.
+        /// When no selector flags are set, default behavior is `score < 50`.
         #[arg(long)]
         min_score: Option<f64>,
+        /// Prune bottom N percent by score (1-100). Cannot be combined with `--min-score`.
         #[arg(long)]
         bottom: Option<u8>,
+        /// Limit selection to region patterns (comma-separated).
+        /// With no other selectors, all matched regions are pruned.
         #[arg(long)]
         region: Option<String>,
+        /// Prune inactive listings only.
+        /// Can be combined with `--region` but not with score selectors.
         #[arg(long, default_value_t = false)]
         inactive: bool,
+        /// Preview selected rows without deleting.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
+        /// Skip confirmation prompt in text mode.
         #[arg(long, default_value_t = false)]
         force: bool,
     },

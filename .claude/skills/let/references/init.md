@@ -85,6 +85,16 @@ Enables satellite and street map views cached as WebP images. Useful for neighbo
 2. Generate a public access token
 3. Add to `.env`: `MAPBOX_ACCESS_TOKEN=your_token_here`
 
+### Notion export keys (optional)
+
+Required only for `bin/let export notion ...`.
+
+1. Create a Notion integration and copy the API key
+2. Create/select a Notion database and copy its database ID
+3. Add to `.env`:
+   - `NOTION_API_KEY=your_notion_integration_key`
+   - `NOTION_DATABASE_ID=your_notion_database_id`
+
 ## 3. Source databases
 
 Source databases provide local enrichment data (broadband speeds, deprivation indices, crime stats, flood risk, census data). They live in the `.let/sources/` directory.

@@ -187,6 +187,39 @@ Columns surface the key decision factors: price, neighbourhood safety, deprivati
     - Average score and "best value" examples
     - A short verdict per region (fit vs tradeoffs)
 
+## Phase 7: Maintenance (verify + prune)
+
+Use these commands to keep the working set clean between search cycles.
+
+```bash
+bin/let ops verify --dry-run --limit 20 --json
+bin/let ops prune --dry-run --json
+```
+
+Prune selector rules (must match CLI help and tool metadata):
+
+- No selector defaults to `score < 50`
+- `--region` alone prunes all listings matching region filter
+- `--region` can be combined with `--min-score` or `--bottom`
+- `--inactive` can be combined only with optional `--region`
+- `--bottom` and `--min-score` are mutually exclusive
+
+Examples:
+
+```bash
+# Default threshold mode
+bin/let ops prune --dry-run --json
+
+# Region-only prune
+bin/let ops prune --region Sheffield --dry-run --json
+
+# Region + score selector
+bin/let ops prune --region Sheffield --min-score 60 --dry-run --json
+
+# Inactive prune in one region
+bin/let ops prune --inactive --region Sheffield --dry-run --json
+```
+
 ## Intent mappings
 
 - **"Top 5 new homes"** -- baseline mode. Discover, diff, fetch new (small batches), triage, assess top 2-3, report top 5

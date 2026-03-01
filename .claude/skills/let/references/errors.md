@@ -12,6 +12,8 @@ Error codes returned in the JSON envelope `error.code` field when `ok: false`.
 | `NOT_FOUND`        | Listing removed from portal      | Skip this ID and continue with remaining listings.                          |
 | `VALIDATION_ERROR` | Invalid input data               | Fix input according to the schema. Check `error.hint` for details.          |
 | `API_ERROR`        | External API failure (EPC, etc.) | Log the error, skip affected enrichment step, continue with available data. |
+| `NO_CREDENTIALS`   | Missing external API credentials | Set required keys in `.let/data/.env` and re-run `bin/let health --json`.   |
+| `INVALID_DB`       | Notion database inaccessible     | Check `NOTION_API_KEY` and `NOTION_DATABASE_ID`, then retry export.         |
 
 ## Exit codes
 

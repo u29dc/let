@@ -285,19 +285,21 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     "ops.prune",
                     "let ops prune",
                     "ops",
-                    "Remove listings by score, region, or inactive status.",
+                    "Remove listings by score, region, or inactive status. Selector rules: default is score < 50; --region can combine with --min-score/--bottom; --inactive only with optional --region; --bottom and --min-score are mutually exclusive.",
                     vec![
                         ToolParameter {
                             name: "--min-score",
                             param_type: "number",
                             required: false,
-                            description: "Prune listings below score threshold.",
+                            description:
+                                "Prune listings below score threshold. Used as default selector (50) when no selector flags are set.",
                         },
                         ToolParameter {
                             name: "--bottom",
                             param_type: "number",
                             required: false,
-                            description: "Prune bottom N percent by score.",
+                            description:
+                                "Prune bottom N percent by score (1-100). Cannot be combined with --min-score.",
                         },
                         ToolParameter {
                             name: "--region",
@@ -310,7 +312,8 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             name: "--inactive",
                             param_type: "bool",
                             required: false,
-                            description: "Prune only inactive listings.",
+                            description:
+                                "Prune inactive listings only. Can be combined with --region but not score selectors.",
                         },
                         ToolParameter {
                             name: "--dry-run",
