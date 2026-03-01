@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Instant;
 
@@ -131,15 +131,13 @@ pub fn run_sources(
         status: "ok".to_owned(),
     };
 
-    Ok(CommandOutput::new(
-        json!({
-            "target": payload.target,
-            "jobs": payload.jobs,
-            "durationMs": payload.duration_ms,
-            "status": payload.status,
-            "sources": source_results,
-        }),
-    )
+    Ok(CommandOutput::new(json!({
+        "target": payload.target,
+        "jobs": payload.jobs,
+        "durationMs": payload.duration_ms,
+        "status": payload.status,
+        "sources": source_results,
+    }))
     .with_text(format!(
         "build sources {} completed in {}ms",
         target.as_str(),
