@@ -13,7 +13,7 @@ version = "0.0.1"
 tokio = { version = "1.48.0", features = ["full"] }
 
 # HTTP
-reqwest = { version = "0.12.24", default-features = false, features = ["brotli", "deflate", "gzip", "json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "brotli", "deflate", "gzip", "json", "rustls-tls", "stream"] }
 url = "2.5.7"
 
 # Serialization / config

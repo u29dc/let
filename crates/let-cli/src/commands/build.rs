@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::fs;
-use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -48,18 +46,7 @@ impl SourceTarget {
     }
 
     pub fn all_sources() -> &'static [&'static str] {
-        &[
-            "broadband",
-            "postcodes",
-            "deprivation",
-            "census",
-            "population",
-            "income",
-            "flood",
-            "naptan",
-            "uprn",
-            "crime",
-        ]
+        let_sdk::sources::list_sources()
     }
 }
 
@@ -76,15 +63,17 @@ struct BuildResult {
 #[serde(rename_all = "camelCase")]
 struct SourceRunResult {
     source: String,
-    exit_code: i32,
+    rows: usize,
     duration_ms: u64,
+    db_path: String,
+    status: String,
 }
 
 pub fn run_sources(
     target: SourceTarget,
     jobs: usize,
     shared: &SharedArgs,
-    json_mode: bool,
+    _json_mode: bool,
 ) -> CommandResult {
     if target == SourceTarget::List {
         return Ok(CommandOutput::new(json!({
@@ -100,28 +89,9 @@ pub fn run_sources(
     let started = Instant::now();
     let job_count = jobs.max(1);
     let source_results = match target {
-        SourceTarget::All => run_all_sources(job_count, shared, json_mode)?,
-        _ => vec![run_one_source(target.as_str(), shared, json_mode)?],
+        SourceTarget::All => run_all_sources(job_count, shared)?,
+        _ => vec![run_one_source(target.as_str(), shared)?],
     };
-
-    let failed = source_results
-        .iter()
-        .filter(|result| result.exit_code != 0)
-        .map(|result| result.source.clone())
-        .collect::<Vec<_>>();
-
-    if !failed.is_empty() {
-        return Err(CommandError::new(
-            "SOURCE_BUILD_FAILED",
-            format!(
-                "source build failed for target `{}` (failed: {})",
-                target.as_str(),
-                failed.join(", ")
-            ),
-            "inspect command output for download or parsing errors",
-            1,
-        ));
-    }
 
     let elapsed = started.elapsed().as_millis() as u64;
     let payload = BuildResult {
@@ -145,11 +115,7 @@ pub fn run_sources(
     )))
 }
 
-fn run_all_sources(
-    jobs: usize,
-    shared: &SharedArgs,
-    json_mode: bool,
-) -> Result<Vec<SourceRunResult>, CommandError> {
+fn run_all_sources(jobs: usize, shared: &SharedArgs) -> Result<Vec<SourceRunResult>, CommandError> {
     let sources = SourceTarget::all_sources()
         .iter()
         .map(|source| source.to_string())
@@ -171,10 +137,12 @@ fn run_all_sources(
                     let receiver = task_rx.lock().expect("worker receiver lock poisoned");
                     receiver.recv()
                 };
+
                 let Ok(source) = next else {
                     break;
                 };
-                let result = run_one_source(&source, &shared, json_mode);
+
+                let result = run_one_source(&source, &shared);
                 let _ = result_tx.send(result);
             }
         }));
@@ -205,58 +173,24 @@ fn run_all_sources(
     Ok(results)
 }
 
-fn run_one_source(
-    source: &str,
-    shared: &SharedArgs,
-    json_mode: bool,
-) -> Result<SourceRunResult, CommandError> {
-    let started = Instant::now();
+fn run_one_source(source: &str, shared: &SharedArgs) -> Result<SourceRunResult, CommandError> {
     let paths = resolve_paths(Some(shared.overrides.clone()));
-    let db_path = paths.derived.source_db(&paths.resolved.sources, source);
-    if db_path.exists() {
-        let _ = fs::remove_file(&db_path);
-    }
+    let report =
+        let_sdk::sources::build_source(&paths.resolved.sources, source).map_err(map_sdk_error)?;
 
-    let script = format!("scripts/sources/{source}.ts");
-    let exit_code = run_child(&["run", &script], json_mode)?;
     Ok(SourceRunResult {
-        source: source.to_owned(),
-        exit_code,
-        duration_ms: started.elapsed().as_millis() as u64,
+        source: report.source,
+        rows: report.rows,
+        duration_ms: report.duration_ms,
+        db_path: report.db_path.display().to_string(),
+        status: "ok".to_owned(),
     })
 }
 
-fn run_child(args: &[&str], json_mode: bool) -> Result<i32, CommandError> {
-    if json_mode {
-        let output = Command::new("bun")
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|error| {
-                CommandError::runtime(
-                    "PROCESS_ERROR",
-                    format!("failed to run bun command: {error}"),
-                    "ensure bun is installed and available on PATH",
-                )
-            })?;
-
-        if !output.stdout.is_empty() {
-            eprint!("{}", String::from_utf8_lossy(&output.stdout));
-        }
-        if !output.stderr.is_empty() {
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
-        }
-
-        Ok(output.status.code().unwrap_or(1))
-    } else {
-        let status = Command::new("bun").args(args).status().map_err(|error| {
-            CommandError::runtime(
-                "PROCESS_ERROR",
-                format!("failed to run bun command: {error}"),
-                "ensure bun is installed and available on PATH",
-            )
-        })?;
-        Ok(status.code().unwrap_or(1))
-    }
+fn map_sdk_error(error: let_sdk::errors::LetError) -> CommandError {
+    let exit_code = error.exit_code();
+    let code = error.code.as_str().to_owned();
+    let message = error.message;
+    let hint = error.hint;
+    CommandError::new(code, message, hint, exit_code)
 }

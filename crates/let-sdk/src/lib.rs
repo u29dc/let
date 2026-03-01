@@ -8,6 +8,7 @@ pub mod paths;
 pub mod pipeline;
 pub mod schema;
 pub mod services;
+pub mod sources;
 pub mod utils;
 
 pub use db::{
