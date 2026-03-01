@@ -214,6 +214,26 @@ enum SearchCommand {
 
 #[derive(Debug, Subcommand)]
 enum OpsCommand {
+    /// Patch listing fields and rescore.
+    Patch {
+        id: String,
+        #[arg(long)]
+        address: Option<String>,
+        #[arg(long)]
+        postcode: Option<String>,
+        #[arg(long)]
+        lat: Option<f64>,
+        #[arg(long)]
+        lng: Option<f64>,
+        #[arg(long = "epc-rating")]
+        epc_rating: Option<String>,
+        #[arg(long = "floor-area")]
+        floor_area: Option<f64>,
+        #[arg(long, default_value_t = false)]
+        skip_re_enrich: bool,
+        #[arg(long, default_value_t = false)]
+        skip_images: bool,
+    },
     /// Prune listings by score, region, or inactive status.
     Prune {
         #[arg(long, default_value_t = 50.0)]
@@ -474,6 +494,36 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                 code: delegate_to_legacy(&delegated, shared, json_mode),
             }
         }
+        Command::Ops {
+            command:
+                OpsCommand::Patch {
+                    id,
+                    address,
+                    postcode,
+                    lat,
+                    lng,
+                    epc_rating,
+                    floor_area,
+                    skip_re_enrich,
+                    skip_images,
+                },
+        } => DispatchOutcome::Local {
+            tool: "ops.patch",
+            result: commands::ops::patch(
+                shared,
+                &commands::ops::PatchParams {
+                    id: id.clone(),
+                    address: address.clone(),
+                    postcode: postcode.clone(),
+                    lat: *lat,
+                    lng: *lng,
+                    epc_rating: epc_rating.clone(),
+                    floor_area: *floor_area,
+                    skip_re_enrich: *skip_re_enrich,
+                    skip_images: *skip_images,
+                },
+            ),
+        },
         Command::Ops {
             command:
                 OpsCommand::Prune {

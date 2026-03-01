@@ -4,8 +4,11 @@ use std::cmp::Ordering;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use let_sdk::schema::listing::{Listing, ListingStatus};
-use let_sdk::{close_listings_db, load_listings_file, open_listings_db};
+use let_sdk::schema::listing::{EpcBand, Listing, ListingStatus};
+use let_sdk::{
+    DbMeta, close_listings_db, load_listings_file, open_listings_db, recalc_assessed_scores,
+    score_listings_with_config, upsert_listings,
+};
 use rusqlite::{params, params_from_iter};
 use serde_json::json;
 
@@ -27,6 +30,19 @@ pub struct VerifyParams {
     pub region: Option<String>,
     pub limit: Option<usize>,
     pub delay_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PatchParams {
+    pub id: String,
+    pub address: Option<String>,
+    pub postcode: Option<String>,
+    pub lat: Option<f64>,
+    pub lng: Option<f64>,
+    pub epc_rating: Option<String>,
+    pub floor_area: Option<f64>,
+    pub skip_re_enrich: bool,
+    pub skip_images: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -103,6 +119,217 @@ pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
         "pruned {} listing(s); {} remaining",
         to_remove_ids.len(),
         remaining
+    )))
+}
+
+pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
+    if params.address.is_none()
+        && params.postcode.is_none()
+        && params.lat.is_none()
+        && params.lng.is_none()
+        && params.epc_rating.is_none()
+        && params.floor_area.is_none()
+    {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            "no overrides provided",
+            "provide at least one override field",
+        ));
+    }
+
+    if params.lat.is_some() ^ params.lng.is_some() {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            "--lat and --lng must be provided together",
+            "provide both coordinates or neither",
+        ));
+    }
+
+    if let Some(lat) = params.lat
+        && !(-90.0..=90.0).contains(&lat)
+    {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            format!("invalid latitude: {lat}"),
+            "latitude must be between -90 and 90",
+        ));
+    }
+    if let Some(lng) = params.lng
+        && !(-180.0..=180.0).contains(&lng)
+    {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            format!("invalid longitude: {lng}"),
+            "longitude must be between -180 and 180",
+        ));
+    }
+    if let Some(area) = params.floor_area
+        && area <= 0.0
+    {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            format!("invalid floor area: {area}"),
+            "floor area must be a positive number",
+        ));
+    }
+
+    let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
+    let db_path = paths.derived.database;
+    let config_path = paths.derived.config_file;
+    let mut data = load_listings_file(&db_path)?;
+
+    let Some(index) = data.listings.iter().position(|listing| {
+        listing.id == params.id
+            || listing.portal_ids.rightmove.as_deref() == Some(params.id.as_str())
+    }) else {
+        return Err(CommandError::runtime(
+            "NOT_FOUND",
+            format!("listing not found: {}", params.id),
+            "check id with `let view list`",
+        ));
+    };
+
+    let listing_id = data
+        .listings
+        .get(index)
+        .expect("listing index should be valid")
+        .id
+        .clone();
+    let previous_score = data
+        .listings
+        .get(index)
+        .and_then(|listing| listing.scores.as_ref().map(|scores| scores.overall));
+
+    let mut applied = serde_json::Map::new();
+    {
+        let listing = data
+            .listings
+            .get_mut(index)
+            .expect("listing index should be valid");
+        if let Some(address) = params.address.as_ref()
+            && listing.address != *address
+        {
+            applied.insert(
+                "address".to_owned(),
+                json!({ "from": listing.address, "to": address }),
+            );
+            listing.address = address.clone();
+        }
+        if let Some(postcode) = params.postcode.as_ref()
+            && listing.postcode != *postcode
+        {
+            applied.insert(
+                "postcode".to_owned(),
+                json!({ "from": listing.postcode, "to": postcode }),
+            );
+            listing.postcode = postcode.clone();
+        }
+        if let (Some(lat), Some(lng)) = (params.lat, params.lng) {
+            if (listing.location.lat - lat).abs() > f64::EPSILON {
+                applied.insert(
+                    "lat".to_owned(),
+                    json!({ "from": listing.location.lat, "to": lat }),
+                );
+                listing.location.lat = lat;
+            }
+            if (listing.location.lng - lng).abs() > f64::EPSILON {
+                applied.insert(
+                    "lng".to_owned(),
+                    json!({ "from": listing.location.lng, "to": lng }),
+                );
+                listing.location.lng = lng;
+            }
+        }
+        if let Some(epc_rating) = params.epc_rating.as_ref() {
+            let parsed = parse_epc_rating(epc_rating)?;
+            if listing.epc_rating.as_ref() != Some(&parsed) {
+                applied.insert(
+                    "epcRating".to_owned(),
+                    json!({
+                        "from": listing.epc_rating.as_ref().map(epc_band_to_text),
+                        "to": epc_band_to_text(&parsed),
+                    }),
+                );
+                listing.epc_rating = Some(parsed);
+            }
+        }
+        if let Some(area) = params.floor_area
+            && listing.floor_area_sqm != Some(area)
+        {
+            applied.insert(
+                "floorArea".to_owned(),
+                json!({ "from": listing.floor_area_sqm, "to": area }),
+            );
+            listing.floor_area_sqm = Some(area);
+        }
+
+        if applied.contains_key("address")
+            || applied.contains_key("postcode")
+            || applied.contains_key("lat")
+            || applied.contains_key("lng")
+        {
+            listing.google_maps_url = build_google_maps_url(
+                listing.location.lat,
+                listing.location.lng,
+                &listing.address,
+                &listing.postcode,
+            );
+            listing.google_maps_street_view_url =
+                build_google_maps_street_view_url(listing.location.lat, listing.location.lng);
+        }
+    }
+
+    if applied.is_empty() {
+        return Ok(CommandOutput::new(json!({
+            "id": listing_id,
+            "applied": {},
+            "reEnriched": [],
+            "rescored": data.listings.len(),
+            "previousScore": previous_score,
+            "newScore": previous_score,
+            "skipReEnrich": params.skip_re_enrich,
+            "skipImages": params.skip_images,
+        }))
+        .with_text("no changes needed"));
+    }
+
+    let config = let_sdk::config::load_config(Some(&config_path))?;
+    let mut rescored = score_listings_with_config(&data.listings, &config);
+    recalc_assessed_scores(&mut rescored);
+
+    let new_score = rescored
+        .iter()
+        .find(|candidate| candidate.id == listing_id)
+        .and_then(|candidate| candidate.scores.as_ref().map(|scores| scores.overall));
+
+    let meta = DbMeta {
+        updated_at: let_sdk::utils::time::now_iso(),
+        last_search_total: data.last_search_total,
+    };
+    upsert_listings(
+        &db_path,
+        &[],
+        &rescored,
+        &rescored,
+        &meta,
+        &data.search_urls,
+        &data.locations,
+    )?;
+
+    Ok(CommandOutput::new(json!({
+        "id": listing_id,
+        "applied": serde_json::Value::Object(applied),
+        "reEnriched": [],
+        "rescored": rescored.len(),
+        "previousScore": previous_score,
+        "newScore": new_score,
+        "skipReEnrich": params.skip_re_enrich,
+        "skipImages": params.skip_images,
+    }))
+    .with_text(format!(
+        "patch applied for {} and rescored {} listings",
+        params.id,
+        rescored.len()
     )))
 }
 
@@ -416,6 +643,45 @@ fn detect_inactive_html(html: &str) -> bool {
         || lower.contains("no longer on the market")
         || lower.contains("no longer available")
         || lower.contains("this property has been removed")
+}
+
+fn parse_epc_rating(raw: &str) -> Result<EpcBand, CommandError> {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "A" => Ok(EpcBand::A),
+        "B" => Ok(EpcBand::B),
+        "C" => Ok(EpcBand::C),
+        "D" => Ok(EpcBand::D),
+        "E" => Ok(EpcBand::E),
+        "F" => Ok(EpcBand::F),
+        "G" => Ok(EpcBand::G),
+        _ => Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            format!("invalid epc rating: {raw}"),
+            "epc rating must be one of A,B,C,D,E,F,G",
+        )),
+    }
+}
+
+fn epc_band_to_text(band: &EpcBand) -> &'static str {
+    match band {
+        EpcBand::A => "A",
+        EpcBand::B => "B",
+        EpcBand::C => "C",
+        EpcBand::D => "D",
+        EpcBand::E => "E",
+        EpcBand::F => "F",
+        EpcBand::G => "G",
+    }
+}
+
+fn build_google_maps_url(lat: f64, lng: f64, address: &str, postcode: &str) -> String {
+    let place = url::form_urlencoded::byte_serialize(format!("{address}, {postcode}").as_bytes())
+        .collect::<String>();
+    format!("https://www.google.com/maps/place/{place}/@{lat},{lng},17z/data=!3m1!1e3")
+}
+
+fn build_google_maps_street_view_url(lat: f64, lng: f64) -> String {
+    format!("https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lng}")
 }
 
 fn persist_inactive_status(
