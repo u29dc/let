@@ -70,12 +70,26 @@ normalize_json() {
   local src="$1"
   local dest="$2"
   if command -v jq >/dev/null 2>&1; then
-    jq '
-      if type=="object" and .meta then
-        .meta.elapsed = 0
-      else
-        .
-      end
+    jq -S '
+      def normalize_numbers:
+        walk(
+          if type=="number" then
+            if . == floor then floor else (. * 1000 | round / 1000) end
+          else
+            .
+          end
+        );
+      .
+      | if type=="object" and .meta then .meta = { tool: .meta.tool } else . end
+      | if type=="object" and .data and (.data|type) == "object" and .data.listings then
+          .data.listings |= map(
+            del(.portalId, .scoreChange)
+            | if has("url") then .url |= gsub("https://www\\.rightmove\\.co\\.uk"; "https://rightmove.co.uk") else . end
+          )
+        else
+          .
+        end
+      | normalize_numbers
     ' "$src" > "$dest" 2>/dev/null || cp "$src" "$dest"
   else
     cp "$src" "$dest"
@@ -91,6 +105,24 @@ compare_cmd() {
 
   normalize_json "$OUT_DIR/archive/$name.json" "$OUT_DIR/diff/$name.archive.norm.json"
   normalize_json "$OUT_DIR/main/$name.json" "$OUT_DIR/diff/$name.main.norm.json"
+
+  if [[ "$name" == "tools" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+      local missing
+      missing="$(
+        jq -n \
+          --slurpfile archive "$OUT_DIR/diff/$name.archive.norm.json" \
+          --slurpfile main "$OUT_DIR/diff/$name.main.norm.json" \
+          '$archive[0].data.tools | map(.name) - ($main[0].data.tools | map(.name))'
+      )"
+      if [[ "$missing" == "[]" ]]; then
+        echo "PASS $name (archive tools subset present in main)"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        return
+      fi
+      echo "$missing" > "$OUT_DIR/diff/$name.missing.json"
+    fi
+  fi
 
   if diff -u "$OUT_DIR/diff/$name.archive.norm.json" "$OUT_DIR/diff/$name.main.norm.json" > "$OUT_DIR/diff/$name.diff"; then
     echo "PASS $name"

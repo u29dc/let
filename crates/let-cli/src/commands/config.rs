@@ -37,6 +37,7 @@ pub fn validate(shared: &SharedArgs) -> CommandResult {
     let data = json!({
         "path": path_display,
         "valid": true,
+        "errors": [],
     });
     Ok(CommandOutput::new(data).with_text(format!("config valid: {}", path.display())))
 }
