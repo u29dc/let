@@ -6,6 +6,7 @@ dist/
 build/
 bin/
 /let
+target/
 *.bun-build
 *.tsbuildinfo
 .biome
