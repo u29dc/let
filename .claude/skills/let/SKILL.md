@@ -7,7 +7,8 @@ description: >-
     region comparisons for a family's preferences.
 compatibility: >-
     Designed for Claude Code with Bash access. Requires `:let` to be built
-    (bun run build:cli). Network access for Rightmove; optional EPC/Mapbox/Notion
+    (`bun run build` or `cargo build --workspace --release`). Network access
+    for Rightmove; optional EPC/Mapbox/Notion
     keys enable richer enrichment and exports.
 allowed-tools: Bash Read Write WebSearch WebFetch
 ---
@@ -18,13 +19,13 @@ allowed-tools: Bash Read Write WebSearch WebFetch
 
     :let <command>
 
-NEVER use `bun run let` in agent workflows -- that is the dev entrypoint.
+Use `cargo run -q -p let-cli -- <command>` only if `:let` is unavailable.
 
-If `:let` is not found, build it first: `bun run build:cli` (in the repo root).
+If `:let` is not found, build it first: `bun run build` (repo root).
 
 ## Orientation
 
-> If `:let` is not found, run `bun run build:cli`.
+> If `:let` is not found, run `bun run build`.
 
 1. Read `$LET_HOME/data/let.context.md` first (human context for the config: the user's situation, the current benchmark, what "100/100" means, and which tradeoffs are acceptable).
 

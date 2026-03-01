@@ -3,9 +3,11 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use let_sdk::load_listings_file;
 use let_sdk::schema::listing::Listing;
+
+use crate::theme::{HEADER_CONTRACT, HeaderContract};
 
 const SOURCE_NAMES: [&str; 10] = [
     "broadband",
@@ -42,6 +44,7 @@ pub(crate) struct App {
     listings: Vec<Listing>,
     selected: usize,
     status: String,
+    header: HeaderContract,
     palette_open: bool,
     palette_query: String,
     palette_selected: usize,
@@ -67,6 +70,18 @@ impl App {
 
     pub(crate) fn selected_listing(&self) -> Option<&Listing> {
         self.listings.get(self.selected)
+    }
+
+    pub(crate) fn header_text(&self) -> String {
+        self.header.render()
+    }
+
+    pub(crate) fn route_context(&self) -> String {
+        let total = self.listings.len();
+        if total == 0 {
+            return "search/listings 0/0".to_owned();
+        }
+        format!("search/listings {}/{}", self.selected + 1, total)
     }
 
     pub(crate) fn palette_open(&self) -> bool {
@@ -101,6 +116,10 @@ impl App {
     pub(crate) fn on_key(&mut self, key: KeyEvent) {
         if self.palette_open {
             self.on_palette_key(key);
+            return;
+        }
+        if is_palette_trigger(key) {
+            self.open_palette();
             return;
         }
 
@@ -264,6 +283,7 @@ impl Default for App {
             listings,
             selected: 0,
             status,
+            header: HEADER_CONTRACT,
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
@@ -337,11 +357,23 @@ fn fs_size_mb(path: &PathBuf) -> Option<f64> {
         .map(|meta| (meta.len() as f64) / (1024.0 * 1024.0))
 }
 
+fn is_palette_trigger(key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char(character) => {
+            character.eq_ignore_ascii_case(&'p')
+                && (key.modifiers.contains(KeyModifiers::SUPER)
+                    || key.modifiers.contains(KeyModifiers::CONTROL))
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::App;
+    use crate::theme::HEADER_CONTRACT;
 
     #[test]
     fn quits_on_q_keypress() {
@@ -360,6 +392,7 @@ mod tests {
             listings: vec![],
             selected: 0,
             status: String::new(),
+            header: HEADER_CONTRACT,
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
@@ -401,5 +434,12 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(!app.is_running());
+    }
+
+    #[test]
+    fn ctrl_p_opens_palette() {
+        let mut app = App::default();
+        app.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert!(app.palette_open());
     }
 }

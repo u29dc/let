@@ -2,7 +2,7 @@
 
 Full pipeline protocol for the `let` CLI. Follow these phases in order. All commands use `--json` for structured output; read stdout as the contract, ignore stderr (logs only).
 
-> All examples use `bin/let` -- the compiled binary at the repo root. Build with `bun run build:cli` if missing.
+> All examples use `bin/let` -- the compiled binary at the repo root. Build with `bun run build` (or `cargo build --workspace --release`) if missing.
 
 ## Principles
 

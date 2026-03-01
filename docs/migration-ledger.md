@@ -1,39 +1,36 @@
 # Migration Ledger
 
-Status values: `pending`, `in_progress`, `done`, `blocked`.
+Status values: `done`, `blocked`.
 
-## Core
-- `packages/core/src/paths.ts` -> `crates/let-sdk/src/paths.rs` (`pending`)
-- `packages/core/src/config/*` -> `crates/let-sdk/src/config/*` (`pending`)
-- `packages/core/src/schema/*` -> `crates/let-sdk/src/schema/*` (`pending`)
-- `packages/core/src/db/*` -> `crates/let-sdk/src/db/*` (`pending`)
-- `packages/core/src/pipeline/fetch/*` -> `crates/let-sdk/src/pipeline/fetch/*` (`pending`)
-- `packages/core/src/pipeline/parse/*` -> `crates/let-sdk/src/pipeline/parse/*` (`pending`)
-- `packages/core/src/pipeline/enrich/*` -> `crates/let-sdk/src/pipeline/enrich/*` (`pending`)
-- `packages/core/src/pipeline/score/*` -> `crates/let-sdk/src/pipeline/score/*` (`pending`)
-- `packages/core/src/pipeline/assess/*` -> `crates/let-sdk/src/pipeline/assess/*` (`pending`)
-- `packages/core/src/pipeline/view/*` -> `crates/let-sdk/src/pipeline/view/*` (`pending`)
-- `packages/core/src/pipeline/output/*` -> `crates/let-sdk/src/pipeline/output/*` (`pending`)
+## Core (SDK)
+- `paths/config/schema/db` contracts: `done`
+- scoring pipeline + assessed-score recomputation: `done`
+- source-build subsystem (`crates/let-sdk/src/sources/*`): `done`
+- fetch/parse/enrich portability hardening: `done`
 
 ## CLI
-- `packages/cli/src/envelope.ts` -> `crates/let-cli/src/envelope.rs` (`pending`)
-- `packages/cli/src/tool.ts` -> `crates/let-cli/src/registry.rs` (`pending`)
-- `packages/cli/src/main.ts` -> `crates/let-cli/src/main.rs` (`pending`)
-- `packages/cli/src/commands/*` -> `crates/let-cli/src/commands/*` (`pending`)
-
-## Source builders
-- `scripts/utils.ts` -> `crates/let-sdk/src/sources/runtime/*` (`pending`)
-- `scripts/build-sources.ts` -> `crates/let-sdk/src/sources/orchestrator.rs` + `crates/let-cli build sources` (`pending`)
-- `scripts/sources/broadband.ts` -> `crates/let-sdk/src/sources/builders/broadband.rs` (`pending`)
-- `scripts/sources/postcodes.ts` -> `crates/let-sdk/src/sources/builders/postcodes.rs` (`pending`)
-- `scripts/sources/deprivation.ts` -> `crates/let-sdk/src/sources/builders/deprivation.rs` (`pending`)
-- `scripts/sources/census.ts` -> `crates/let-sdk/src/sources/builders/census.rs` (`pending`)
-- `scripts/sources/population.ts` -> `crates/let-sdk/src/sources/builders/population.rs` (`pending`)
-- `scripts/sources/income.ts` -> `crates/let-sdk/src/sources/builders/income.rs` (`pending`)
-- `scripts/sources/flood.ts` -> `crates/let-sdk/src/sources/builders/flood.rs` (`pending`)
-- `scripts/sources/naptan.ts` -> `crates/let-sdk/src/sources/builders/naptan.rs` (`pending`)
-- `scripts/sources/uprn.ts` -> `crates/let-sdk/src/sources/builders/uprn.rs` (`pending`)
-- `scripts/sources/crime.ts` -> `crates/let-sdk/src/sources/builders/crime.rs` (`pending`)
+- envelope contract: `done`
+- tools registry and command discovery: `done`
+- command groups (`config/search/fetch/view/score/assess/export/ops/build/start`): `done`
+- legacy delegation removal: `done`
 
 ## TUI
-- New implementation in `crates/let-tui/*` aligned to `~/Git/cho/crates/cho-tui/*` (`pending`)
+- ratatui shell, cyan theme, dense layout, command palette, source monitor: `done`
+
+## Source Builders
+- former TS source scripts (`broadband/postcodes/deprivation/census/population/income/flood/naptan/uprn/crime`): `done` in Rust
+- `build sources all --jobs 3` orchestration: `done`
+- retry/fallback/idempotent ingest policy: `done` (duplicate-row upserts + flood source cached fallback)
+
+## Legacy Cleanup
+- `packages/*` TypeScript runtime removed from `main`: `done`
+- `scripts/sources/*` and old orchestrators removed: `done`
+- package scripts switched to Rust workflow: `done`
+
+## Cross-Project Alignment
+- `let` scripts/workflow aligned with `cho` and `fin` Rust conventions: `done`
+- `let-tui` header/theme/palette contract aligned with `cho` and `fin`: `done`
+
+## Parity
+- command-matrix parity harness runs against `archive` vs `main`: `done`
+- extended audit diff artifacts generated under `.tmp/parity/*`: `done`

@@ -109,7 +109,7 @@ Scores will have lower confidence and the location composite will be less accura
 
 ```bash
 bun install
-bun run build:sources    # downloads ~5-10GB from government sources
+:let build sources all --jobs 3    # downloads ~5-10GB from government sources
 ```
 
 Building takes 10-30 minutes depending on network speed. Some government data URLs may expire; the build logs which sources succeeded.

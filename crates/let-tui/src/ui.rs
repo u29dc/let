@@ -2,8 +2,7 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::Style,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
 };
@@ -11,6 +10,9 @@ use ratatui::{
 use crate::{app::App, theme::Theme};
 
 pub(crate) fn render(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
+    let root = Block::default().style(theme.root);
+    frame.render_widget(root, frame.area());
+
     let area = frame.area();
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -21,7 +23,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
         ])
         .split(area);
 
-    render_header(frame, layout[0], theme);
+    render_header(frame, layout[0], app, theme);
     render_body(frame, layout[1], app, theme);
     render_footer(frame, layout[2], app, theme);
 
@@ -30,22 +32,32 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
     }
 }
 
-fn render_header(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
-    let line = Line::from(vec![
-        Span::styled("■", Style::default().fg(theme.accent)),
-        Span::raw(" "),
-        Span::styled("let", theme.title),
-        Span::raw(" "),
-        Span::styled(
-            format!("v{}", env!("CARGO_PKG_VERSION")),
-            Style::default().fg(theme.accent),
-        ),
-        Span::raw("  "),
-        Span::styled("rental search cockpit", theme.muted),
-    ]);
+fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(24),
+            Constraint::Min(10),
+            Constraint::Length(36),
+        ])
+        .split(area);
 
-    let header = Paragraph::new(line).block(Block::default().borders(Borders::BOTTOM));
-    frame.render_widget(header, area);
+    let brand = Paragraph::new(Line::from(Span::styled(app.header_text(), theme.brand)));
+    frame.render_widget(brand, chunks[0]);
+
+    let center = Paragraph::new(Line::from(Span::styled(
+        app.route_context(),
+        theme.header_meta,
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(center, chunks[1]);
+
+    let right = Paragraph::new(Line::from(Span::styled(
+        "cmd+p | ctrl+p command palette",
+        theme.header_meta,
+    )))
+    .alignment(Alignment::Right);
+    frame.render_widget(right, chunks[2]);
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
@@ -66,14 +78,14 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
 
 fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let header = Row::new([
-        Cell::from("ID"),
-        Cell::from("ADDRESS"),
-        Cell::from("PRICE"),
-        Cell::from("BED"),
-        Cell::from("ALGO"),
-        Cell::from("ASSESS"),
+        Cell::from("id"),
+        Cell::from("address"),
+        Cell::from("price"),
+        Cell::from("bed"),
+        Cell::from("algo"),
+        Cell::from("assess"),
     ])
-    .style(theme.table_header)
+    .style(theme.section_heading)
     .height(1);
 
     let rows = app
@@ -95,7 +107,7 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
                 .unwrap_or_else(|| "--".to_owned());
             let assessed = listing
                 .assessed_score
-                .map(|score| format!("{:.0}", score))
+                .map(|value| format!("{:.0}", value))
                 .unwrap_or_else(|| "--".to_owned());
 
             Row::new([
@@ -106,6 +118,7 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
                 Cell::from(score),
                 Cell::from(assessed),
             ])
+            .style(theme.body)
         })
         .collect::<Vec<_>>();
 
@@ -121,12 +134,16 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
         ],
     )
     .header(header)
-    .row_highlight_style(theme.selected_row)
-    .highlight_symbol("▐ ")
+    .row_highlight_style(theme.selected)
+    .highlight_symbol("▌ ")
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!("Listings ({})", app.listings().len())),
+            .border_style(theme.border)
+            .title(Span::styled(
+                format!(" listings ({}) ", app.listings().len()),
+                theme.header_meta,
+            )),
     );
 
     let mut state = ratatui::widgets::TableState::default();
@@ -137,7 +154,7 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
 }
 
 fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
-    let content = if let Some(listing) = app.selected_listing() {
+    let lines = if let Some(listing) = app.selected_listing() {
         let id = listing
             .portal_ids
             .rightmove
@@ -146,12 +163,7 @@ fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         let station = listing
             .nearest_stations
             .first()
-            .map(|station| {
-                format!(
-                    "{} ({:.1} {})",
-                    station.name, station.distance, station.unit
-                )
-            })
+            .map(|item| format!("{} ({:.1} {})", item.name, item.distance, item.unit))
             .unwrap_or_else(|| "--".to_owned());
         let score = listing
             .scores
@@ -173,75 +185,47 @@ fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         };
 
         vec![
-            Line::from(vec![
-                Span::styled("ID: ", theme.key),
-                Span::styled(id, theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Address: ", theme.key),
-                Span::styled(&listing.address, theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Region: ", theme.key),
-                Span::styled(listing.region.as_deref().unwrap_or("--"), theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Price: ", theme.key),
-                Span::styled(&listing.price_display, theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Beds/Baths: ", theme.key),
-                Span::styled(
-                    format!("{}/{}", listing.bedrooms, listing.bathrooms),
-                    theme.value,
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Algo/Assess: ", theme.key),
-                Span::styled(format!("{score} / {assessed}"), theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Confidence: ", theme.key),
-                Span::styled(confidence, theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Station: ", theme.key),
-                Span::styled(station, theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Postcode: ", theme.key),
-                Span::styled(&listing.postcode, theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Status: ", theme.key),
-                Span::styled(status, theme.value),
-            ]),
-            Line::from(vec![
-                Span::styled("Fetched: ", theme.key),
-                Span::styled(&listing.fetched_at, theme.value),
-            ]),
+            kv_line("id", id, theme),
+            kv_line("address", &listing.address, theme),
+            kv_line("region", listing.region.as_deref().unwrap_or("--"), theme),
+            kv_line("price", &listing.price_display, theme),
+            kv_line(
+                "beds/baths",
+                format!("{}/{}", listing.bedrooms, listing.bathrooms),
+                theme,
+            ),
+            kv_line("algo/assess", format!("{score} / {assessed}"), theme),
+            kv_line("confidence", &confidence, theme),
+            kv_line("station", &station, theme),
+            kv_line("postcode", &listing.postcode, theme),
+            kv_line("status", status, theme),
+            kv_line("fetched", &listing.fetched_at, theme),
             Line::from(""),
-            Line::from(vec![
-                Span::styled("URL: ", theme.key),
-                Span::styled(&listing.url, theme.value),
-            ]),
+            kv_line("url", &listing.url, theme),
         ]
     } else {
-        vec![Line::styled("No listings loaded", theme.muted)]
+        vec![Line::from(Span::styled(
+            "No listings loaded",
+            theme.footer_meta,
+        ))]
     };
 
-    let panel =
-        Paragraph::new(content).block(Block::default().borders(Borders::ALL).title("Detail"));
+    let panel = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border)
+            .title(Span::styled(" selected ", theme.header_meta)),
+    );
     frame.render_widget(panel, area);
 }
 
 fn render_sources(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let header = Row::new([
-        Cell::from("SOURCE"),
-        Cell::from("STATUS"),
-        Cell::from("SIZE MB"),
+        Cell::from("source"),
+        Cell::from("status"),
+        Cell::from("size mb"),
     ])
-    .style(theme.table_header);
+    .style(theme.section_heading);
 
     let rows = app
         .source_status()
@@ -253,11 +237,13 @@ fn render_sources(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
             } else {
                 "--".to_owned()
             };
+
             Row::new([
                 Cell::from(source.name.clone()),
                 Cell::from(status),
                 Cell::from(size),
             ])
+            .style(theme.body)
         })
         .collect::<Vec<_>>();
 
@@ -270,66 +256,100 @@ fn render_sources(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).title("Sources"));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border)
+            .title(Span::styled(" sources ", theme.header_meta)),
+    );
     frame.render_widget(table, area);
 }
 
 fn render_palette(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
-    let area = centered_rect(68, 58, frame.area());
+    let area = centered_rect(74, 62, frame.area());
     frame.render_widget(Clear, area);
 
-    let chunks = Layout::default()
+    let container = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.brand)
+        .title(Span::styled(" Command Palette ", theme.section_heading));
+    let inner = container.inner(area);
+    frame.render_widget(container, area);
+
+    let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(4)])
-        .split(area);
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(3),
+        ])
+        .split(inner);
 
     let query = Paragraph::new(Line::from(vec![
-        Span::styled(":", theme.accent_key),
-        Span::styled(app.palette_query(), theme.value),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Command Palette"),
-    );
-    frame.render_widget(query, chunks[0]);
+        Span::styled("> ", theme.section_heading),
+        Span::styled(app.palette_query(), theme.body),
+    ]));
+    frame.render_widget(query, sections[0]);
 
-    let items = app.palette_items();
-    let rows = items
+    let divider = Paragraph::new(Line::from(Span::styled("actions", theme.header_meta)));
+    frame.render_widget(divider, sections[1]);
+
+    let rows = app
+        .palette_items()
         .iter()
         .enumerate()
         .map(|(idx, item)| {
             let style = if idx == app.palette_selected_index() {
-                theme.selected_row
+                theme.selected
             } else {
-                theme.value
+                theme.body
             };
             Row::new([Cell::from((*item).to_owned())]).style(style)
         })
         .collect::<Vec<_>>();
 
-    let table = Table::new(rows, [Constraint::Percentage(100)])
-        .block(Block::default().borders(Borders::ALL).title("Commands"));
-    frame.render_widget(table, chunks[1]);
+    let table = Table::new(rows, [Constraint::Percentage(100)]).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border)
+            .title(Span::styled(" commands ", theme.header_meta)),
+    );
+    frame.render_widget(table, sections[2]);
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
-    let footer = Line::from(vec![
-        Span::styled("j/k", theme.accent_key),
-        Span::styled(" move ", theme.footer),
-        Span::styled("g/G", theme.accent_key),
-        Span::styled(" top/bottom ", theme.footer),
-        Span::styled(":", theme.accent_key),
-        Span::styled(" palette ", theme.footer),
-        Span::styled("r", theme.accent_key),
-        Span::styled(" refresh ", theme.footer),
-        Span::styled("q", theme.accent_key),
-        Span::styled(" quit  ", theme.footer),
-        Span::styled(app.status(), theme.muted),
-    ]);
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(10), Constraint::Length(56)])
+        .split(area);
 
-    let footer = Paragraph::new(footer).block(Block::default().borders(Borders::TOP));
-    frame.render_widget(footer, area);
+    let left = Paragraph::new(Line::from(vec![
+        Span::styled("j/k ", theme.section_heading),
+        Span::styled("rows ", theme.footer_meta),
+        Span::styled("g/G ", theme.section_heading),
+        Span::styled("jump ", theme.footer_meta),
+        Span::styled(": ", theme.section_heading),
+        Span::styled("palette ", theme.footer_meta),
+        Span::styled("cmd/ctrl+p ", theme.section_heading),
+        Span::styled("palette ", theme.footer_meta),
+        Span::styled("r ", theme.section_heading),
+        Span::styled("refresh ", theme.footer_meta),
+        Span::styled("q ", theme.section_heading),
+        Span::styled("quit", theme.footer_meta),
+    ]));
+    frame.render_widget(left, chunks[0]);
+
+    let right = Paragraph::new(Line::from(Span::styled(app.status(), theme.footer_status)))
+        .alignment(Alignment::Right);
+    frame.render_widget(right, chunks[1]);
+}
+
+fn kv_line(key: &str, value: impl Into<String>, theme: &Theme) -> Line<'static> {
+    let value = value.into();
+    Line::from(vec![
+        Span::styled(format!("{key}: "), theme.key),
+        Span::styled(value, theme.body),
+    ])
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
