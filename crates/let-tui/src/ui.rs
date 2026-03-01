@@ -7,7 +7,10 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
 };
 
-use crate::{app::App, theme::Theme};
+use crate::{
+    app::{App, FocusPane},
+    theme::Theme,
+};
 
 pub(crate) fn render(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
     let root = Block::default().style(theme.root);
@@ -60,16 +63,17 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
         .split(area);
 
-    render_listings_table(frame, rows[0], app, theme);
-    render_context_panel(frame, rows[1], app, theme);
+    render_listings_table(frame, columns[0], app, theme);
+    render_context_panel(frame, columns[1], app, theme);
 }
 
 fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+    let list_focused = app.focus() == FocusPane::Listings;
     let header = Row::new([
         Cell::from("id"),
         Cell::from("region"),
@@ -90,14 +94,10 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
         Cell::from("gig"),
         Cell::from("crime"),
         Cell::from("imd"),
-        Cell::from("flood"),
         Cell::from("garden"),
         Cell::from("pets"),
         Cell::from("type"),
         Cell::from("status"),
-        Cell::from("listed"),
-        Cell::from("lat"),
-        Cell::from("lng"),
         Cell::from("address"),
     ])
     .style(theme.section_heading)
@@ -188,12 +188,6 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
                 .decile
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "--".to_owned());
-            let flood = listing
-                .area
-                .flood_risk
-                .level
-                .clone()
-                .unwrap_or_else(|| "--".to_owned());
             let garden = listing
                 .scores
                 .as_ref()
@@ -208,14 +202,7 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
                 .to_lowercase();
             let property_type = truncate(&listing.property_type, 10);
             let status = format!("{:?}", listing.status).to_lowercase();
-            let listed = listing
-                .listed_date
-                .as_deref()
-                .map(short_date)
-                .unwrap_or_else(|| "--".to_owned());
-            let lat = format!("{:.4}", listing.location.lat);
-            let lng = format!("{:.4}", listing.location.lng);
-            let address = truncate(&listing.address, 34);
+            let address = truncate(&listing.address, 44);
 
             Row::new([
                 Cell::from(id),
@@ -237,14 +224,10 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
                 Cell::from(gigabit),
                 Cell::from(crime),
                 Cell::from(imd),
-                Cell::from(truncate(&flood, 8)),
                 Cell::from(garden),
                 Cell::from(pets),
                 Cell::from(property_type),
                 Cell::from(status),
-                Cell::from(listed),
-                Cell::from(lat),
-                Cell::from(lng),
                 Cell::from(address),
             ])
             .style(theme.body)
@@ -273,19 +256,19 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
             Constraint::Length(3),
             Constraint::Length(5),
             Constraint::Length(3),
-            Constraint::Length(8),
             Constraint::Length(7),
             Constraint::Length(5),
             Constraint::Length(10),
             Constraint::Length(8),
-            Constraint::Length(10),
-            Constraint::Length(9),
-            Constraint::Length(9),
-            Constraint::Min(24),
+            Constraint::Min(36),
         ],
     )
     .header(header)
-    .row_highlight_style(theme.selected)
+    .row_highlight_style(if list_focused {
+        theme.selected
+    } else {
+        theme.key
+    })
     .highlight_symbol("▌ ")
     .block(
         Block::default()
@@ -305,101 +288,53 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
 }
 
 fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
-    let lines = if let Some(listing) = app.selected_listing() {
-        let media = app.selected_media();
+    let context_focused = app.focus() == FocusPane::Context;
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(area);
+
+    let summary_lines = if let Some(listing) = app.selected_listing() {
+        let media_rows = app.context_rows().len();
         let mut lines = Vec::new();
         let id = listing
             .portal_ids
             .rightmove
             .as_deref()
             .unwrap_or(listing.id.as_str());
+        let cache = app
+            .selected_media()
+            .cache_dir
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "--".to_owned());
 
         lines.push(kv_line("id", id, theme));
-        lines.push(kv_line("rightmove", &listing.url, theme));
-        lines.push(kv_line("maps", &listing.google_maps_url, theme));
+        lines.push(kv_line("rightmove", truncate(&listing.url, 128), theme));
         lines.push(kv_line(
-            "street view",
-            &listing.google_maps_street_view_url,
+            "maps",
+            truncate(&listing.google_maps_url, 128),
             theme,
         ));
-
-        if let Some(dir) = media.cache_dir {
-            lines.push(kv_line("cache", dir.display().to_string(), theme));
-        } else {
-            lines.push(kv_line("cache", "--", theme));
-        }
-
-        if let Some(path) = media.images.first() {
-            lines.push(kv_line("first image", path.display().to_string(), theme));
-        } else {
-            lines.push(kv_line("first image", "--", theme));
-        }
-        if let Some(path) = media.floorplan {
-            lines.push(kv_line("floorplan", path.display().to_string(), theme));
-        }
-        if let Some(path) = media.satellite {
-            lines.push(kv_line("satellite", path.display().to_string(), theme));
-        }
-        if let Some(path) = media.street {
-            lines.push(kv_line("street map", path.display().to_string(), theme));
-        }
+        lines.push(kv_line("cache", truncate(&cache, 128), theme));
+        lines.push(kv_line("media items", media_rows.to_string(), theme));
 
         if !listing.notes.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled("notes", theme.section_heading)));
-            for note in listing.notes.iter().take(6) {
+            for note in listing.notes.iter().take(3) {
                 lines.push(Line::from(Span::styled(
-                    format!("- {}", truncate(note, 160)),
+                    format!("- {}", truncate(note, 140)),
                     theme.body,
                 )));
             }
         }
 
-        if let Some(assessment) = &listing.assessment {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "assessment",
-                theme.section_heading,
-            )));
-            lines.push(kv_line(
-                "recommendation",
-                format!("{:?}", assessment.recommendation).to_lowercase(),
-                theme,
-            ));
-            lines.push(kv_line(
-                "maintenance",
-                format!("{:?}", assessment.maintenance).to_lowercase(),
-                theme,
-            ));
-            lines.push(kv_line(
-                "family",
-                format!("{:?}", assessment.family_suitability).to_lowercase(),
-                theme,
-            ));
-            lines.push(kv_line(
-                "score adjustment",
-                format!("{:.1}", assessment.score_adjustment),
-                theme,
-            ));
-            lines.push(kv_line(
-                "reasoning",
-                truncate(&assessment.reasoning, 200),
-                theme,
-            ));
-            if let Some(tradeoffs) = &assessment.tradeoffs {
-                lines.push(kv_line("tradeoffs", truncate(tradeoffs, 200), theme));
-            }
-            if let Some(neighborhood) = &assessment.neighborhood_analysis {
-                lines.push(kv_line("neighborhood", truncate(neighborhood, 200), theme));
-            }
-        }
-
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
+            Span::styled("tab ", theme.section_heading),
+            Span::styled("switch pane ", theme.footer_meta),
             Span::styled("enter ", theme.section_heading),
-            Span::styled("quick look image ", theme.footer_meta),
-            Span::styled("cmd/ctrl+p ", theme.section_heading),
-            Span::styled("listing actions", theme.footer_meta),
+            Span::styled("quicklook selected media", theme.footer_meta),
         ]));
         lines
     } else {
@@ -409,13 +344,41 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Th
         ))]
     };
 
-    let panel = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme.border)
-            .title(Span::styled(" context ", theme.header_meta)),
-    );
-    frame.render_widget(panel, area);
+    let summary = Paragraph::new(summary_lines)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border)
+                .title(Span::styled(" context ", theme.header_meta)),
+        );
+    frame.render_widget(summary, sections[0]);
+
+    let media_rows = app
+        .context_rows()
+        .iter()
+        .map(|row| Row::new([Cell::from(truncate(row, 140))]).style(theme.body))
+        .collect::<Vec<_>>();
+
+    let media_table = Table::new(media_rows, [Constraint::Percentage(100)])
+        .row_highlight_style(if context_focused {
+            theme.selected
+        } else {
+            theme.key
+        })
+        .highlight_symbol("▌ ")
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(theme.border)
+                .title(Span::styled(" media (enter quicklook) ", theme.header_meta)),
+        );
+
+    let mut media_state = ratatui::widgets::TableState::default();
+    if !app.context_rows().is_empty() {
+        media_state.select(Some(app.context_selected_index()));
+    }
+    frame.render_stateful_widget(media_table, sections[1], &mut media_state);
 }
 
 fn render_palette(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
@@ -479,12 +442,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         .split(area);
 
     let left = Paragraph::new(Line::from(vec![
+        Span::styled("tab ", theme.section_heading),
+        Span::styled("focus ", theme.footer_meta),
         Span::styled("j/k ", theme.section_heading),
         Span::styled("rows ", theme.footer_meta),
         Span::styled("g/G ", theme.section_heading),
         Span::styled("jump ", theme.footer_meta),
         Span::styled("enter ", theme.section_heading),
-        Span::styled("quicklook ", theme.footer_meta),
+        Span::styled("open/quicklook ", theme.footer_meta),
         Span::styled(": ", theme.section_heading),
         Span::styled("palette ", theme.footer_meta),
         Span::styled("cmd/ctrl+p ", theme.section_heading),

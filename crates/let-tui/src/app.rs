@@ -60,11 +60,25 @@ enum PaletteActionKind {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FocusPane {
+    Listings,
+    Context,
+}
+
+#[derive(Debug, Clone)]
+struct ContextMediaItem {
+    label: String,
+    path: PathBuf,
+}
+
 #[derive(Debug)]
 pub(crate) struct App {
     running: bool,
     listings: Vec<Listing>,
     selected: usize,
+    focus: FocusPane,
+    context_selected: usize,
     status: String,
     header: HeaderContract,
     palette_open: bool,
@@ -86,6 +100,10 @@ impl App {
 
     pub(crate) fn selected_index(&self) -> usize {
         self.selected
+    }
+
+    pub(crate) fn focus(&self) -> FocusPane {
+        self.focus
     }
 
     pub(crate) fn status(&self) -> &str {
@@ -157,6 +175,17 @@ impl App {
         self.palette_selected
     }
 
+    pub(crate) fn context_rows(&self) -> Vec<String> {
+        self.build_context_media_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect()
+    }
+
+    pub(crate) fn context_selected_index(&self) -> usize {
+        self.context_selected
+    }
+
     pub(crate) fn on_key(&mut self, key: KeyEvent) {
         if self.palette_open {
             self.on_palette_key(key);
@@ -171,13 +200,29 @@ impl App {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.running = false;
             }
-            KeyCode::Char('j') | KeyCode::Down => self.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.select_prev(),
-            KeyCode::Char('g') | KeyCode::Home => self.select_first(),
-            KeyCode::Char('G') | KeyCode::End => self.select_last(),
+            KeyCode::Tab => self.toggle_focus(),
+            KeyCode::Char('j') | KeyCode::Down => match self.focus {
+                FocusPane::Listings => self.select_next(),
+                FocusPane::Context => self.context_next(),
+            },
+            KeyCode::Char('k') | KeyCode::Up => match self.focus {
+                FocusPane::Listings => self.select_prev(),
+                FocusPane::Context => self.context_prev(),
+            },
+            KeyCode::Char('g') | KeyCode::Home => match self.focus {
+                FocusPane::Listings => self.select_first(),
+                FocusPane::Context => self.context_first(),
+            },
+            KeyCode::Char('G') | KeyCode::End => match self.focus {
+                FocusPane::Listings => self.select_last(),
+                FocusPane::Context => self.context_last(),
+            },
             KeyCode::Char('r') | KeyCode::Char('R') => self.refresh_all(),
             KeyCode::Char(':') => self.open_palette(),
-            KeyCode::Enter => self.quicklook_selected_primary_image(),
+            KeyCode::Enter => match self.focus {
+                FocusPane::Listings => self.open_selected_on_rightmove(),
+                FocusPane::Context => self.quicklook_selected_context_media(),
+            },
             _ => {}
         }
     }
@@ -359,13 +404,104 @@ impl App {
         }
     }
 
-    fn quicklook_selected_primary_image(&mut self) {
-        let media = self.selected_media();
-        let Some(path) = media.first_image() else {
-            self.status = "no cached image for selected listing".to_owned();
+    fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            FocusPane::Listings => FocusPane::Context,
+            FocusPane::Context => FocusPane::Listings,
+        };
+        self.clamp_context_selection();
+        self.status = match self.focus {
+            FocusPane::Listings => "focus: listings".to_owned(),
+            FocusPane::Context => "focus: context".to_owned(),
+        };
+    }
+
+    fn context_next(&mut self) {
+        let len = self.build_context_media_items().len();
+        if len == 0 {
+            self.context_selected = 0;
+            return;
+        }
+        self.context_selected = (self.context_selected + 1).min(len.saturating_sub(1));
+    }
+
+    fn context_prev(&mut self) {
+        self.context_selected = self.context_selected.saturating_sub(1);
+    }
+
+    fn context_first(&mut self) {
+        self.context_selected = 0;
+    }
+
+    fn context_last(&mut self) {
+        let len = self.build_context_media_items().len();
+        if len == 0 {
+            self.context_selected = 0;
+            return;
+        }
+        self.context_selected = len.saturating_sub(1);
+    }
+
+    fn clamp_context_selection(&mut self) {
+        let len = self.build_context_media_items().len();
+        if len == 0 {
+            self.context_selected = 0;
+            return;
+        }
+        if self.context_selected >= len {
+            self.context_selected = len.saturating_sub(1);
+        }
+    }
+
+    fn open_selected_on_rightmove(&mut self) {
+        let Some(listing) = self.selected_listing() else {
+            self.status = "no listing selected".to_owned();
             return;
         };
+        let url = listing.url.clone();
+        self.open_url(&url);
+    }
+
+    fn quicklook_selected_context_media(&mut self) {
+        let items = self.build_context_media_items();
+        let Some(item) = items.get(self.context_selected) else {
+            self.status = "no media selected".to_owned();
+            return;
+        };
+        let path = item.path.clone();
         self.quicklook_path(&path);
+    }
+
+    fn build_context_media_items(&self) -> Vec<ContextMediaItem> {
+        let media = self.selected_media();
+        let mut items = Vec::new();
+
+        for (index, path) in media.images.iter().enumerate() {
+            items.push(ContextMediaItem {
+                label: format!("image {:02} | {}", index + 1, path.display()),
+                path: path.clone(),
+            });
+        }
+        if let Some(path) = media.floorplan {
+            items.push(ContextMediaItem {
+                label: format!("floorplan | {}", path.display()),
+                path,
+            });
+        }
+        if let Some(path) = media.satellite {
+            items.push(ContextMediaItem {
+                label: format!("satellite | {}", path.display()),
+                path,
+            });
+        }
+        if let Some(path) = media.street {
+            items.push(ContextMediaItem {
+                label: format!("street-map | {}", path.display()),
+                path,
+            });
+        }
+
+        items
     }
 
     fn open_url(&mut self, url: &str) {
@@ -430,6 +566,7 @@ impl App {
             return;
         }
         self.selected = (self.selected + 1).min(self.listings.len().saturating_sub(1));
+        self.clamp_context_selection();
     }
 
     fn select_prev(&mut self) {
@@ -437,17 +574,20 @@ impl App {
             return;
         }
         self.selected = self.selected.saturating_sub(1);
+        self.clamp_context_selection();
     }
 
     fn select_first(&mut self) {
         if !self.listings.is_empty() {
             self.selected = 0;
+            self.clamp_context_selection();
         }
     }
 
     fn select_last(&mut self) {
         if !self.listings.is_empty() {
             self.selected = self.listings.len().saturating_sub(1);
+            self.clamp_context_selection();
         }
     }
 
@@ -457,6 +597,7 @@ impl App {
         if self.selected >= self.listings.len() {
             self.selected = self.listings.len().saturating_sub(1);
         }
+        self.clamp_context_selection();
         self.status = status;
         self.refresh_sources();
     }
@@ -473,6 +614,8 @@ impl Default for App {
             running: true,
             listings,
             selected: 0,
+            focus: FocusPane::Listings,
+            context_selected: 0,
             status,
             header: HEADER_CONTRACT,
             palette_open: false,
@@ -731,7 +874,7 @@ fn reveal_in_finder(path: &Path) -> std::io::Result<()> {
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::App;
+    use super::{App, FocusPane};
     use crate::theme::HEADER_CONTRACT;
 
     #[test]
@@ -747,6 +890,8 @@ mod tests {
             running: true,
             listings: vec![],
             selected: 0,
+            focus: FocusPane::Listings,
+            context_selected: 0,
             status: String::new(),
             header: HEADER_CONTRACT,
             palette_open: false,
