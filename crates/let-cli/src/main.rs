@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use let_sdk::paths::PathOverrides;
 
 mod commands;
+mod env;
 mod envelope;
 mod registry;
 
@@ -265,8 +266,8 @@ enum OpsCommand {
     },
     /// Prune listings by score, region, or inactive status.
     Prune {
-        #[arg(long, default_value_t = 50.0)]
-        min_score: f64,
+        #[arg(long)]
+        min_score: Option<f64>,
         #[arg(long)]
         bottom: Option<u8>,
         #[arg(long)]

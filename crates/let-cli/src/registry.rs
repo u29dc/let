@@ -291,7 +291,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             name: "--min-score",
                             param_type: "number",
                             required: false,
-                            description: "Prune listings below score threshold (default: 50).",
+                            description: "Prune listings below score threshold.",
                         },
                         ToolParameter {
                             name: "--bottom",
@@ -303,7 +303,8 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             name: "--region",
                             param_type: "string",
                             required: false,
-                            description: "Prune listings matching region patterns.",
+                            description:
+                                "Limit prune selection to region patterns, or prune full region when used alone.",
                         },
                         ToolParameter {
                             name: "--inactive",

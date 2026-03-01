@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
 use std::cmp::Ordering;
-use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use let_sdk::schema::listing::{Listing, ListingStatus};
@@ -13,6 +12,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs, to_camel_json};
+use crate::env::resolve_env_var;
 
 const NOTION_API_BASE: &str = "https://api.notion.com/v1";
 const NOTION_API_VERSION: &str = "2022-06-28";
@@ -80,12 +80,14 @@ pub fn export_json(shared: &SharedArgs, output: Option<PathBuf>) -> CommandResul
 }
 
 pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResult {
-    let notion = load_notion_config()?;
+    let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
+    let notion = load_notion_config(&paths.derived.env_file)?;
+    let mapbox_token =
+        resolve_env_var("MAPBOX_ACCESS_TOKEN", &paths.derived.env_file).map(|(token, _)| token);
     let runtime = build_runtime()?;
-    let mut client = NotionClient::new(&runtime, notion)?;
+    let mut client = NotionClient::new(&runtime, notion, mapbox_token)?;
     client.validate_database()?;
 
-    let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let db_path = paths.derived.database;
     let mut data = load_listings_file(&db_path)?;
 
@@ -201,23 +203,27 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, CommandError> {
         })
 }
 
-fn load_notion_config() -> Result<NotionConfig, CommandError> {
-    let api_key = env::var("NOTION_API_KEY").map_err(|_| {
-        CommandError::new(
-            "NO_CREDENTIALS",
-            "missing NOTION_API_KEY",
-            "set NOTION_API_KEY and NOTION_DATABASE_ID",
-            2,
-        )
-    })?;
-    let database_id = env::var("NOTION_DATABASE_ID").map_err(|_| {
-        CommandError::new(
-            "NO_CREDENTIALS",
-            "missing NOTION_DATABASE_ID",
-            "set NOTION_API_KEY and NOTION_DATABASE_ID",
-            2,
-        )
-    })?;
+fn load_notion_config(env_file: &Path) -> Result<NotionConfig, CommandError> {
+    let api_key = resolve_env_var("NOTION_API_KEY", env_file)
+        .map(|(value, _)| value)
+        .ok_or_else(|| {
+            CommandError::new(
+                "NO_CREDENTIALS",
+                "missing NOTION_API_KEY",
+                "set NOTION_API_KEY and NOTION_DATABASE_ID",
+                2,
+            )
+        })?;
+    let database_id = resolve_env_var("NOTION_DATABASE_ID", env_file)
+        .map(|(value, _)| value)
+        .ok_or_else(|| {
+            CommandError::new(
+                "NO_CREDENTIALS",
+                "missing NOTION_DATABASE_ID",
+                "set NOTION_API_KEY and NOTION_DATABASE_ID",
+                2,
+            )
+        })?;
 
     Ok(NotionConfig {
         api_key,
@@ -276,6 +282,7 @@ struct NotionClient<'a> {
     runtime: &'a tokio::runtime::Runtime,
     http: reqwest::Client,
     config: NotionConfig,
+    mapbox_access_token: Option<String>,
     last_request_at: Option<Instant>,
 }
 
@@ -283,6 +290,7 @@ impl<'a> NotionClient<'a> {
     fn new(
         runtime: &'a tokio::runtime::Runtime,
         config: NotionConfig,
+        mapbox_access_token: Option<String>,
     ) -> Result<Self, CommandError> {
         let http = runtime
             .block_on(async {
@@ -302,6 +310,7 @@ impl<'a> NotionClient<'a> {
             runtime,
             http,
             config,
+            mapbox_access_token,
             last_request_at: None,
         })
     }
@@ -323,7 +332,7 @@ impl<'a> NotionClient<'a> {
     fn create_page(&mut self, listing: &Listing) -> Result<String, CommandError> {
         let body = json!({
             "parent": { "database_id": self.config.database_id },
-            "properties": build_notion_properties(listing),
+            "properties": build_notion_properties(listing, self.mapbox_access_token.as_deref()),
         });
 
         let response = self.request_json(reqwest::Method::POST, "/pages", Some(body))?;
@@ -343,7 +352,7 @@ impl<'a> NotionClient<'a> {
 
     fn update_page(&mut self, page_id: &str, listing: &Listing) -> Result<(), CommandError> {
         let body = json!({
-            "properties": build_notion_properties(listing),
+            "properties": build_notion_properties(listing, self.mapbox_access_token.as_deref()),
         });
         self.request_json(
             reqwest::Method::PATCH,
@@ -454,7 +463,7 @@ impl<'a> NotionClient<'a> {
     }
 }
 
-fn build_notion_properties(listing: &Listing) -> Value {
+fn build_notion_properties(listing: &Listing, mapbox_access_token: Option<&str>) -> Value {
     let score = listing
         .assessed_score
         .or_else(|| listing.scores.as_ref().map(|scores| scores.overall));
@@ -477,9 +486,9 @@ fn build_notion_properties(listing: &Listing) -> Value {
         .iter()
         .map(|image| image.remote.clone())
         .collect::<Vec<_>>();
-    if let (Some(satellite), Ok(token)) = (
+    if let (Some(satellite), Some(token)) = (
         listing.map_views.satellite.remote.as_ref(),
-        env::var("MAPBOX_ACCESS_TOKEN"),
+        mapbox_access_token,
     ) {
         let separator = if satellite.contains('?') { '&' } else { '?' };
         image_urls.insert(0, format!("{satellite}{separator}access_token={token}"));

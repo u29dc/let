@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandOutput, CommandResult, SharedArgs};
+use crate::env::{EnvValueSource, resolve_env_var};
 
 const SOURCE_NAMES: [&str; 10] = [
     "postcodes",
@@ -56,6 +57,12 @@ pub fn run(shared: &SharedArgs) -> CommandResult {
         "NOTION_API_KEY",
         "env.notion_api_key",
         "Notion API Key",
+        &bundle.derived.env_file,
+    ));
+    checks.push(check_env_key(
+        "NOTION_DATABASE_ID",
+        "env.notion_database_id",
+        "Notion Database ID",
         &bundle.derived.env_file,
     ));
     checks.push(check_env_key(
@@ -185,24 +192,28 @@ fn check_source_db(name: &str, path: &Path) -> HealthCheck {
 }
 
 fn check_env_key(key: &str, id: &str, label: &str, env_file: &Path) -> HealthCheck {
-    if std::env::var(key).ok().is_some() {
-        HealthCheck {
+    if let Some((_, source)) = resolve_env_var(key, env_file) {
+        let source_text = match source {
+            EnvValueSource::Process => "process env",
+            EnvValueSource::EnvFile => ".env file",
+        };
+        return HealthCheck {
             id: id.to_owned(),
             label: label.to_owned(),
             status: "ok".to_owned(),
             severity: "info".to_owned(),
-            detail: format!("{key} is set"),
+            detail: format!("{key} is set ({source_text})"),
             fix: Value::Null,
-        }
-    } else {
-        HealthCheck {
-            id: id.to_owned(),
-            label: label.to_owned(),
-            status: "missing".to_owned(),
-            severity: "degraded".to_owned(),
-            detail: format!("{key} not set"),
-            fix: json!([format!("echo '{key}=your-key' >> {}", env_file.display())]),
-        }
+        };
+    }
+
+    HealthCheck {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        status: "missing".to_owned(),
+        severity: "degraded".to_owned(),
+        detail: format!("{key} not set"),
+        fix: json!([format!("echo '{key}=your-key' >> {}", env_file.display())]),
     }
 }
 

@@ -365,6 +365,7 @@ fn run_all_sources(
 
     let mut results = Vec::new();
     let mut first_error: Option<CommandError> = None;
+    let mut failed_count = 0usize;
     let mut active = Vec::new();
     let mut completed = 0usize;
 
@@ -389,6 +390,7 @@ fn run_all_sources(
                         results.push(run);
                     }
                     Err(error) => {
+                        failed_count += 1;
                         reporter.on_finished_error(&source, &error, completed, &active);
                         if first_error.is_none() {
                             first_error = Some(error);
@@ -401,6 +403,7 @@ fn run_all_sources(
             }
             Err(RecvTimeoutError::Disconnected) => {
                 if completed < total && first_error.is_none() {
+                    failed_count += total - completed;
                     first_error = Some(CommandError::runtime(
                         "PROCESS_ERROR",
                         "build worker channel disconnected unexpectedly",
@@ -416,8 +419,7 @@ fn run_all_sources(
         let _ = worker.join();
     }
 
-    let failed = usize::from(first_error.is_some());
-    reporter.finish(results.len(), failed);
+    reporter.finish(results.len(), failed_count);
     if let Some(error) = first_error {
         return Err(error);
     }

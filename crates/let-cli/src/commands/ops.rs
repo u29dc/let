@@ -16,7 +16,7 @@ use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs};
 
 #[derive(Debug, Clone)]
 pub struct PruneParams {
-    pub min_score: f64,
+    pub min_score: Option<f64>,
     pub bottom_percent: Option<u8>,
     pub region: Option<String>,
     pub inactive_only: bool,
@@ -461,35 +461,72 @@ fn select_prune_ids(
     listings: &[Listing],
     params: &PruneParams,
 ) -> Result<(Vec<String>, String), CommandError> {
+    if params.inactive_only && (params.bottom_percent.is_some() || params.min_score.is_some()) {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            "cannot combine --inactive with --bottom or --min-score",
+            "use --inactive alone (optionally with --region), or remove --inactive",
+        ));
+    }
+
+    if params.bottom_percent.is_some() && params.min_score.is_some() {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            "cannot combine --bottom with --min-score",
+            "choose one pruning selector: --bottom or --min-score",
+        ));
+    }
+
+    if let Some(percent) = params.bottom_percent
+        && (percent == 0 || percent > 100)
+    {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            format!("invalid --bottom value: {percent}"),
+            "provide an integer between 1 and 100",
+        ));
+    }
+
+    if let Some(min_score) = params.min_score
+        && !(0.0..=100.0).contains(&min_score)
+    {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            format!("invalid --min-score value: {min_score}"),
+            "provide a score between 0 and 100",
+        ));
+    }
+
+    let region_patterns = params
+        .region
+        .as_deref()
+        .map(region_patterns)
+        .unwrap_or_default();
+
+    let candidate_listings = listings
+        .iter()
+        .filter(|listing| {
+            region_patterns.is_empty()
+                || matches_region(listing.region.as_deref(), &region_patterns)
+        })
+        .collect::<Vec<_>>();
+
     if params.inactive_only {
-        let ids = listings
+        let ids = candidate_listings
             .iter()
             .filter(|listing| matches!(listing.status, ListingStatus::Inactive))
             .map(|listing| listing.id.clone())
             .collect::<Vec<_>>();
-        return Ok((ids, "inactive".to_owned()));
-    }
-
-    if let Some(region) = params.region.as_deref() {
-        let patterns = region_patterns(region);
-        let ids = listings
-            .iter()
-            .filter(|listing| matches_region(listing.region.as_deref(), &patterns))
-            .map(|listing| listing.id.clone())
-            .collect::<Vec<_>>();
-        return Ok((ids, "region".to_owned()));
+        let mode = if region_patterns.is_empty() {
+            "inactive".to_owned()
+        } else {
+            "region+inactive".to_owned()
+        };
+        return Ok((ids, mode));
     }
 
     if let Some(percent) = params.bottom_percent {
-        if percent == 0 || percent > 100 {
-            return Err(CommandError::runtime(
-                "VALIDATION_ERROR",
-                format!("invalid --bottom value: {percent}"),
-                "provide an integer between 1 and 100",
-            ));
-        }
-
-        let mut scored = listings
+        let mut scored = candidate_listings
             .iter()
             .map(|listing| {
                 (
@@ -509,26 +546,48 @@ fn select_prune_ids(
             .filter(|(_, score)| *score < cutoff)
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
-        return Ok((ids, format!("bottom {percent}%")));
+        let mode = if region_patterns.is_empty() {
+            format!("bottom {percent}%")
+        } else {
+            format!("region+bottom {percent}%")
+        };
+        return Ok((ids, mode));
     }
 
-    if !(0.0..=100.0).contains(&params.min_score) {
-        return Err(CommandError::runtime(
-            "VALIDATION_ERROR",
-            format!("invalid --min-score value: {}", params.min_score),
-            "provide a score between 0 and 100",
-        ));
+    if let Some(min_score) = params.min_score {
+        let ids = candidate_listings
+            .iter()
+            .filter(|listing| {
+                listing.scores.as_ref().map_or(0.0, |scores| scores.overall) < min_score
+            })
+            .map(|listing| listing.id.clone())
+            .collect::<Vec<_>>();
+        let mode = if region_patterns.is_empty() {
+            format!("score < {min_score}")
+        } else {
+            format!("region+score < {min_score}")
+        };
+        return Ok((ids, mode));
     }
 
+    if !region_patterns.is_empty() {
+        let ids = candidate_listings
+            .iter()
+            .map(|listing| listing.id.clone())
+            .collect::<Vec<_>>();
+        return Ok((ids, "region".to_owned()));
+    }
+
+    let default_min_score = 50.0;
     let ids = listings
         .iter()
         .filter(|listing| {
-            listing.scores.as_ref().map_or(0.0, |scores| scores.overall) < params.min_score
+            listing.scores.as_ref().map_or(0.0, |scores| scores.overall) < default_min_score
         })
         .map(|listing| listing.id.clone())
         .collect::<Vec<_>>();
 
-    Ok((ids, format!("score < {}", params.min_score)))
+    Ok((ids, format!("score < {default_min_score}")))
 }
 
 fn region_patterns(raw: &str) -> Vec<String> {
@@ -835,7 +894,7 @@ mod tests {
         };
 
         let params = PruneParams {
-            min_score: 50.0,
+            min_score: None,
             bottom_percent: None,
             region: None,
             inactive_only: true,
@@ -846,6 +905,97 @@ mod tests {
         let (ids, mode) = select_prune_ids(&[listing], &params).expect("select ids");
         assert_eq!(ids, vec!["id-1"]);
         assert_eq!(mode, "inactive");
+    }
+
+    #[test]
+    fn prune_rejects_conflicting_selectors() {
+        let params = PruneParams {
+            min_score: Some(55.0),
+            bottom_percent: Some(10),
+            region: None,
+            inactive_only: false,
+            dry_run: true,
+            force: true,
+        };
+
+        let error = select_prune_ids(&[], &params).expect_err("expected validation error");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn prune_region_and_min_score_combines_filters() {
+        let base_listing = let_sdk::schema::listing::Listing {
+            id: "id-1".to_owned(),
+            portal_ids: PortalIds::default(),
+            uprn: None,
+            uprn_source: None,
+            uprn_confidence: None,
+            url: "https://example.com".to_owned(),
+            location: let_sdk::schema::listing::GeoLocation {
+                lat: 0.0,
+                lng: 0.0,
+                pin_type: None,
+            },
+            postcode: "AA1 1AA".to_owned(),
+            address: "Address".to_owned(),
+            region: Some("Sheffield".to_owned()),
+            google_maps_url: "https://maps.example.com".to_owned(),
+            google_maps_street_view_url: "https://maps.example.com/street".to_owned(),
+            area: let_sdk::schema::listing::AreaMetrics::default(),
+            price: 1000,
+            price_display: "£1,000 pcm".to_owned(),
+            bedrooms: 2,
+            bathrooms: 1,
+            property_type: "Flat".to_owned(),
+            description: "desc".to_owned(),
+            notes: vec![],
+            images: vec![],
+            floorplan: let_sdk::schema::listing::RemoteLocalAsset::default(),
+            epc: let_sdk::schema::listing::RemoteLocalAsset::default(),
+            map_views: let_sdk::schema::listing::MapViews::default(),
+            epc_rating: None,
+            floor_area_sqm: None,
+            epc_lodgement_date: None,
+            epc_address_match: None,
+            epc_search_url: None,
+            nearest_stations: vec![],
+            gigabit_availability: None,
+            listed_date: None,
+            lettings: let_sdk::schema::listing::Lettings::default(),
+            agent: let_sdk::schema::listing::Agent::default(),
+            assessment: None,
+            assessed_at: None,
+            assessed_score: None,
+            scores: None,
+            fetched_at: "2026-03-01T00:00:00.000Z".to_owned(),
+            extraction_status: let_sdk::schema::listing::ExtractionStatus::Success,
+            status: ListingStatus::Active,
+            notion_page_id: None,
+        };
+
+        let mut second_region_listing = base_listing.clone();
+        second_region_listing.id = "id-2".to_owned();
+
+        let mut low_score_other_region = base_listing.clone();
+        low_score_other_region.id = "id-3".to_owned();
+        low_score_other_region.region = Some("Leeds".to_owned());
+
+        let params = PruneParams {
+            min_score: Some(50.0),
+            bottom_percent: None,
+            region: Some("Sheffield".to_owned()),
+            inactive_only: false,
+            dry_run: true,
+            force: true,
+        };
+
+        let (ids, mode) = select_prune_ids(
+            &[base_listing, second_region_listing, low_score_other_region],
+            &params,
+        )
+        .expect("select ids");
+        assert_eq!(mode, "region+score < 50");
+        assert_eq!(ids, vec!["id-1", "id-2"]);
     }
 
     #[test]
