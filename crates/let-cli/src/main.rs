@@ -90,6 +90,20 @@ enum Command {
         #[command(subcommand)]
         command: BuildCommand,
     },
+    /// Fetch listings by portal ids.
+    Fetch {
+        /// Comma-separated portal ids.
+        ids: String,
+        /// Region name override for fetched listings.
+        #[arg(long)]
+        region: Option<String>,
+        /// Skip image and map downloads.
+        #[arg(long, default_value_t = false)]
+        skip_images: bool,
+        /// Skip EPC enrichment.
+        #[arg(long, default_value_t = false)]
+        skip_epc: bool,
+    },
     /// Delegate command groups not yet ported to the archive-compatible TS CLI.
     #[command(external_subcommand)]
     External(Vec<String>),
@@ -172,6 +186,19 @@ enum ExportCommand {
         /// Output path (defaults to data/let.db.json).
         #[arg(long, value_name = "FILE")]
         output: Option<PathBuf>,
+    },
+    /// Export listings to Notion.
+    Notion {
+        #[arg(long)]
+        top: Option<usize>,
+        #[arg(long)]
+        min_score: Option<f64>,
+        #[arg(long)]
+        region: Option<String>,
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     /// Delegate non-ported export subcommands to legacy CLI.
     #[command(external_subcommand)]
@@ -584,6 +611,28 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
             result: commands::export::export_json(shared, output.clone()),
         },
         Command::Export {
+            command:
+                ExportCommand::Notion {
+                    top,
+                    min_score,
+                    region,
+                    dry_run,
+                    force,
+                },
+        } => DispatchOutcome::Local {
+            tool: "export.notion",
+            result: commands::export::export_notion(
+                shared,
+                &commands::export::NotionParams {
+                    top: *top,
+                    min_score: *min_score,
+                    region: region.clone(),
+                    dry_run: *dry_run,
+                    force: *force,
+                },
+            ),
+        },
+        Command::Export {
             command: ExportCommand::External(args),
         } => {
             let mut delegated = vec!["export".to_owned()];
@@ -597,6 +646,23 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
         } => DispatchOutcome::Local {
             tool: "build.sources",
             result: commands::build::run_sources((*target).into(), *jobs, shared, json_mode),
+        },
+        Command::Fetch {
+            ids,
+            region,
+            skip_images,
+            skip_epc,
+        } => DispatchOutcome::Local {
+            tool: "fetch",
+            result: commands::fetch::run(
+                shared,
+                &commands::fetch::FetchParams {
+                    ids: ids.clone(),
+                    region: region.clone(),
+                    skip_images: *skip_images,
+                    skip_epc: *skip_epc,
+                },
+            ),
         },
         Command::External(args) => {
             if args.is_empty() {

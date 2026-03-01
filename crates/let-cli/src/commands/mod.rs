@@ -8,6 +8,7 @@ pub mod assess;
 pub mod build;
 pub mod config;
 pub mod export;
+pub mod fetch;
 pub mod health;
 pub mod ops;
 pub mod score;
