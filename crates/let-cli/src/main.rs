@@ -180,6 +180,28 @@ enum ExportCommand {
 
 #[derive(Debug, Subcommand)]
 enum SearchCommand {
+    /// Resolve location names to Rightmove identifiers.
+    Resolve {
+        /// City or area name.
+        location: String,
+    },
+    /// Discover listing ids from configured or ad-hoc locations.
+    Discover {
+        #[arg(long)]
+        region: Option<String>,
+        #[arg(long)]
+        location: Option<String>,
+        #[arg(long = "property-types")]
+        property_types: Option<String>,
+        #[arg(long = "must-have")]
+        must_have: Option<String>,
+        #[arg(long = "dont-show")]
+        dont_show: Option<String>,
+        #[arg(long = "location-name")]
+        location_name: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Compare ids with known listings.
     Diff {
         /// Comma-separated portal ids.
@@ -404,6 +426,38 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
         } => DispatchOutcome::Local {
             tool: "assess.submit",
             result: commands::assess::submit(shared, id, assessment),
+        },
+        Command::Search {
+            command: SearchCommand::Resolve { location },
+        } => DispatchOutcome::Local {
+            tool: "search.resolve",
+            result: commands::search::resolve(location),
+        },
+        Command::Search {
+            command:
+                SearchCommand::Discover {
+                    region,
+                    location,
+                    property_types,
+                    must_have,
+                    dont_show,
+                    location_name,
+                    limit,
+                },
+        } => DispatchOutcome::Local {
+            tool: "search.discover",
+            result: commands::search::discover(
+                shared,
+                &commands::search::DiscoverParams {
+                    region: region.clone(),
+                    location: location.clone(),
+                    property_types: property_types.clone(),
+                    must_have: must_have.clone(),
+                    dont_show: dont_show.clone(),
+                    location_name: location_name.clone(),
+                    limit: *limit,
+                },
+            ),
         },
         Command::Search {
             command: SearchCommand::Diff { ids },
