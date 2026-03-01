@@ -1339,6 +1339,7 @@ dependencies = [
  "let-sdk",
  "predicates",
  "reqwest",
+ "rusqlite",
  "secrecy",
  "serde",
  "serde_json",
