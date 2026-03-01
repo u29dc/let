@@ -2,16 +2,17 @@
 
 use std::path::PathBuf;
 use std::process;
+use std::process::Command as ProcessCommand;
 use std::time::Instant;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use let_sdk::paths::PathOverrides;
 
 mod commands;
 mod envelope;
 mod registry;
 
-use commands::{CommandError, CommandOutput, CommandResult, SharedArgs};
+use commands::{CommandError, CommandOutput, SharedArgs};
 use envelope::{ErrorEnvelope, ErrorPayload, Meta, SuccessEnvelope};
 
 #[derive(Debug, Parser)]
@@ -52,24 +53,16 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Start the CLI workflow runtime.
+    /// Start the terminal UI.
     Start,
-    /// Placeholder command group.
-    Search,
-    /// Placeholder command group.
-    Fetch,
-    /// Placeholder command group.
-    View,
-    /// Placeholder command group.
-    Score,
-    /// Placeholder command group.
-    Assess,
-    /// Placeholder command group.
-    Export,
-    /// Placeholder command group.
-    Ops,
-    /// Placeholder command group.
-    Build,
+    /// Build source databases.
+    Build {
+        #[command(subcommand)]
+        command: BuildCommand,
+    },
+    /// Delegate command groups not yet ported to the archive-compatible TS CLI.
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -80,34 +73,67 @@ enum ConfigCommand {
     Validate,
 }
 
-impl Command {
-    fn tool_name(&self) -> &'static str {
-        match self {
-            Self::Tools { .. } => "tools",
-            Self::Health => "health",
-            Self::Config {
-                command: ConfigCommand::Show,
-            } => "config.show",
-            Self::Config {
-                command: ConfigCommand::Validate,
-            } => "config.validate",
-            Self::Start => "start",
-            Self::Search => "search",
-            Self::Fetch => "fetch",
-            Self::View => "view",
-            Self::Score => "score",
-            Self::Assess => "assess",
-            Self::Export => "export",
-            Self::Ops => "ops",
-            Self::Build => "build",
+#[derive(Debug, Subcommand)]
+enum BuildCommand {
+    /// Build source databases.
+    Sources {
+        /// Source target to build.
+        #[arg(value_enum)]
+        target: BuildSourceTarget,
+        /// Parallel jobs for `all` target.
+        #[arg(long, default_value_t = 3)]
+        jobs: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BuildSourceTarget {
+    List,
+    All,
+    Broadband,
+    Postcodes,
+    Deprivation,
+    Census,
+    Population,
+    Income,
+    Flood,
+    Naptan,
+    Uprn,
+    Crime,
+}
+
+impl From<BuildSourceTarget> for commands::build::SourceTarget {
+    fn from(value: BuildSourceTarget) -> Self {
+        use commands::build::SourceTarget;
+        match value {
+            BuildSourceTarget::List => SourceTarget::List,
+            BuildSourceTarget::All => SourceTarget::All,
+            BuildSourceTarget::Broadband => SourceTarget::Broadband,
+            BuildSourceTarget::Postcodes => SourceTarget::Postcodes,
+            BuildSourceTarget::Deprivation => SourceTarget::Deprivation,
+            BuildSourceTarget::Census => SourceTarget::Census,
+            BuildSourceTarget::Population => SourceTarget::Population,
+            BuildSourceTarget::Income => SourceTarget::Income,
+            BuildSourceTarget::Flood => SourceTarget::Flood,
+            BuildSourceTarget::Naptan => SourceTarget::Naptan,
+            BuildSourceTarget::Uprn => SourceTarget::Uprn,
+            BuildSourceTarget::Crime => SourceTarget::Crime,
         }
     }
 }
 
+enum DispatchOutcome {
+    Local {
+        tool: &'static str,
+        result: Result<CommandOutput, CommandError>,
+    },
+    Delegated {
+        code: i32,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
-    let started = Instant::now();
-    let tool_name = cli.command.tool_name();
 
     let shared = SharedArgs {
         overrides: PathOverrides {
@@ -118,31 +144,106 @@ fn main() {
         },
     };
 
-    let result = dispatch(&cli.command, &shared);
-    let elapsed = started.elapsed().as_millis() as u64;
-    let exit_code = emit(&result, tool_name, elapsed, cli.json);
-    process::exit(exit_code);
+    let started = Instant::now();
+    let outcome = dispatch(&cli.command, &shared, cli.json);
+
+    match outcome {
+        DispatchOutcome::Local { tool, result } => {
+            let elapsed = started.elapsed().as_millis() as u64;
+            let exit_code = emit(&result, tool, elapsed, cli.json);
+            process::exit(exit_code);
+        }
+        DispatchOutcome::Delegated { code } => {
+            process::exit(code);
+        }
+    }
 }
 
-fn dispatch(command: &Command, shared: &SharedArgs) -> CommandResult {
+fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> DispatchOutcome {
     match command {
-        Command::Tools { name } => commands::tools::run(name.as_deref()),
-        Command::Health => commands::health::run(shared),
+        Command::Tools { name } => DispatchOutcome::Local {
+            tool: "tools",
+            result: commands::tools::run(name.as_deref()),
+        },
+        Command::Health => DispatchOutcome::Local {
+            tool: "health",
+            result: commands::health::run(shared),
+        },
         Command::Config {
             command: ConfigCommand::Show,
-        } => commands::config::show(shared),
+        } => DispatchOutcome::Local {
+            tool: "config.show",
+            result: commands::config::show(shared),
+        },
         Command::Config {
             command: ConfigCommand::Validate,
-        } => commands::config::validate(shared),
-        Command::Start => commands::start::run(),
-        Command::Search => commands::placeholder("search"),
-        Command::Fetch => commands::placeholder("fetch"),
-        Command::View => commands::placeholder("view"),
-        Command::Score => commands::placeholder("score"),
-        Command::Assess => commands::placeholder("assess"),
-        Command::Export => commands::placeholder("export"),
-        Command::Ops => commands::placeholder("ops"),
-        Command::Build => commands::placeholder("build"),
+        } => DispatchOutcome::Local {
+            tool: "config.validate",
+            result: commands::config::validate(shared),
+        },
+        Command::Start => DispatchOutcome::Local {
+            tool: "start",
+            result: commands::start::run(json_mode),
+        },
+        Command::Build {
+            command: BuildCommand::Sources { target, jobs },
+        } => DispatchOutcome::Local {
+            tool: "build.sources",
+            result: commands::build::run_sources((*target).into(), *jobs, shared, json_mode),
+        },
+        Command::External(args) => {
+            if args.is_empty() {
+                DispatchOutcome::Local {
+                    tool: "external",
+                    result: Err(CommandError::runtime(
+                        "VALIDATION_ERROR",
+                        "missing command",
+                        "run `let tools --json` to list available commands",
+                    )),
+                }
+            } else {
+                DispatchOutcome::Delegated {
+                    code: delegate_to_legacy(args, shared, json_mode),
+                }
+            }
+        }
+    }
+}
+
+fn delegate_to_legacy(args: &[String], shared: &SharedArgs, json_mode: bool) -> i32 {
+    let mut full_args: Vec<String> = vec![
+        "run".to_owned(),
+        "packages/cli/src/index.ts".to_owned(),
+    ];
+
+    if json_mode {
+        full_args.push("--json".to_owned());
+    }
+    if let Some(path) = &shared.overrides.data_dir {
+        full_args.push("--data-dir".to_owned());
+        full_args.push(path.display().to_string());
+    }
+    if let Some(path) = &shared.overrides.config_dir {
+        full_args.push("--config-dir".to_owned());
+        full_args.push(path.display().to_string());
+    }
+    if let Some(path) = &shared.overrides.cache_dir {
+        full_args.push("--cache-dir".to_owned());
+        full_args.push(path.display().to_string());
+    }
+    if let Some(path) = &shared.overrides.sources_dir {
+        full_args.push("--sources-dir".to_owned());
+        full_args.push(path.display().to_string());
+    }
+
+    full_args.extend(args.iter().cloned());
+
+    match ProcessCommand::new("bun").args(&full_args).status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(error) => {
+            eprintln!("failed to delegate command to legacy bun cli: {error}");
+            1
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 use let_sdk::paths::PathOverrides;
 use serde_json::Value;
 
+pub mod build;
 pub mod config;
 pub mod health;
 pub mod start;
@@ -102,11 +103,3 @@ impl From<let_sdk::LetError> for CommandError {
 }
 
 pub type CommandResult = Result<CommandOutput, CommandError>;
-
-pub fn placeholder(group: &str) -> CommandResult {
-    Err(CommandError::runtime(
-        "NOT_IMPLEMENTED",
-        format!("command group `{group}` is not wired yet"),
-        "run `let tools --json` to inspect available command metadata",
-    ))
-}
