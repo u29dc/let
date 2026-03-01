@@ -70,6 +70,16 @@ enum Command {
         #[command(subcommand)]
         command: AssessCommand,
     },
+    /// Search discovery command group.
+    Search {
+        #[command(subcommand)]
+        command: SearchCommand,
+    },
+    /// Operational maintenance command group.
+    Ops {
+        #[command(subcommand)]
+        command: OpsCommand,
+    },
     /// Export commands.
     Export {
         #[command(subcommand)]
@@ -164,6 +174,40 @@ enum ExportCommand {
         output: Option<PathBuf>,
     },
     /// Delegate non-ported export subcommands to legacy CLI.
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum SearchCommand {
+    /// Compare ids with known listings.
+    Diff {
+        /// Comma-separated portal ids.
+        ids: String,
+    },
+    /// Delegate non-ported search subcommands to legacy CLI.
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum OpsCommand {
+    /// Prune listings by score, region, or inactive status.
+    Prune {
+        #[arg(long, default_value_t = 50.0)]
+        min_score: f64,
+        #[arg(long)]
+        bottom: Option<u8>,
+        #[arg(long)]
+        region: Option<String>,
+        #[arg(long, default_value_t = false)]
+        inactive: bool,
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+    /// Delegate non-ported ops subcommands to legacy CLI.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -350,6 +394,54 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
             tool: "assess.submit",
             result: commands::assess::submit(shared, id, assessment),
         },
+        Command::Search {
+            command: SearchCommand::Diff { ids },
+        } => DispatchOutcome::Local {
+            tool: "search.diff",
+            result: commands::search::diff(shared, ids),
+        },
+        Command::Search {
+            command: SearchCommand::External(args),
+        } => {
+            let mut delegated = vec!["search".to_owned()];
+            delegated.extend(args.iter().cloned());
+            DispatchOutcome::Delegated {
+                code: delegate_to_legacy(&delegated, shared, json_mode),
+            }
+        }
+        Command::Ops {
+            command:
+                OpsCommand::Prune {
+                    min_score,
+                    bottom,
+                    region,
+                    inactive,
+                    dry_run,
+                    force,
+                },
+        } => DispatchOutcome::Local {
+            tool: "ops.prune",
+            result: commands::ops::prune(
+                shared,
+                &commands::ops::PruneParams {
+                    min_score: *min_score,
+                    bottom_percent: *bottom,
+                    region: region.clone(),
+                    inactive_only: *inactive,
+                    dry_run: *dry_run,
+                    force: *force,
+                },
+            ),
+        },
+        Command::Ops {
+            command: OpsCommand::External(args),
+        } => {
+            let mut delegated = vec!["ops".to_owned()];
+            delegated.extend(args.iter().cloned());
+            DispatchOutcome::Delegated {
+                code: delegate_to_legacy(&delegated, shared, json_mode),
+            }
+        }
         Command::Export {
             command: ExportCommand::Json { output },
         } => DispatchOutcome::Local {
