@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/let-sdk", "crates/let-cli", "crates/let-tui"]
+resolver = "3"
