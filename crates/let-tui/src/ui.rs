@@ -2,10 +2,10 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
 };
 
 use crate::{app::App, theme::Theme};
@@ -24,9 +24,13 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
     render_header(frame, layout[0], theme);
     render_body(frame, layout[1], app, theme);
     render_footer(frame, layout[2], app, theme);
+
+    if app.palette_open() {
+        render_palette(frame, app, theme);
+    }
 }
 
-fn render_header(frame: &mut Frame<'_>, area: ratatui::layout::Rect, theme: &Theme) {
+fn render_header(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     let line = Line::from(vec![
         Span::styled("■", Style::default().fg(theme.accent)),
         Span::raw(" "),
@@ -44,22 +48,23 @@ fn render_header(frame: &mut Frame<'_>, area: ratatui::layout::Rect, theme: &The
     frame.render_widget(header, area);
 }
 
-fn render_body(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App, theme: &Theme) {
+fn render_body(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(area);
 
     render_listings_table(frame, columns[0], app, theme);
-    render_detail(frame, columns[1], app, theme);
+
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(columns[1]);
+    render_detail(frame, right[0], app, theme);
+    render_sources(frame, right[1], app, theme);
 }
 
-fn render_listings_table(
-    frame: &mut Frame<'_>,
-    area: ratatui::layout::Rect,
-    app: &App,
-    theme: &Theme,
-) {
+fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let header = Row::new([
         Cell::from("ID"),
         Cell::from("ADDRESS"),
@@ -131,7 +136,7 @@ fn render_listings_table(
     frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn render_detail(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App, theme: &Theme) {
+fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let content = if let Some(listing) = app.selected_listing() {
         let id = listing
             .portal_ids
@@ -230,12 +235,92 @@ fn render_detail(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App, 
     frame.render_widget(panel, area);
 }
 
-fn render_footer(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App, theme: &Theme) {
+fn render_sources(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+    let header = Row::new([
+        Cell::from("SOURCE"),
+        Cell::from("STATUS"),
+        Cell::from("SIZE MB"),
+    ])
+    .style(theme.table_header);
+
+    let rows = app
+        .source_status()
+        .iter()
+        .map(|source| {
+            let status = if source.exists { "ready" } else { "missing" };
+            let size = if source.exists {
+                format!("{:.1}", source.size_mb)
+            } else {
+                "--".to_owned()
+            };
+            Row::new([
+                Cell::from(source.name.clone()),
+                Cell::from(status),
+                Cell::from(size),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(12),
+            Constraint::Length(9),
+            Constraint::Length(9),
+        ],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::ALL).title("Sources"));
+    frame.render_widget(table, area);
+}
+
+fn render_palette(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
+    let area = centered_rect(68, 58, frame.area());
+    frame.render_widget(Clear, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(4)])
+        .split(area);
+
+    let query = Paragraph::new(Line::from(vec![
+        Span::styled(":", theme.accent_key),
+        Span::styled(app.palette_query(), theme.value),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Command Palette"),
+    );
+    frame.render_widget(query, chunks[0]);
+
+    let items = app.palette_items();
+    let rows = items
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let style = if idx == app.palette_selected_index() {
+                theme.selected_row
+            } else {
+                theme.value
+            };
+            Row::new([Cell::from((*item).to_owned())]).style(style)
+        })
+        .collect::<Vec<_>>();
+
+    let table = Table::new(rows, [Constraint::Percentage(100)])
+        .block(Block::default().borders(Borders::ALL).title("Commands"));
+    frame.render_widget(table, chunks[1]);
+}
+
+fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let footer = Line::from(vec![
         Span::styled("j/k", theme.accent_key),
         Span::styled(" move ", theme.footer),
         Span::styled("g/G", theme.accent_key),
         Span::styled(" top/bottom ", theme.footer),
+        Span::styled(":", theme.accent_key),
+        Span::styled(" palette ", theme.footer),
         Span::styled("r", theme.accent_key),
         Span::styled(" refresh ", theme.footer),
         Span::styled("q", theme.accent_key),
@@ -245,6 +330,26 @@ fn render_footer(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &App, 
 
     let footer = Paragraph::new(footer).block(Block::default().borders(Borders::TOP));
     frame.render_widget(footer, area);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn truncate(input: &str, max: usize) -> String {
