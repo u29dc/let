@@ -6,5 +6,6 @@ pub mod paths;
 pub mod config;
 pub mod schema;
 pub mod services;
+pub mod utils;
 
 pub use errors::{ErrorCode, LetError, Result};

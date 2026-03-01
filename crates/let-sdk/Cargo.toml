@@ -25,6 +25,7 @@ zip = { workspace = true }
 calamine = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 dirs = { workspace = true }
