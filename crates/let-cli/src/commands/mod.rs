@@ -6,6 +6,7 @@ use serde_json::Value;
 pub mod build;
 pub mod config;
 pub mod health;
+pub mod score;
 pub mod start;
 pub mod tools;
 

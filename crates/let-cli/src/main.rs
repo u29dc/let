@@ -55,6 +55,11 @@ enum Command {
     },
     /// Start the terminal UI.
     Start,
+    /// Score listing datasets.
+    Score {
+        #[command(subcommand)]
+        command: ScoreCommand,
+    },
     /// Build source databases.
     Build {
         #[command(subcommand)]
@@ -83,6 +88,17 @@ enum BuildCommand {
         /// Parallel jobs for `all` target.
         #[arg(long, default_value_t = 3)]
         jobs: usize,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ScoreCommand {
+    /// Recompute scores for all listings.
+    Compute,
+    /// Explain score breakdown for a listing id.
+    Explain {
+        /// Listing UUID or portal id.
+        id: String,
     },
 }
 
@@ -185,6 +201,18 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
             tool: "start",
             result: commands::start::run(json_mode),
         },
+        Command::Score {
+            command: ScoreCommand::Compute,
+        } => DispatchOutcome::Local {
+            tool: "score.compute",
+            result: commands::score::compute(shared),
+        },
+        Command::Score {
+            command: ScoreCommand::Explain { id },
+        } => DispatchOutcome::Local {
+            tool: "score.explain",
+            result: commands::score::explain(shared, id),
+        },
         Command::Build {
             command: BuildCommand::Sources { target, jobs },
         } => DispatchOutcome::Local {
@@ -211,10 +239,7 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
 }
 
 fn delegate_to_legacy(args: &[String], shared: &SharedArgs, json_mode: bool) -> i32 {
-    let mut full_args: Vec<String> = vec![
-        "run".to_owned(),
-        "packages/cli/src/index.ts".to_owned(),
-    ];
+    let mut full_args: Vec<String> = vec!["run".to_owned(), "packages/cli/src/index.ts".to_owned()];
 
     if json_mode {
         full_args.push("--json".to_owned());

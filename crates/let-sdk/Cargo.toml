@@ -30,6 +30,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 dirs = { workspace = true }
 secrecy = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }

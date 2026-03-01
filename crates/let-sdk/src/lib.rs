@@ -5,6 +5,7 @@ pub mod context;
 pub mod db;
 pub mod errors;
 pub mod paths;
+pub mod pipeline;
 pub mod schema;
 pub mod services;
 pub mod utils;
@@ -14,3 +15,6 @@ pub use db::{
     update_listing_assessment, upsert_listings,
 };
 pub use errors::{ErrorCode, LetError, Result};
+pub use pipeline::score::{
+    calculate_assessed_score, recalc_assessed_scores, score_listings_with_config,
+};
