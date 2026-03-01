@@ -41,10 +41,10 @@
 		"@commitlint/cli": "^20.4.2",
 		"@commitlint/config-conventional": "^20.4.2",
 		"@types/html-minifier-terser": "^7.0.2",
-		"@typescript/native-preview": "^7.0.0-dev.20260228.1",
+		"@typescript/native-preview": "^7.0.0-dev.20260301.1",
 		"bun-types": "^1.3.10",
 		"husky": "^9.1.7",
-		"lint-staged": "^16.3.0",
+		"lint-staged": "^16.3.1",
 		"xlsx": "^0.18.5"
 	}
 }
