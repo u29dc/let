@@ -24,7 +24,12 @@ pub trait FetchService {
 }
 
 pub trait ViewService {
-    fn list(&self, region: Option<&str>, min_score: Option<f64>, top: Option<usize>) -> Result<Vec<Listing>>;
+    fn list(
+        &self,
+        region: Option<&str>,
+        min_score: Option<f64>,
+        top: Option<usize>,
+    ) -> Result<Vec<Listing>>;
     fn detail(&self, id: &str) -> Result<Listing>;
 }
 

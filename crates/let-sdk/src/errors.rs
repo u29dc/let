@@ -33,7 +33,10 @@ impl ErrorCode {
     }
 
     pub fn is_blocking(self) -> bool {
-        matches!(self, Self::NoConfig | Self::NoSources | Self::SchemaMismatch)
+        matches!(
+            self,
+            Self::NoConfig | Self::NoSources | Self::SchemaMismatch
+        )
     }
 }
 
@@ -55,11 +58,7 @@ impl LetError {
     }
 
     pub fn exit_code(&self) -> i32 {
-        if self.code.is_blocking() {
-            2
-        } else {
-            1
-        }
+        if self.code.is_blocking() { 2 } else { 1 }
     }
 }
 

@@ -16,7 +16,12 @@ pub struct RuntimeContext {
 }
 
 impl RuntimeContext {
-    pub fn new(config_dir: PathBuf, data_dir: PathBuf, cache_dir: PathBuf, sources_dir: PathBuf) -> Result<Self> {
+    pub fn new(
+        config_dir: PathBuf,
+        data_dir: PathBuf,
+        cache_dir: PathBuf,
+        sources_dir: PathBuf,
+    ) -> Result<Self> {
         let http = Client::builder()
             .user_agent("let-rust/0.0.1")
             .build()

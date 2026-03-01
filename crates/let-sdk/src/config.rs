@@ -202,7 +202,10 @@ impl AppConfig {
         validate_weight_01("scoring.weights.affordability", weights.affordability)?;
         validate_weight_01("scoring.weights.location", weights.location)?;
         validate_weight_01("scoring.weights.liveability", weights.liveability)?;
-        if !approx_eq(weights.affordability + weights.location + weights.liveability, 1.0) {
+        if !approx_eq(
+            weights.affordability + weights.location + weights.liveability,
+            1.0,
+        ) {
             return Err(LetError::new(
                 ErrorCode::InvalidInput,
                 "composite scoring weights must sum to 1.0",
@@ -211,7 +214,10 @@ impl AppConfig {
         }
 
         let affordability = &self.scoring.affordability;
-        validate_weight_01("scoring.affordability.priceWeight", affordability.price_weight)?;
+        validate_weight_01(
+            "scoring.affordability.priceWeight",
+            affordability.price_weight,
+        )?;
         validate_weight_01("scoring.affordability.epcWeight", affordability.epc_weight)?;
         if !approx_eq(affordability.price_weight + affordability.epc_weight, 1.0) {
             return Err(LetError::new(
@@ -223,12 +229,19 @@ impl AppConfig {
 
         let location = &self.scoring.location;
         validate_weight_01("scoring.location.stationWeight", location.station_weight)?;
-        validate_weight_01("scoring.location.broadbandWeight", location.broadband_weight)?;
+        validate_weight_01(
+            "scoring.location.broadbandWeight",
+            location.broadband_weight,
+        )?;
         validate_weight_01("scoring.location.priorityWeight", location.priority_weight)?;
         validate_weight_01("scoring.location.imdWeight", location.imd_weight)?;
         validate_weight_01("scoring.location.crimeWeight", location.crime_weight)?;
         if !approx_eq(
-            location.station_weight + location.broadband_weight + location.priority_weight + location.imd_weight + location.crime_weight,
+            location.station_weight
+                + location.broadband_weight
+                + location.priority_weight
+                + location.imd_weight
+                + location.crime_weight,
             1.0,
         ) {
             return Err(LetError::new(
@@ -241,8 +254,14 @@ impl AppConfig {
         let live = &self.scoring.liveability;
         validate_weight_01("scoring.liveability.gardenWeight", live.garden_weight)?;
         validate_weight_01("scoring.liveability.heatingWeight", live.heating_weight)?;
-        validate_weight_01("scoring.liveability.propertyTypeWeight", live.property_type_weight)?;
-        if !approx_eq(live.garden_weight + live.heating_weight + live.property_type_weight, 1.0) {
+        validate_weight_01(
+            "scoring.liveability.propertyTypeWeight",
+            live.property_type_weight,
+        )?;
+        if !approx_eq(
+            live.garden_weight + live.heating_weight + live.property_type_weight,
+            1.0,
+        ) {
             return Err(LetError::new(
                 ErrorCode::InvalidInput,
                 "liveability weights must sum to 1.0",

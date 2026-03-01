@@ -59,7 +59,9 @@ fn make_absolute(path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         path
     } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
     }
 }
 
@@ -177,7 +179,13 @@ mod tests {
             ..PathOverrides::default()
         }));
 
-        assert_eq!(bundle.derived.database, PathBuf::from("/tmp/let-data/let.db"));
-        assert_eq!(bundle.derived.config_file, PathBuf::from("/tmp/let-config/let.config.toml"));
+        assert_eq!(
+            bundle.derived.database,
+            PathBuf::from("/tmp/let-data/let.db")
+        );
+        assert_eq!(
+            bundle.derived.config_file,
+            PathBuf::from("/tmp/let-config/let.config.toml")
+        );
     }
 }
