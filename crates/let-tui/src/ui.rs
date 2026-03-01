@@ -4,7 +4,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
 };
 
 use crate::{app::App, theme::Theme};
@@ -13,7 +13,6 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
     let root = Block::default().style(theme.root);
     frame.render_widget(root, frame.area());
 
-    let area = frame.area();
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -21,7 +20,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
             Constraint::Min(8),
             Constraint::Length(1),
         ])
-        .split(area);
+        .split(frame.area());
 
     render_header(frame, layout[0], app, theme);
     render_body(frame, layout[1], app, theme);
@@ -61,29 +60,45 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
         .split(area);
 
-    render_listings_table(frame, columns[0], app, theme);
-
-    let right = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
-        .split(columns[1]);
-    render_detail(frame, right[0], app, theme);
-    render_sources(frame, right[1], app, theme);
+    render_listings_table(frame, rows[0], app, theme);
+    render_context_panel(frame, rows[1], app, theme);
 }
 
 fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let header = Row::new([
         Cell::from("id"),
-        Cell::from("address"),
+        Cell::from("region"),
         Cell::from("price"),
+        Cell::from("dep"),
+        Cell::from("avail"),
         Cell::from("bed"),
+        Cell::from("bath"),
         Cell::from("algo"),
         Cell::from("assess"),
+        Cell::from("aff"),
+        Cell::from("loc"),
+        Cell::from("live"),
+        Cell::from("conf"),
+        Cell::from("epc"),
+        Cell::from("sqm"),
+        Cell::from("stn"),
+        Cell::from("gig"),
+        Cell::from("crime"),
+        Cell::from("imd"),
+        Cell::from("flood"),
+        Cell::from("garden"),
+        Cell::from("pets"),
+        Cell::from("type"),
+        Cell::from("status"),
+        Cell::from("listed"),
+        Cell::from("lat"),
+        Cell::from("lng"),
+        Cell::from("address"),
     ])
     .style(theme.section_heading)
     .height(1);
@@ -91,32 +106,146 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
     let rows = app
         .listings()
         .iter()
-        .take(150)
+        .take(300)
         .map(|listing| {
             let id = listing
                 .portal_ids
                 .rightmove
                 .as_deref()
-                .unwrap_or(listing.id.as_str());
-            let address = truncate(&listing.address, 34);
+                .unwrap_or(listing.id.as_str())
+                .to_owned();
+            let region = listing.region.clone().unwrap_or_else(|| "--".to_owned());
             let price = format!("£{}", listing.price);
-            let score = listing
+            let deposit = listing
+                .lettings
+                .deposit
+                .map(|value| format!("£{value}"))
+                .unwrap_or_else(|| "--".to_owned());
+            let available = listing
+                .lettings
+                .available_date
+                .as_deref()
+                .map(short_date)
+                .unwrap_or_else(|| "--".to_owned());
+            let beds = listing.bedrooms.to_string();
+            let baths = listing.bathrooms.to_string();
+            let algo = listing
                 .scores
                 .as_ref()
                 .map(|scores| format!("{:.0}", scores.overall))
                 .unwrap_or_else(|| "--".to_owned());
-            let assessed = listing
+            let assess = listing
                 .assessed_score
                 .map(|value| format!("{:.0}", value))
                 .unwrap_or_else(|| "--".to_owned());
+            let affordability = listing
+                .scores
+                .as_ref()
+                .map(|scores| format!("{:.0}", scores.affordability))
+                .unwrap_or_else(|| "--".to_owned());
+            let location = listing
+                .scores
+                .as_ref()
+                .map(|scores| format!("{:.0}", scores.location))
+                .unwrap_or_else(|| "--".to_owned());
+            let liveability = listing
+                .scores
+                .as_ref()
+                .map(|scores| format!("{:.0}", scores.liveability))
+                .unwrap_or_else(|| "--".to_owned());
+            let confidence = listing
+                .scores
+                .as_ref()
+                .map(|scores| format!("{:.0}%", scores.confidence * 100.0))
+                .unwrap_or_else(|| "--".to_owned());
+            let epc = listing
+                .epc_rating
+                .as_ref()
+                .map(epc_band_label)
+                .unwrap_or_else(|| "--".to_owned());
+            let sqm = listing
+                .floor_area_sqm
+                .map(|value| format!("{value:.0}"))
+                .unwrap_or_else(|| "--".to_owned());
+            let station = listing
+                .nearest_stations
+                .first()
+                .map(|item| format!("{:.1}", item.distance))
+                .unwrap_or_else(|| "--".to_owned());
+            let gigabit = listing
+                .gigabit_availability
+                .map(|value| format!("{value:.0}"))
+                .unwrap_or_else(|| "--".to_owned());
+            let crime = listing
+                .area
+                .crime
+                .rate_per_1k
+                .map(|value| format!("{value:.1}"))
+                .unwrap_or_else(|| "--".to_owned());
+            let imd = listing
+                .area
+                .imd
+                .decile
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "--".to_owned());
+            let flood = listing
+                .area
+                .flood_risk
+                .level
+                .clone()
+                .unwrap_or_else(|| "--".to_owned());
+            let garden = listing
+                .scores
+                .as_ref()
+                .map(|scores| format!("{:?}", scores.factors.garden_type))
+                .unwrap_or_else(|| "--".to_owned())
+                .to_lowercase();
+            let pets = listing
+                .scores
+                .as_ref()
+                .map(|scores| format!("{:?}", scores.factors.pet_policy))
+                .unwrap_or_else(|| "--".to_owned())
+                .to_lowercase();
+            let property_type = truncate(&listing.property_type, 10);
+            let status = format!("{:?}", listing.status).to_lowercase();
+            let listed = listing
+                .listed_date
+                .as_deref()
+                .map(short_date)
+                .unwrap_or_else(|| "--".to_owned());
+            let lat = format!("{:.4}", listing.location.lat);
+            let lng = format!("{:.4}", listing.location.lng);
+            let address = truncate(&listing.address, 34);
 
             Row::new([
-                Cell::from(id.to_owned()),
-                Cell::from(address),
+                Cell::from(id),
+                Cell::from(truncate(&region, 12)),
                 Cell::from(price),
-                Cell::from(listing.bedrooms.to_string()),
-                Cell::from(score),
-                Cell::from(assessed),
+                Cell::from(deposit),
+                Cell::from(available),
+                Cell::from(beds),
+                Cell::from(baths),
+                Cell::from(algo),
+                Cell::from(assess),
+                Cell::from(affordability),
+                Cell::from(location),
+                Cell::from(liveability),
+                Cell::from(confidence),
+                Cell::from(epc),
+                Cell::from(sqm),
+                Cell::from(station),
+                Cell::from(gigabit),
+                Cell::from(crime),
+                Cell::from(imd),
+                Cell::from(truncate(&flood, 8)),
+                Cell::from(garden),
+                Cell::from(pets),
+                Cell::from(property_type),
+                Cell::from(status),
+                Cell::from(listed),
+                Cell::from(lat),
+                Cell::from(lng),
+                Cell::from(address),
             ])
             .style(theme.body)
         })
@@ -126,11 +255,33 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
         rows,
         [
             Constraint::Length(10),
-            Constraint::Min(26),
-            Constraint::Length(9),
+            Constraint::Length(12),
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Length(10),
+            Constraint::Length(3),
             Constraint::Length(4),
+            Constraint::Length(5),
             Constraint::Length(6),
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Length(5),
+            Constraint::Length(3),
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(5),
+            Constraint::Length(3),
+            Constraint::Length(8),
             Constraint::Length(7),
+            Constraint::Length(5),
+            Constraint::Length(10),
+            Constraint::Length(8),
+            Constraint::Length(10),
+            Constraint::Length(9),
+            Constraint::Length(9),
+            Constraint::Min(24),
         ],
     )
     .header(header)
@@ -153,116 +304,118 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
     frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn render_detail(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let lines = if let Some(listing) = app.selected_listing() {
+        let media = app.selected_media();
+        let mut lines = Vec::new();
         let id = listing
             .portal_ids
             .rightmove
             .as_deref()
             .unwrap_or(listing.id.as_str());
-        let station = listing
-            .nearest_stations
-            .first()
-            .map(|item| format!("{} ({:.1} {})", item.name, item.distance, item.unit))
-            .unwrap_or_else(|| "--".to_owned());
-        let score = listing
-            .scores
-            .as_ref()
-            .map(|scores| format!("{:.1}", scores.overall))
-            .unwrap_or_else(|| "--".to_owned());
-        let confidence = listing
-            .scores
-            .as_ref()
-            .map(|scores| format!("{:.0}%", scores.confidence * 100.0))
-            .unwrap_or_else(|| "--".to_owned());
-        let assessed = listing
-            .assessed_score
-            .map(|value| format!("{:.1}", value))
-            .unwrap_or_else(|| "--".to_owned());
-        let status = match listing.status {
-            let_sdk::schema::listing::ListingStatus::Active => "active",
-            let_sdk::schema::listing::ListingStatus::Inactive => "inactive",
-        };
 
-        vec![
-            kv_line("id", id, theme),
-            kv_line("address", &listing.address, theme),
-            kv_line("region", listing.region.as_deref().unwrap_or("--"), theme),
-            kv_line("price", &listing.price_display, theme),
-            kv_line(
-                "beds/baths",
-                format!("{}/{}", listing.bedrooms, listing.bathrooms),
+        lines.push(kv_line("id", id, theme));
+        lines.push(kv_line("rightmove", &listing.url, theme));
+        lines.push(kv_line("maps", &listing.google_maps_url, theme));
+        lines.push(kv_line(
+            "street view",
+            &listing.google_maps_street_view_url,
+            theme,
+        ));
+
+        if let Some(dir) = media.cache_dir {
+            lines.push(kv_line("cache", dir.display().to_string(), theme));
+        } else {
+            lines.push(kv_line("cache", "--", theme));
+        }
+
+        if let Some(path) = media.images.first() {
+            lines.push(kv_line("first image", path.display().to_string(), theme));
+        } else {
+            lines.push(kv_line("first image", "--", theme));
+        }
+        if let Some(path) = media.floorplan {
+            lines.push(kv_line("floorplan", path.display().to_string(), theme));
+        }
+        if let Some(path) = media.satellite {
+            lines.push(kv_line("satellite", path.display().to_string(), theme));
+        }
+        if let Some(path) = media.street {
+            lines.push(kv_line("street map", path.display().to_string(), theme));
+        }
+
+        if !listing.notes.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("notes", theme.section_heading)));
+            for note in listing.notes.iter().take(6) {
+                lines.push(Line::from(Span::styled(
+                    format!("- {}", truncate(note, 160)),
+                    theme.body,
+                )));
+            }
+        }
+
+        if let Some(assessment) = &listing.assessment {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "assessment",
+                theme.section_heading,
+            )));
+            lines.push(kv_line(
+                "recommendation",
+                format!("{:?}", assessment.recommendation).to_lowercase(),
                 theme,
-            ),
-            kv_line("algo/assess", format!("{score} / {assessed}"), theme),
-            kv_line("confidence", &confidence, theme),
-            kv_line("station", &station, theme),
-            kv_line("postcode", &listing.postcode, theme),
-            kv_line("status", status, theme),
-            kv_line("fetched", &listing.fetched_at, theme),
-            Line::from(""),
-            kv_line("url", &listing.url, theme),
-        ]
+            ));
+            lines.push(kv_line(
+                "maintenance",
+                format!("{:?}", assessment.maintenance).to_lowercase(),
+                theme,
+            ));
+            lines.push(kv_line(
+                "family",
+                format!("{:?}", assessment.family_suitability).to_lowercase(),
+                theme,
+            ));
+            lines.push(kv_line(
+                "score adjustment",
+                format!("{:.1}", assessment.score_adjustment),
+                theme,
+            ));
+            lines.push(kv_line(
+                "reasoning",
+                truncate(&assessment.reasoning, 200),
+                theme,
+            ));
+            if let Some(tradeoffs) = &assessment.tradeoffs {
+                lines.push(kv_line("tradeoffs", truncate(tradeoffs, 200), theme));
+            }
+            if let Some(neighborhood) = &assessment.neighborhood_analysis {
+                lines.push(kv_line("neighborhood", truncate(neighborhood, 200), theme));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("enter ", theme.section_heading),
+            Span::styled("quick look image ", theme.footer_meta),
+            Span::styled("cmd/ctrl+p ", theme.section_heading),
+            Span::styled("listing actions", theme.footer_meta),
+        ]));
+        lines
     } else {
         vec![Line::from(Span::styled(
-            "No listings loaded",
+            "No listing selected",
             theme.footer_meta,
         ))]
     };
 
-    let panel = Paragraph::new(lines).block(
+    let panel = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(theme.border)
-            .title(Span::styled(" selected ", theme.header_meta)),
+            .title(Span::styled(" context ", theme.header_meta)),
     );
     frame.render_widget(panel, area);
-}
-
-fn render_sources(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
-    let header = Row::new([
-        Cell::from("source"),
-        Cell::from("status"),
-        Cell::from("size mb"),
-    ])
-    .style(theme.section_heading);
-
-    let rows = app
-        .source_status()
-        .iter()
-        .map(|source| {
-            let status = if source.exists { "ready" } else { "missing" };
-            let size = if source.exists {
-                format!("{:.1}", source.size_mb)
-            } else {
-                "--".to_owned()
-            };
-
-            Row::new([
-                Cell::from(source.name.clone()),
-                Cell::from(status),
-                Cell::from(size),
-            ])
-            .style(theme.body)
-        })
-        .collect::<Vec<_>>();
-
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(12),
-            Constraint::Length(9),
-            Constraint::Length(9),
-        ],
-    )
-    .header(header)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme.border)
-            .title(Span::styled(" sources ", theme.header_meta)),
-    );
-    frame.render_widget(table, area);
 }
 
 fn render_palette(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
@@ -295,16 +448,16 @@ fn render_palette(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
     frame.render_widget(divider, sections[1]);
 
     let rows = app
-        .palette_items()
+        .palette_rows()
         .iter()
         .enumerate()
-        .map(|(idx, item)| {
-            let style = if idx == app.palette_selected_index() {
+        .map(|(index, row)| {
+            let style = if index == app.palette_selected_index() {
                 theme.selected
             } else {
                 theme.body
             };
-            Row::new([Cell::from((*item).to_owned())]).style(style)
+            Row::new([Cell::from(row.clone())]).style(style)
         })
         .collect::<Vec<_>>();
 
@@ -318,9 +471,11 @@ fn render_palette(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+    let (ready, total) = app.source_health_counts();
+    let source_summary = truncate(&app.source_summary(), 132);
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(56)])
+        .constraints([Constraint::Min(10), Constraint::Length(144)])
         .split(area);
 
     let left = Paragraph::new(Line::from(vec![
@@ -328,6 +483,8 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         Span::styled("rows ", theme.footer_meta),
         Span::styled("g/G ", theme.section_heading),
         Span::styled("jump ", theme.footer_meta),
+        Span::styled("enter ", theme.section_heading),
+        Span::styled("quicklook ", theme.footer_meta),
         Span::styled(": ", theme.section_heading),
         Span::styled("palette ", theme.footer_meta),
         Span::styled("cmd/ctrl+p ", theme.section_heading),
@@ -339,8 +496,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     ]));
     frame.render_widget(left, chunks[0]);
 
-    let right = Paragraph::new(Line::from(Span::styled(app.status(), theme.footer_status)))
-        .alignment(Alignment::Right);
+    let right = Paragraph::new(Line::from(Span::styled(
+        format!(
+            "sources:{ready}/{total} | {source_summary} | {}",
+            app.status()
+        ),
+        theme.footer_status,
+    )))
+    .alignment(Alignment::Right);
     frame.render_widget(right, chunks[1]);
 }
 
@@ -352,7 +515,24 @@ fn kv_line(key: &str, value: impl Into<String>, theme: &Theme) -> Line<'static> 
     ])
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+fn epc_band_label(band: &let_sdk::schema::listing::EpcBand) -> String {
+    match band {
+        let_sdk::schema::listing::EpcBand::A => "A",
+        let_sdk::schema::listing::EpcBand::B => "B",
+        let_sdk::schema::listing::EpcBand::C => "C",
+        let_sdk::schema::listing::EpcBand::D => "D",
+        let_sdk::schema::listing::EpcBand::E => "E",
+        let_sdk::schema::listing::EpcBand::F => "F",
+        let_sdk::schema::listing::EpcBand::G => "G",
+    }
+    .to_owned()
+}
+
+fn short_date(value: &str) -> String {
+    value.chars().take(10).collect::<String>()
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, rect: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -360,7 +540,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage(percent_y),
             Constraint::Percentage((100 - percent_y) / 2),
         ])
-        .split(r);
+        .split(rect);
 
     Layout::default()
         .direction(Direction::Horizontal)
@@ -378,8 +558,8 @@ fn truncate(input: &str, max: usize) -> String {
     }
 
     let mut out = String::with_capacity(max + 1);
-    for (idx, ch) in input.chars().enumerate() {
-        if idx >= max.saturating_sub(1) {
+    for (index, ch) in input.chars().enumerate() {
+        if index >= max.saturating_sub(1) {
             break;
         }
         out.push(ch);

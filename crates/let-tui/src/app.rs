@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use let_sdk::load_listings_file;
@@ -22,20 +22,42 @@ const SOURCE_NAMES: [&str; 10] = [
     "crime",
 ];
 
-const PALETTE_COMMANDS: [&str; 6] = [
-    "refresh",
-    "build sources all",
-    "build sources broadband",
-    "build sources crime",
-    "build sources income",
-    "quit",
-];
-
 #[derive(Debug, Clone)]
 pub(crate) struct SourceStatus {
     pub(crate) name: String,
     pub(crate) exists: bool,
     pub(crate) size_mb: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ListingMedia {
+    pub(crate) cache_dir: Option<PathBuf>,
+    pub(crate) images: Vec<PathBuf>,
+    pub(crate) floorplan: Option<PathBuf>,
+    pub(crate) satellite: Option<PathBuf>,
+    pub(crate) street: Option<PathBuf>,
+}
+
+impl ListingMedia {
+    fn first_image(&self) -> Option<PathBuf> {
+        self.images.first().cloned()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PaletteAction {
+    label: String,
+    kind: PaletteActionKind,
+}
+
+#[derive(Debug, Clone)]
+enum PaletteActionKind {
+    OpenUrl(String),
+    QuickLook(PathBuf),
+    RevealInFinder(PathBuf),
+    Refresh,
+    BuildSources(&'static str),
+    Quit,
 }
 
 #[derive(Debug)]
@@ -48,6 +70,8 @@ pub(crate) struct App {
     palette_open: bool,
     palette_query: String,
     palette_selected: usize,
+    palette_actions: Vec<PaletteAction>,
+    palette_filtered: Vec<usize>,
     source_status: Vec<SourceStatus>,
 }
 
@@ -72,6 +96,35 @@ impl App {
         self.listings.get(self.selected)
     }
 
+    pub(crate) fn selected_media(&self) -> ListingMedia {
+        let Some(listing) = self.selected_listing() else {
+            return ListingMedia::default();
+        };
+
+        let paths = let_sdk::paths::paths();
+        let cache_root = paths.resolved.cache.as_path();
+        build_media_index(cache_root, listing)
+    }
+
+    pub(crate) fn source_health_counts(&self) -> (usize, usize) {
+        let ready = self.source_status.iter().filter(|item| item.exists).count();
+        (ready, self.source_status.len())
+    }
+
+    pub(crate) fn source_summary(&self) -> String {
+        self.source_status
+            .iter()
+            .map(|item| {
+                if item.exists {
+                    format!("{}:{:.0}MB", item.name, item.size_mb)
+                } else {
+                    format!("{}:missing", item.name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     pub(crate) fn header_text(&self) -> String {
         self.header.render()
     }
@@ -92,25 +145,16 @@ impl App {
         &self.palette_query
     }
 
-    pub(crate) fn palette_items(&self) -> Vec<&'static str> {
-        let query = self.palette_query.trim().to_ascii_lowercase();
-        if query.is_empty() {
-            return PALETTE_COMMANDS.into();
-        }
-
-        PALETTE_COMMANDS
+    pub(crate) fn palette_rows(&self) -> Vec<String> {
+        self.palette_filtered
             .iter()
-            .copied()
-            .filter(|command| command.contains(&query))
+            .filter_map(|index| self.palette_actions.get(*index))
+            .map(|action| action.label.clone())
             .collect()
     }
 
     pub(crate) fn palette_selected_index(&self) -> usize {
         self.palette_selected
-    }
-
-    pub(crate) fn source_status(&self) -> &[SourceStatus] {
-        &self.source_status
     }
 
     pub(crate) fn on_key(&mut self, key: KeyEvent) {
@@ -133,6 +177,7 @@ impl App {
             KeyCode::Char('G') | KeyCode::End => self.select_last(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.refresh_all(),
             KeyCode::Char(':') => self.open_palette(),
+            KeyCode::Enter => self.quicklook_selected_primary_image(),
             _ => {}
         }
     }
@@ -140,16 +185,22 @@ impl App {
     fn on_palette_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.close_palette(),
-            KeyCode::Enter => self.execute_palette_selection(),
+            KeyCode::Enter => self.execute_selected_palette_action(),
             KeyCode::Up => self.palette_prev(),
             KeyCode::Down => self.palette_next(),
+            KeyCode::Home => self.palette_selected = 0,
+            KeyCode::End => {
+                if !self.palette_filtered.is_empty() {
+                    self.palette_selected = self.palette_filtered.len().saturating_sub(1);
+                }
+            }
             KeyCode::Backspace => {
                 self.palette_query.pop();
-                self.clamp_palette_selection();
+                self.rebuild_palette_actions();
             }
             KeyCode::Char(ch) if !ch.is_control() => {
                 self.palette_query.push(ch);
-                self.clamp_palette_selection();
+                self.rebuild_palette_actions();
             }
             _ => {}
         }
@@ -159,6 +210,7 @@ impl App {
         self.palette_open = true;
         self.palette_query.clear();
         self.palette_selected = 0;
+        self.rebuild_palette_actions();
         self.status = "palette opened".to_owned();
     }
 
@@ -166,53 +218,192 @@ impl App {
         self.palette_open = false;
         self.palette_query.clear();
         self.palette_selected = 0;
+        self.palette_actions.clear();
+        self.palette_filtered.clear();
         self.status = "palette closed".to_owned();
     }
 
+    fn rebuild_palette_actions(&mut self) {
+        self.palette_actions = self.build_palette_actions();
+        self.palette_filtered = filtered_action_indices(&self.palette_actions, &self.palette_query);
+        self.clamp_palette_selection();
+    }
+
     fn clamp_palette_selection(&mut self) {
-        let len = self.palette_items().len();
-        if len == 0 {
+        if self.palette_filtered.is_empty() {
             self.palette_selected = 0;
-        } else if self.palette_selected >= len {
-            self.palette_selected = len.saturating_sub(1);
+            return;
+        }
+        if self.palette_selected >= self.palette_filtered.len() {
+            self.palette_selected = self.palette_filtered.len().saturating_sub(1);
         }
     }
 
     fn palette_next(&mut self) {
-        let len = self.palette_items().len();
-        if len == 0 {
+        if self.palette_filtered.is_empty() {
             self.palette_selected = 0;
             return;
         }
-        self.palette_selected = (self.palette_selected + 1).min(len.saturating_sub(1));
+        self.palette_selected =
+            (self.palette_selected + 1).min(self.palette_filtered.len().saturating_sub(1));
     }
 
     fn palette_prev(&mut self) {
         self.palette_selected = self.palette_selected.saturating_sub(1);
     }
 
-    fn execute_palette_selection(&mut self) {
-        let items = self.palette_items();
-        let Some(command) = items.get(self.palette_selected).copied() else {
+    fn build_palette_actions(&self) -> Vec<PaletteAction> {
+        let mut actions = Vec::new();
+
+        if let Some(listing) = self.selected_listing() {
+            actions.push(PaletteAction {
+                label: "open on rightmove".to_owned(),
+                kind: PaletteActionKind::OpenUrl(listing.url.clone()),
+            });
+            actions.push(PaletteAction {
+                label: "open on google maps".to_owned(),
+                kind: PaletteActionKind::OpenUrl(listing.google_maps_url.clone()),
+            });
+            actions.push(PaletteAction {
+                label: "open on google street view".to_owned(),
+                kind: PaletteActionKind::OpenUrl(listing.google_maps_street_view_url.clone()),
+            });
+
+            let media = self.selected_media();
+            if let Some(path) = media.first_image() {
+                actions.push(PaletteAction {
+                    label: "quick look first image".to_owned(),
+                    kind: PaletteActionKind::QuickLook(path),
+                });
+            }
+            if let Some(path) = media.floorplan {
+                actions.push(PaletteAction {
+                    label: "quick look floorplan".to_owned(),
+                    kind: PaletteActionKind::QuickLook(path),
+                });
+            }
+            if let Some(path) = media.satellite {
+                actions.push(PaletteAction {
+                    label: "quick look satellite map".to_owned(),
+                    kind: PaletteActionKind::QuickLook(path),
+                });
+            }
+            if let Some(path) = media.street {
+                actions.push(PaletteAction {
+                    label: "quick look street map".to_owned(),
+                    kind: PaletteActionKind::QuickLook(path),
+                });
+            }
+            if let Some(path) = media.cache_dir {
+                actions.push(PaletteAction {
+                    label: "reveal cache folder".to_owned(),
+                    kind: PaletteActionKind::RevealInFinder(path),
+                });
+            }
+        }
+
+        actions.push(PaletteAction {
+            label: "refresh".to_owned(),
+            kind: PaletteActionKind::Refresh,
+        });
+        actions.push(PaletteAction {
+            label: "build sources all".to_owned(),
+            kind: PaletteActionKind::BuildSources("all"),
+        });
+        actions.push(PaletteAction {
+            label: "build sources broadband".to_owned(),
+            kind: PaletteActionKind::BuildSources("broadband"),
+        });
+        actions.push(PaletteAction {
+            label: "build sources crime".to_owned(),
+            kind: PaletteActionKind::BuildSources("crime"),
+        });
+        actions.push(PaletteAction {
+            label: "build sources income".to_owned(),
+            kind: PaletteActionKind::BuildSources("income"),
+        });
+        actions.push(PaletteAction {
+            label: "quit".to_owned(),
+            kind: PaletteActionKind::Quit,
+        });
+
+        actions
+    }
+
+    fn execute_selected_palette_action(&mut self) {
+        let Some(source_index) = self.palette_filtered.get(self.palette_selected).copied() else {
+            self.status = "no palette command selected".to_owned();
+            return;
+        };
+        let Some(action) = self.palette_actions.get(source_index).cloned() else {
             self.status = "no palette command selected".to_owned();
             return;
         };
 
-        match command {
-            "refresh" => self.refresh_all(),
-            "quit" => {
+        match action.kind {
+            PaletteActionKind::OpenUrl(url) => self.open_url(&url),
+            PaletteActionKind::QuickLook(path) => self.quicklook_path(&path),
+            PaletteActionKind::RevealInFinder(path) => self.reveal_path(&path),
+            PaletteActionKind::Refresh => self.refresh_all(),
+            PaletteActionKind::BuildSources(target) => self.build_sources(target),
+            PaletteActionKind::Quit => {
                 self.running = false;
                 self.status = "quitting".to_owned();
             }
-            "build sources all" => self.build_sources("all"),
-            "build sources broadband" => self.build_sources("broadband"),
-            "build sources crime" => self.build_sources("crime"),
-            "build sources income" => self.build_sources("income"),
-            _ => {
-                self.status = format!("unknown command: {command}");
+        }
+
+        if self.running {
+            let action_status = self.status.clone();
+            self.close_palette();
+            self.status = action_status;
+        }
+    }
+
+    fn quicklook_selected_primary_image(&mut self) {
+        let media = self.selected_media();
+        let Some(path) = media.first_image() else {
+            self.status = "no cached image for selected listing".to_owned();
+            return;
+        };
+        self.quicklook_path(&path);
+    }
+
+    fn open_url(&mut self, url: &str) {
+        match open_url_with_system(url) {
+            Ok(()) => {
+                self.status = format!("opened url: {url}");
+            }
+            Err(error) => {
+                self.status = format!("open url failed: {error}");
             }
         }
-        self.close_palette();
+    }
+
+    fn quicklook_path(&mut self, path: &Path) {
+        if !path.exists() {
+            self.status = format!("file not found: {}", path.display());
+            return;
+        }
+
+        match quicklook_with_system(path) {
+            Ok(()) => {
+                self.status = format!("quick look: {}", path.display());
+            }
+            Err(error) => {
+                self.status = format!("quick look failed: {error}");
+            }
+        }
+    }
+
+    fn reveal_path(&mut self, path: &Path) {
+        match reveal_in_finder(path) {
+            Ok(()) => {
+                self.status = format!("revealed: {}", path.display());
+            }
+            Err(error) => {
+                self.status = format!("reveal failed: {error}");
+            }
+        }
     }
 
     fn build_sources(&mut self, target: &str) {
@@ -222,8 +413,8 @@ impl App {
                 "run", "-q", "-p", "let-cli", "--", "build", "sources", target, "--jobs", "3",
                 "--json",
             ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
 
         let status = command.status();
         self.status = match status {
@@ -287,14 +478,16 @@ impl Default for App {
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
+            palette_actions: Vec::new(),
+            palette_filtered: Vec::new(),
             source_status: collect_source_status(),
         }
     }
 }
 
 fn load_ranked_listings() -> (Vec<Listing>, String) {
-    let bundle = let_sdk::paths::paths();
-    let db_path = bundle.derived.database;
+    let paths = let_sdk::paths::paths();
+    let db_path = paths.derived.database;
 
     match load_listings_file(&db_path) {
         Ok(data) => {
@@ -329,15 +522,111 @@ fn load_ranked_listings() -> (Vec<Listing>, String) {
     }
 }
 
+fn filtered_action_indices(actions: &[PaletteAction], query: &str) -> Vec<usize> {
+    let normalized = query.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return (0..actions.len()).collect();
+    }
+
+    actions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, action)| {
+            let label = action.label.to_ascii_lowercase();
+            label.contains(&normalized).then_some(index)
+        })
+        .collect()
+}
+
+fn build_media_index(cache_root: &Path, listing: &Listing) -> ListingMedia {
+    let cache_dir = resolve_cache_dir(cache_root, listing);
+    let cache_dir_ref = cache_dir.as_deref();
+
+    let mut images = listing
+        .images
+        .iter()
+        .filter_map(|image| {
+            resolve_local_asset(cache_root, cache_dir_ref, image.local.as_deref(), listing)
+        })
+        .collect::<Vec<_>>();
+    images.sort();
+    images.dedup();
+
+    let floorplan = resolve_local_asset(
+        cache_root,
+        cache_dir_ref,
+        listing.floorplan.local.as_deref(),
+        listing,
+    );
+    let satellite = resolve_local_asset(
+        cache_root,
+        cache_dir_ref,
+        listing.map_views.satellite.local.as_deref(),
+        listing,
+    );
+    let street = resolve_local_asset(
+        cache_root,
+        cache_dir_ref,
+        listing.map_views.street.local.as_deref(),
+        listing,
+    );
+
+    ListingMedia {
+        cache_dir,
+        images,
+        floorplan,
+        satellite,
+        street,
+    }
+}
+
+fn resolve_cache_dir(cache_root: &Path, listing: &Listing) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(rightmove) = listing.portal_ids.rightmove.as_deref() {
+        candidates.push(cache_root.join(rightmove));
+    }
+    candidates.push(cache_root.join(&listing.id));
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
+fn resolve_local_asset(
+    cache_root: &Path,
+    cache_dir: Option<&Path>,
+    local: Option<&str>,
+    listing: &Listing,
+) -> Option<PathBuf> {
+    let raw = local?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let direct = PathBuf::from(raw);
+    if direct.is_absolute() {
+        return direct.exists().then_some(direct);
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(dir) = cache_dir {
+        candidates.push(dir.join(raw));
+    }
+    if let Some(rightmove) = listing.portal_ids.rightmove.as_deref() {
+        candidates.push(cache_root.join(rightmove).join(raw));
+    }
+    candidates.push(cache_root.join(raw));
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
 fn collect_source_status() -> Vec<SourceStatus> {
-    let bundle = let_sdk::paths::paths();
+    let paths = let_sdk::paths::paths();
     SOURCE_NAMES
         .iter()
         .map(|name| {
-            let path: PathBuf = bundle.derived.source_db(&bundle.resolved.sources, name);
+            let path = paths.derived.source_db(&paths.resolved.sources, name);
             let exists = path.exists();
             let size_mb = if exists {
-                fs_size_mb(&path).unwrap_or(0.0)
+                fs_size_mb(path.as_path()).unwrap_or(0.0)
             } else {
                 0.0
             };
@@ -351,7 +640,7 @@ fn collect_source_status() -> Vec<SourceStatus> {
         .collect()
 }
 
-fn fs_size_mb(path: &PathBuf) -> Option<f64> {
+fn fs_size_mb(path: &Path) -> Option<f64> {
     std::fs::metadata(path)
         .ok()
         .map(|meta| (meta.len() as f64) / (1024.0 * 1024.0))
@@ -368,6 +657,76 @@ fn is_palette_trigger(key: KeyEvent) -> bool {
     }
 }
 
+fn open_url_with_system(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(url)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    }
+}
+
+fn quicklook_with_system(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("qlmanage")
+            .arg("-p")
+            .arg(path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Command::new("xdg-open")
+            .arg(path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    }
+}
+
+fn reveal_in_finder(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let target = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        Command::new("xdg-open")
+            .arg(target)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -378,10 +737,7 @@ mod tests {
     #[test]
     fn quits_on_q_keypress() {
         let mut app = App::default();
-        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
-
-        app.on_key(key);
-
+        app.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
         assert!(!app.is_running());
     }
 
@@ -396,12 +752,13 @@ mod tests {
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
+            palette_actions: Vec::new(),
+            palette_filtered: Vec::new(),
             source_status: vec![],
         };
 
         app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(app.selected_index(), 0);
-
         app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(app.selected_index(), 0);
     }
@@ -411,7 +768,6 @@ mod tests {
         let mut app = App::default();
         app.on_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
         assert!(app.palette_open());
-
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.palette_open());
     }
@@ -420,10 +776,12 @@ mod tests {
     fn palette_query_filters_commands() {
         let mut app = App::default();
         app.on_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
-        app.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
 
-        let items = app.palette_items();
-        assert_eq!(items, vec!["quit"]);
+        let rows = app.palette_rows();
+        assert_eq!(rows, vec!["build sources income".to_owned()]);
     }
 
     #[test]
@@ -431,8 +789,10 @@ mod tests {
         let mut app = App::default();
         app.on_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
         app.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
         assert!(!app.is_running());
     }
 
