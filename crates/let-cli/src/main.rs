@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::process;
-use std::process::Command as ProcessCommand;
+use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -507,13 +507,55 @@ fn delegate_to_legacy(args: &[String], shared: &SharedArgs, json_mode: bool) -> 
 
     full_args.extend(args.iter().cloned());
 
-    match ProcessCommand::new("bun").args(&full_args).status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(error) => {
-            eprintln!("failed to delegate command to legacy bun cli: {error}");
-            1
+    if json_mode {
+        match ProcessCommand::new("bun")
+            .args(&full_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.is_empty() {
+                    eprint!("{stderr}");
+                }
+
+                if let Some(json_line) = find_last_json_line(stdout.as_ref()) {
+                    println!("{json_line}");
+                } else if !stdout.is_empty() {
+                    eprint!("{stdout}");
+                }
+
+                output.status.code().unwrap_or(1)
+            }
+            Err(error) => {
+                eprintln!("failed to delegate command to legacy bun cli: {error}");
+                1
+            }
+        }
+    } else {
+        match ProcessCommand::new("bun").args(&full_args).status() {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(error) => {
+                eprintln!("failed to delegate command to legacy bun cli: {error}");
+                1
+            }
         }
     }
+}
+
+fn find_last_json_line(stdout: &str) -> Option<&str> {
+    for line in stdout.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('{')
+            && trimmed.ends_with('}')
+            && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+        {
+            return Some(trimmed);
+        }
+    }
+    None
 }
 
 fn emit(result: &Result<CommandOutput, CommandError>, tool: &str, elapsed: u64, json: bool) -> i32 {
@@ -571,5 +613,23 @@ fn emit_text(result: &Result<CommandOutput, CommandError>) -> i32 {
             eprintln!("hint: {}", err.hint);
             err.exit_code
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_last_json_line;
+
+    #[test]
+    fn finds_last_json_line_after_logs() {
+        let output = "debug line\nanother line\n{\"ok\":true,\"data\":{}}\n";
+        let json = find_last_json_line(output).expect("json line should be found");
+        assert_eq!(json, "{\"ok\":true,\"data\":{}}");
+    }
+
+    #[test]
+    fn returns_none_when_no_json_line_exists() {
+        let output = "log line only\nstill log output";
+        assert!(find_last_json_line(output).is_none());
     }
 }
