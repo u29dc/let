@@ -1,14 +1,18 @@
 #![forbid(unsafe_code)]
 
 use let_sdk::paths::PathOverrides;
+use serde::Serialize;
 use serde_json::Value;
 
+pub mod assess;
 pub mod build;
 pub mod config;
+pub mod export;
 pub mod health;
 pub mod score;
 pub mod start;
 pub mod tools;
+pub mod view;
 
 #[derive(Debug, Clone)]
 pub struct SharedArgs {
@@ -104,3 +108,80 @@ impl From<let_sdk::LetError> for CommandError {
 }
 
 pub type CommandResult = Result<CommandOutput, CommandError>;
+
+pub fn to_camel_json<T: Serialize>(value: &T) -> Value {
+    let raw = serde_json::to_value(value).expect("serialization should succeed");
+    camelize_value(raw)
+}
+
+fn camelize_value(value: Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.into_iter().map(camelize_value).collect()),
+        Value::Object(map) => {
+            let mut next = serde_json::Map::with_capacity(map.len());
+            for (key, item) in map {
+                next.insert(snake_to_camel(&key), camelize_value(item));
+            }
+            Value::Object(next)
+        }
+        other => other,
+    }
+}
+
+fn snake_to_camel(key: &str) -> String {
+    let mut out = String::with_capacity(key.len());
+    let mut uppercase = false;
+    for ch in key.chars() {
+        if ch == '_' {
+            uppercase = true;
+            continue;
+        }
+        if uppercase {
+            out.extend(ch.to_uppercase());
+            uppercase = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+    use serde_json::json;
+
+    use super::to_camel_json;
+
+    #[derive(Debug, Serialize)]
+    struct Demo {
+        snake_case: bool,
+        nested_value: DemoNested,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct DemoNested {
+        deep_key: String,
+    }
+
+    #[test]
+    fn camel_json_converts_nested_keys() {
+        let payload = Demo {
+            snake_case: true,
+            nested_value: DemoNested {
+                deep_key: "ok".to_owned(),
+            },
+        };
+
+        let value = to_camel_json(&payload);
+        assert_eq!(
+            value,
+            json!({
+                "snakeCase": true,
+                "nestedValue": {
+                    "deepKey": "ok",
+                },
+            })
+        );
+    }
+}
