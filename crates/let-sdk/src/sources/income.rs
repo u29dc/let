@@ -36,7 +36,7 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
     let tx = connection.transaction()?;
     let mut statement = tx.prepare(
-        "INSERT INTO income (msoa_code, msoa_name, income_bhc, income_ahc) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT OR REPLACE INTO income (msoa_code, msoa_name, income_bhc, income_ahc) VALUES (?1, ?2, ?3, ?4)",
     )?;
 
     let mut inserted = 0usize;

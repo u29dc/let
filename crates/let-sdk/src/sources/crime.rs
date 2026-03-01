@@ -114,7 +114,7 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
     {
         let mut monthly_statement = tx.prepare(
-            "INSERT INTO crime_monthly (lsoa_code, month, total, violent, burglary, robbery) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO crime_monthly (lsoa_code, month, total, violent, burglary, robbery) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
 
         for ((lsoa, month), counts) in &monthly_counts {
@@ -131,7 +131,7 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
     {
         let mut summary_statement = tx.prepare(
-            "INSERT INTO crime_12m (lsoa_code, total, violent, burglary, robbery, month_start, month_end) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT OR REPLACE INTO crime_12m (lsoa_code, total, violent, burglary, robbery, month_start, month_end) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
 
         for (lsoa, counts) in &totals_12m {

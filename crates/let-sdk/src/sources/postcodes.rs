@@ -96,7 +96,7 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
     let tx = connection.transaction()?;
     let mut statement = tx.prepare(
-        "INSERT INTO postcodes (postcode, postcode_display, lat, lng, lsoa_code, lsoa_name, msoa_code, msoa_name, country_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT OR REPLACE INTO postcodes (postcode, postcode_display, lat, lng, lsoa_code, lsoa_name, msoa_code, msoa_name, country_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?;
 
     let mut inserted = 0usize;

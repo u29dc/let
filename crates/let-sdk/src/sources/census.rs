@@ -128,7 +128,7 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
     let tx = connection.transaction()?;
     let mut statement = tx.prepare(
-        "INSERT INTO tenure (lsoa_code, total_households, council, housing_association, social_housing_pct) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT OR REPLACE INTO tenure (lsoa_code, total_households, council, housing_association, social_housing_pct) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
 
     let mut inserted = 0usize;

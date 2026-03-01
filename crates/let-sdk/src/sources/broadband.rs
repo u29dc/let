@@ -84,7 +84,7 @@ pub fn build(db_path: &Path) -> Result<usize> {
     let tx = connection.transaction()?;
     let mut statement = tx.prepare(
         "
-        INSERT INTO postcodes (
+        INSERT OR REPLACE INTO postcodes (
             postcode, postcode_display, outward, area,
             pct_under_2mbps, pct_2_5mbps, pct_5_10mbps, pct_10_30mbps,
             pct_30_300mbps, pct_over_300mbps,

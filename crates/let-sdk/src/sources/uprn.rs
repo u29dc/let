@@ -89,8 +89,9 @@ pub fn build(db_path: &Path) -> Result<usize> {
     )?;
 
     let tx = connection.transaction()?;
-    let mut statement =
-        tx.prepare("INSERT INTO uprn (uprn, lat, lng, x, y) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+    let mut statement = tx.prepare(
+        "INSERT OR REPLACE INTO uprn (uprn, lat, lng, x, y) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
 
     let mut inserted = 0usize;
     for row in reader.records() {

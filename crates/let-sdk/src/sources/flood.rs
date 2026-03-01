@@ -23,8 +23,19 @@ pub fn build(db_path: &Path) -> Result<usize> {
         let temp_csv_path = temp.path().join("flood.csv");
 
         let download_url = env::var("FLOOD_CSV_URL").unwrap_or_else(|_| FLOOD_CSV_URL.to_owned());
-        check_sas_expiry(&download_url, "flood")?;
-        download_file(&download_url, &temp_csv_path)?;
+        if let Err(error) = check_sas_expiry(&download_url, "flood") {
+            if let Some(existing) = existing_rows(db_path)? {
+                return Ok(existing);
+            }
+            return Err(error);
+        }
+
+        if let Err(error) = download_file(&download_url, &temp_csv_path) {
+            if let Some(existing) = existing_rows(db_path)? {
+                return Ok(existing);
+            }
+            return Err(error);
+        }
 
         temp_guard = Some(temp);
         temp_csv_path
@@ -91,7 +102,7 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
     let tx = connection.transaction()?;
     let mut statement =
-        tx.prepare("INSERT INTO flood (postcode, risk, source) VALUES (?1, ?2, ?3)")?;
+        tx.prepare("INSERT OR REPLACE INTO flood (postcode, risk, source) VALUES (?1, ?2, ?3)")?;
 
     let mut inserted = 0usize;
     for row in reader.records() {
@@ -132,4 +143,28 @@ fn csv_err(error: csv::Error) -> LetError {
         format!("failed to parse flood CSV row: {error}"),
         "verify flood source file format",
     )
+}
+
+fn existing_rows(db_path: &Path) -> Result<Option<usize>> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+
+    let connection = rusqlite::Connection::open(db_path).map_err(|error| {
+        LetError::new(
+            ErrorCode::SchemaMismatch,
+            format!(
+                "failed to open cached flood database {}: {error}",
+                db_path.display()
+            ),
+            "rebuild flood source database with a valid source override",
+        )
+    })?;
+
+    let count = connection.query_row("SELECT COUNT(*) FROM flood", [], |row| row.get::<_, i64>(0));
+    match count {
+        Ok(value) if value > 0 => Ok(Some(value as usize)),
+        Ok(_) => Ok(None),
+        Err(_) => Ok(None),
+    }
 }

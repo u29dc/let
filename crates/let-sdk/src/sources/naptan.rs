@@ -86,7 +86,7 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
     let tx = connection.transaction()?;
     let mut statement = tx.prepare(
-        "INSERT INTO stops (atco_code, naptan_code, common_name, stop_type, lat, lng) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT OR REPLACE INTO stops (atco_code, naptan_code, common_name, stop_type, lat, lng) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )?;
 
     let mut inserted = 0usize;

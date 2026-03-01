@@ -882,7 +882,41 @@ fn listing_text(listing: &Listing) -> String {
 }
 
 fn contains_phrase(text: &str, phrases: &[&str]) -> bool {
-    phrases.iter().any(|phrase| text.contains(phrase))
+    phrases
+        .iter()
+        .any(|phrase| contains_word_bounded_phrase(text, phrase))
+}
+
+fn contains_word_bounded_phrase(text: &str, phrase: &str) -> bool {
+    if phrase.is_empty() || text.len() < phrase.len() {
+        return false;
+    }
+
+    let mut offset = 0usize;
+    while let Some(found) = text[offset..].find(phrase) {
+        let start = offset + found;
+        let end = start + phrase.len();
+
+        let left_is_boundary = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric());
+        let right_is_boundary = text[end..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric());
+
+        if left_is_boundary && right_is_boundary {
+            return true;
+        }
+
+        offset = start.saturating_add(1);
+        if offset >= text.len() {
+            break;
+        }
+    }
+
+    false
 }
 
 fn nearest_station_distance(listing: &Listing) -> Option<f64> {
@@ -1070,12 +1104,12 @@ fn round_to(value: f64, decimals: usize) -> f64 {
 mod tests {
     use crate::config::default_scoring_config;
     use crate::schema::listing::{
-        Agent, AreaCodeName, AreaMetrics, CrimeMetrics, ExtractionStatus, FloodRisk, GeoLocation,
-        ImdMetrics, IncomeMetrics, Lettings, Listing, ListingImage, ListingStatus, MapViews,
-        PortalIds, RemoteLocalAsset,
+        Agent, AreaCodeName, AreaMetrics, CrimeMetrics, ExtractionStatus, FloodRisk, GardenType,
+        GeoLocation, ImdMetrics, IncomeMetrics, Lettings, Listing, ListingImage, ListingStatus,
+        MapViews, PortalIds, RemoteLocalAsset,
     };
 
-    use super::score_listings_with_config;
+    use super::{detect_garden_type, score_listings_with_config};
 
     #[test]
     fn scores_listing_batch() {
@@ -1110,6 +1144,17 @@ mod tests {
 
         assert_eq!(scored.len(), 2);
         assert!(scored.iter().all(|listing| listing.scores.is_some()));
+    }
+
+    #[test]
+    fn garden_detection_respects_word_boundaries() {
+        let mut listing = sample_listing("garden-boundary", 1000);
+        listing.description = "easy to maintain gardens near shops".to_owned();
+        listing.notes.clear();
+        assert_eq!(detect_garden_type(&listing), GardenType::None);
+
+        listing.description = "bright lounge and private garden".to_owned();
+        assert_eq!(detect_garden_type(&listing), GardenType::Private);
     }
 
     fn sample_listing(id: &str, price: i64) -> Listing {
