@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::io::{self, Write};
+use std::time::Duration;
 
 use let_sdk::schema::listing::{Listing, ListingStatus};
 use let_sdk::{close_listings_db, load_listings_file, open_listings_db};
@@ -18,6 +19,24 @@ pub struct PruneParams {
     pub inactive_only: bool,
     pub dry_run: bool,
     pub force: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct VerifyParams {
+    pub dry_run: bool,
+    pub region: Option<String>,
+    pub limit: Option<usize>,
+    pub delay_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VerifyResult {
+    id: String,
+    rightmove_id: Option<String>,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
@@ -84,6 +103,130 @@ pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
         "pruned {} listing(s); {} remaining",
         to_remove_ids.len(),
         remaining
+    )))
+}
+
+pub fn verify(shared: &SharedArgs, params: &VerifyParams) -> CommandResult {
+    let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
+    let db_path = paths.derived.database;
+    let data = load_listings_file(&db_path)?;
+
+    if data.listings.is_empty() {
+        return Ok(CommandOutput::new(json!({
+            "checked": 0,
+            "active": 0,
+            "inactive": 0,
+            "errors": 0,
+            "dryRun": params.dry_run,
+            "results": [],
+        }))
+        .with_text("no listings to verify"));
+    }
+
+    let patterns = params
+        .region
+        .as_deref()
+        .map(region_patterns)
+        .unwrap_or_default();
+    let mut targets = data
+        .listings
+        .iter()
+        .filter(|listing| !matches!(listing.status, ListingStatus::Inactive))
+        .filter(|listing| {
+            if patterns.is_empty() {
+                true
+            } else {
+                matches_region(listing.region.as_deref(), &patterns)
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(limit) = params.limit
+        && targets.len() > limit
+    {
+        targets.truncate(limit);
+    }
+
+    if targets.is_empty() {
+        return Ok(CommandOutput::new(json!({
+            "checked": 0,
+            "active": 0,
+            "inactive": 0,
+            "errors": 0,
+            "dryRun": params.dry_run,
+            "results": [],
+        }))
+        .with_text("no listings matched verify filter"));
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            CommandError::runtime(
+                "PROCESS_ERROR",
+                format!("failed to initialize async runtime: {error}"),
+                "retry command",
+            )
+        })?;
+
+    let client = runtime
+        .block_on(async {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")
+                .build()
+        })
+        .map_err(|error| {
+            CommandError::runtime(
+                "NETWORK_ERROR",
+                format!("failed to create http client: {error}"),
+                "check TLS/certificate configuration",
+            )
+        })?;
+
+    let mut results = Vec::with_capacity(targets.len());
+    let mut inactive_ids = Vec::new();
+    let mut errors = 0usize;
+
+    for (idx, listing) in targets.iter().enumerate() {
+        let result = verify_one_listing(&runtime, &client, listing);
+        if result.status == "inactive" && result.error.is_none() {
+            inactive_ids.push(result.id.clone());
+        }
+        if result.error.is_some() {
+            errors += 1;
+        }
+        results.push(result);
+
+        if params.delay_ms > 0 && idx + 1 < targets.len() {
+            std::thread::sleep(Duration::from_millis(params.delay_ms));
+        }
+    }
+
+    if !params.dry_run && !inactive_ids.is_empty() {
+        persist_inactive_status(&db_path, &inactive_ids)?;
+    }
+
+    let inactive = inactive_ids.len();
+    let checked = results.len();
+    let active = checked.saturating_sub(inactive + errors);
+
+    Ok(CommandOutput::new(json!({
+        "checked": checked,
+        "active": active,
+        "inactive": inactive,
+        "errors": errors,
+        "dryRun": params.dry_run,
+        "results": results,
+    }))
+    .with_count(checked)
+    .with_total(checked)
+    .with_has_more(false)
+    .with_text(format!(
+        "verified {checked} listing(s): {inactive} inactive, {errors} errors"
     )))
 }
 
@@ -203,6 +346,119 @@ fn confirm_delete(count: usize) -> Result<bool, CommandError> {
     Ok(answer.trim().eq_ignore_ascii_case("y"))
 }
 
+fn verify_one_listing(
+    runtime: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    listing: &Listing,
+) -> VerifyResult {
+    let rightmove_id = listing.portal_ids.rightmove.clone();
+    let Some(rightmove_id_value) = rightmove_id.as_ref() else {
+        return VerifyResult {
+            id: listing.id.clone(),
+            rightmove_id,
+            status: "active".to_owned(),
+            error: Some("missing rightmove id".to_owned()),
+        };
+    };
+
+    let url = format!("https://www.rightmove.co.uk/properties/{rightmove_id_value}");
+    let response = runtime.block_on(async { client.get(url).send().await });
+
+    match response {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.as_u16() == 404 {
+                return VerifyResult {
+                    id: listing.id.clone(),
+                    rightmove_id,
+                    status: "inactive".to_owned(),
+                    error: None,
+                };
+            }
+            if !status.is_success() {
+                return VerifyResult {
+                    id: listing.id.clone(),
+                    rightmove_id,
+                    status: "active".to_owned(),
+                    error: Some(format!("http {}", status.as_u16())),
+                };
+            }
+
+            let html = runtime
+                .block_on(async { resp.text().await })
+                .unwrap_or_default();
+            let status_value = if detect_inactive_html(&html) {
+                "inactive"
+            } else {
+                "active"
+            };
+
+            VerifyResult {
+                id: listing.id.clone(),
+                rightmove_id,
+                status: status_value.to_owned(),
+                error: None,
+            }
+        }
+        Err(error) => VerifyResult {
+            id: listing.id.clone(),
+            rightmove_id,
+            status: "active".to_owned(),
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+fn detect_inactive_html(html: &str) -> bool {
+    let lower = html.to_lowercase();
+    lower.contains("let agreed")
+        || lower.contains("letagreed")
+        || lower.contains("no longer on the market")
+        || lower.contains("no longer available")
+        || lower.contains("this property has been removed")
+}
+
+fn persist_inactive_status(
+    db_path: &std::path::Path,
+    listing_ids: &[String],
+) -> Result<(), CommandError> {
+    if listing_ids.is_empty() {
+        return Ok(());
+    }
+
+    let connection = open_listings_db(db_path)?;
+    let result: std::result::Result<(), rusqlite::Error> = (|| {
+        let tx = connection.unchecked_transaction()?;
+
+        for chunk in listing_ids.chunks(500) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql =
+                format!("UPDATE listings SET status = 'inactive' WHERE id IN ({placeholders})");
+            tx.execute(&sql, params_from_iter(chunk.iter().map(String::as_str)))?;
+        }
+
+        tx.execute(
+            "UPDATE meta SET updated_at = ?1 WHERE id = 1",
+            params![let_sdk::utils::time::now_iso()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })();
+
+    let close_result = close_listings_db(connection);
+    match (result, close_result) {
+        (Err(error), _) => Err(CommandError::runtime(
+            "DB_ERROR",
+            format!("failed to persist verify status: {error}"),
+            "check database integrity and retry",
+        )),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
 fn delete_listing_ids(
     db_path: &std::path::Path,
     listing_ids: &[String],
@@ -215,7 +471,6 @@ fn delete_listing_ids(
     let result: std::result::Result<(), rusqlite::Error> = (|| {
         let tx = connection.unchecked_transaction()?;
 
-        // SQLite has a 999-parameter limit. Delete in deterministic chunks.
         for chunk in listing_ids.chunks(500) {
             let placeholders = std::iter::repeat_n("?", chunk.len())
                 .collect::<Vec<_>>()
@@ -248,7 +503,7 @@ fn delete_listing_ids(
 mod tests {
     use let_sdk::schema::listing::{ListingStatus, PortalIds};
 
-    use super::{PruneParams, matches_region, select_prune_ids};
+    use super::{PruneParams, detect_inactive_html, matches_region, select_prune_ids};
 
     #[test]
     fn region_pattern_matches_city_prefix() {
@@ -325,5 +580,14 @@ mod tests {
         let (ids, mode) = select_prune_ids(&[listing], &params).expect("select ids");
         assert_eq!(ids, vec!["id-1"]);
         assert_eq!(mode, "inactive");
+    }
+
+    #[test]
+    fn inactive_detector_matches_known_markers() {
+        assert!(detect_inactive_html(
+            "This property has been removed from the market."
+        ));
+        assert!(detect_inactive_html("LET AGREED"));
+        assert!(!detect_inactive_html("Beautiful apartment available now."));
     }
 }

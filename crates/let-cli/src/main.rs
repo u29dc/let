@@ -207,6 +207,17 @@ enum OpsCommand {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    /// Verify listing activity status against portal pages.
+    Verify {
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        #[arg(long)]
+        region: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long, default_value_t = 3000)]
+        delay: u64,
+    },
     /// Delegate non-ported ops subcommands to legacy CLI.
     #[command(external_subcommand)]
     External(Vec<String>),
@@ -430,6 +441,26 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                     inactive_only: *inactive,
                     dry_run: *dry_run,
                     force: *force,
+                },
+            ),
+        },
+        Command::Ops {
+            command:
+                OpsCommand::Verify {
+                    dry_run,
+                    region,
+                    limit,
+                    delay,
+                },
+        } => DispatchOutcome::Local {
+            tool: "ops.verify",
+            result: commands::ops::verify(
+                shared,
+                &commands::ops::VerifyParams {
+                    dry_run: *dry_run,
+                    region: region.clone(),
+                    limit: *limit,
+                    delay_ms: *delay,
                 },
             ),
         },

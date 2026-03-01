@@ -279,12 +279,37 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                 tool(
                     "ops.verify",
                     "let ops verify",
-                    "placeholder",
-                    "Delegated ops verify command.",
-                    vec![],
-                    vec![],
+                    "ops",
+                    "Verify listing availability status via portal checks.",
+                    vec![
+                        ToolParameter {
+                            name: "--dry-run",
+                            param_type: "bool",
+                            required: false,
+                            description: "Preview without writing inactive statuses.",
+                        },
+                        ToolParameter {
+                            name: "--region",
+                            param_type: "string",
+                            required: false,
+                            description: "Only verify matching region names.",
+                        },
+                        ToolParameter {
+                            name: "--limit",
+                            param_type: "number",
+                            required: false,
+                            description: "Maximum listings to verify.",
+                        },
+                        ToolParameter {
+                            name: "--delay",
+                            param_type: "number",
+                            required: false,
+                            description: "Delay in milliseconds between requests.",
+                        },
+                    ],
+                    vec!["checked", "active", "inactive", "errors", "dryRun", "results"],
                     false,
-                    "let ops verify --json",
+                    "let ops verify --dry-run --limit 10 --json",
                 ),
                 tool(
                     "score.group",
