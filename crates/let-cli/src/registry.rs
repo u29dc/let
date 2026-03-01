@@ -159,10 +159,16 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             required: false,
                             description: "Parallel jobs for `all` target (default: 3).",
                         },
+                        ToolParameter {
+                            name: "--progress",
+                            param_type: "string",
+                            required: false,
+                            description: "Progress mode: auto|plain|off (default: auto).",
+                        },
                     ],
                     vec!["target", "jobs", "durationMs", "status"],
                     false,
-                    "let build sources all --jobs 3 --json",
+                    "let build sources all --jobs 3 --progress auto",
                 ),
                 tool(
                     "export.group",

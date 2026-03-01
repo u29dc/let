@@ -126,6 +126,9 @@ enum BuildCommand {
         /// Parallel jobs for `all` target.
         #[arg(long, default_value_t = 3)]
         jobs: usize,
+        /// Progress output mode.
+        #[arg(long, value_enum, default_value_t = BuildProgressMode::Auto)]
+        progress: BuildProgressMode,
     },
 }
 
@@ -318,6 +321,13 @@ enum BuildSourceTarget {
     Crime,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BuildProgressMode {
+    Auto,
+    Plain,
+    Off,
+}
+
 impl From<BuildSourceTarget> for commands::build::SourceTarget {
     fn from(value: BuildSourceTarget) -> Self {
         use commands::build::SourceTarget;
@@ -334,6 +344,17 @@ impl From<BuildSourceTarget> for commands::build::SourceTarget {
             BuildSourceTarget::Naptan => SourceTarget::Naptan,
             BuildSourceTarget::Uprn => SourceTarget::Uprn,
             BuildSourceTarget::Crime => SourceTarget::Crime,
+        }
+    }
+}
+
+impl From<BuildProgressMode> for commands::build::ProgressMode {
+    fn from(value: BuildProgressMode) -> Self {
+        use commands::build::ProgressMode;
+        match value {
+            BuildProgressMode::Auto => ProgressMode::Auto,
+            BuildProgressMode::Plain => ProgressMode::Plain,
+            BuildProgressMode::Off => ProgressMode::Off,
         }
     }
 }
@@ -617,10 +638,21 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
             command: ExportCommand::External(args),
         } => unsupported_external("export", args),
         Command::Build {
-            command: BuildCommand::Sources { target, jobs },
+            command:
+                BuildCommand::Sources {
+                    target,
+                    jobs,
+                    progress,
+                },
         } => DispatchOutcome::Local {
             tool: "build.sources",
-            result: commands::build::run_sources((*target).into(), *jobs, shared, json_mode),
+            result: commands::build::run_sources(
+                (*target).into(),
+                *jobs,
+                shared,
+                json_mode,
+                (*progress).into(),
+            ),
         },
         Command::Fetch {
             ids,
