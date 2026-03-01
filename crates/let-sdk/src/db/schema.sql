@@ -6,7 +6,7 @@
 -- Tables ordered by dependency (parent tables first).
 --
 -- Usage:
---   sqlite3 .let/data/let.db < packages/core/src/db/schema.sql
+--   sqlite3 .let/data/let.db < crates/let-sdk/src/db/schema.sql
 --
 -- To inspect current schema:
 --   sqlite3 .let/data/let.db .schema

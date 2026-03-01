@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 use std::process;
-use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -104,7 +103,7 @@ enum Command {
         #[arg(long, default_value_t = false)]
         skip_epc: bool,
     },
-    /// Delegate command groups not yet ported to the archive-compatible TS CLI.
+    /// Capture unknown top-level commands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -200,7 +199,7 @@ enum ExportCommand {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
-    /// Delegate non-ported export subcommands to legacy CLI.
+    /// Capture unknown export subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -234,7 +233,7 @@ enum SearchCommand {
         /// Comma-separated portal ids.
         ids: String,
     },
-    /// Delegate non-ported search subcommands to legacy CLI.
+    /// Capture unknown search subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -287,7 +286,7 @@ enum OpsCommand {
         #[arg(long, default_value_t = 3000)]
         delay: u64,
     },
-    /// Delegate non-ported ops subcommands to legacy CLI.
+    /// Capture unknown ops subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -344,9 +343,6 @@ enum DispatchOutcome {
         tool: &'static str,
         result: Result<CommandOutput, CommandError>,
     },
-    Delegated {
-        code: i32,
-    },
 }
 
 fn main() {
@@ -369,9 +365,6 @@ fn main() {
             let elapsed = started.elapsed().as_millis() as u64;
             let exit_code = emit(&result, tool, elapsed, cli.json);
             process::exit(exit_code);
-        }
-        DispatchOutcome::Delegated { code } => {
-            process::exit(code);
         }
     }
 }
@@ -514,13 +507,7 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
         },
         Command::Search {
             command: SearchCommand::External(args),
-        } => {
-            let mut delegated = vec!["search".to_owned()];
-            delegated.extend(args.iter().cloned());
-            DispatchOutcome::Delegated {
-                code: delegate_to_legacy(&delegated, shared, json_mode),
-            }
-        }
+        } => unsupported_external("search", args),
         Command::Ops {
             command:
                 OpsCommand::Patch {
@@ -597,13 +584,7 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
         },
         Command::Ops {
             command: OpsCommand::External(args),
-        } => {
-            let mut delegated = vec!["ops".to_owned()];
-            delegated.extend(args.iter().cloned());
-            DispatchOutcome::Delegated {
-                code: delegate_to_legacy(&delegated, shared, json_mode),
-            }
-        }
+        } => unsupported_external("ops", args),
         Command::Export {
             command: ExportCommand::Json { output },
         } => DispatchOutcome::Local {
@@ -634,13 +615,7 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
         },
         Command::Export {
             command: ExportCommand::External(args),
-        } => {
-            let mut delegated = vec!["export".to_owned()];
-            delegated.extend(args.iter().cloned());
-            DispatchOutcome::Delegated {
-                code: delegate_to_legacy(&delegated, shared, json_mode),
-            }
-        }
+        } => unsupported_external("export", args),
         Command::Build {
             command: BuildCommand::Sources { target, jobs },
         } => DispatchOutcome::Local {
@@ -675,88 +650,34 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                     )),
                 }
             } else {
-                DispatchOutcome::Delegated {
-                    code: delegate_to_legacy(args, shared, json_mode),
+                DispatchOutcome::Local {
+                    tool: "external",
+                    result: Err(CommandError::runtime(
+                        "UNSUPPORTED_COMMAND",
+                        format!("unsupported command: {}", args.join(" ")),
+                        "run `let tools --json` to list available commands",
+                    )),
                 }
             }
         }
     }
 }
 
-fn delegate_to_legacy(args: &[String], shared: &SharedArgs, json_mode: bool) -> i32 {
-    let mut full_args: Vec<String> = vec!["run".to_owned(), "packages/cli/src/index.ts".to_owned()];
-
-    if json_mode {
-        full_args.push("--json".to_owned());
-    }
-    if let Some(path) = &shared.overrides.data_dir {
-        full_args.push("--data-dir".to_owned());
-        full_args.push(path.display().to_string());
-    }
-    if let Some(path) = &shared.overrides.config_dir {
-        full_args.push("--config-dir".to_owned());
-        full_args.push(path.display().to_string());
-    }
-    if let Some(path) = &shared.overrides.cache_dir {
-        full_args.push("--cache-dir".to_owned());
-        full_args.push(path.display().to_string());
-    }
-    if let Some(path) = &shared.overrides.sources_dir {
-        full_args.push("--sources-dir".to_owned());
-        full_args.push(path.display().to_string());
-    }
-
-    full_args.extend(args.iter().cloned());
-
-    if json_mode {
-        match ProcessCommand::new("bun")
-            .args(&full_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-        {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !stderr.is_empty() {
-                    eprint!("{stderr}");
-                }
-
-                if let Some(json_line) = find_last_json_line(stdout.as_ref()) {
-                    println!("{json_line}");
-                } else if !stdout.is_empty() {
-                    eprint!("{stdout}");
-                }
-
-                output.status.code().unwrap_or(1)
-            }
-            Err(error) => {
-                eprintln!("failed to delegate command to legacy bun cli: {error}");
-                1
-            }
-        }
+fn unsupported_external(group: &str, args: &[String]) -> DispatchOutcome {
+    let detail = if args.is_empty() {
+        format!("{group} command is not supported")
     } else {
-        match ProcessCommand::new("bun").args(&full_args).status() {
-            Ok(status) => status.code().unwrap_or(1),
-            Err(error) => {
-                eprintln!("failed to delegate command to legacy bun cli: {error}");
-                1
-            }
-        }
-    }
-}
+        format!("{group} command is not supported: {}", args.join(" "))
+    };
 
-fn find_last_json_line(stdout: &str) -> Option<&str> {
-    for line in stdout.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('{')
-            && trimmed.ends_with('}')
-            && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
-        {
-            return Some(trimmed);
-        }
+    DispatchOutcome::Local {
+        tool: "external",
+        result: Err(CommandError::runtime(
+            "UNSUPPORTED_COMMAND",
+            detail,
+            "run `let tools --json` to list available commands",
+        )),
     }
-    None
 }
 
 fn emit(result: &Result<CommandOutput, CommandError>, tool: &str, elapsed: u64, json: bool) -> i32 {
@@ -819,18 +740,16 @@ fn emit_text(result: &Result<CommandOutput, CommandError>) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::find_last_json_line;
+    use super::unsupported_external;
 
     #[test]
-    fn finds_last_json_line_after_logs() {
-        let output = "debug line\nanother line\n{\"ok\":true,\"data\":{}}\n";
-        let json = find_last_json_line(output).expect("json line should be found");
-        assert_eq!(json, "{\"ok\":true,\"data\":{}}");
-    }
-
-    #[test]
-    fn returns_none_when_no_json_line_exists() {
-        let output = "log line only\nstill log output";
-        assert!(find_last_json_line(output).is_none());
+    fn unsupported_external_returns_error() {
+        let result = unsupported_external("search", &[String::from("legacy-subcommand")]);
+        match result {
+            super::DispatchOutcome::Local { result, .. } => {
+                let error = result.expect_err("expected unsupported command error");
+                assert_eq!(error.code, "UNSUPPORTED_COMMAND");
+            }
+        }
     }
 }
