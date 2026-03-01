@@ -68,7 +68,8 @@ pub(crate) enum FocusPane {
 
 #[derive(Debug, Clone)]
 struct ContextMediaItem {
-    label: String,
+    kind: String,
+    asset: String,
     path: PathBuf,
 }
 
@@ -175,10 +176,10 @@ impl App {
         self.palette_selected
     }
 
-    pub(crate) fn context_rows(&self) -> Vec<String> {
+    pub(crate) fn context_rows(&self) -> Vec<(String, String)> {
         self.build_context_media_items()
             .into_iter()
-            .map(|item| item.label)
+            .map(|item| (item.kind, item.asset))
             .collect()
     }
 
@@ -473,30 +474,44 @@ impl App {
     }
 
     fn build_context_media_items(&self) -> Vec<ContextMediaItem> {
+        let Some(listing) = self.selected_listing() else {
+            return Vec::new();
+        };
+
         let media = self.selected_media();
+        let listing_key = listing
+            .portal_ids
+            .rightmove
+            .as_deref()
+            .unwrap_or(listing.id.as_str())
+            .to_owned();
         let mut items = Vec::new();
 
         for (index, path) in media.images.iter().enumerate() {
             items.push(ContextMediaItem {
-                label: format!("image {:02} | {}", index + 1, path.display()),
+                kind: format!("img_{:02}", index + 1),
+                asset: compact_media_asset(&listing_key, path),
                 path: path.clone(),
             });
         }
         if let Some(path) = media.floorplan {
             items.push(ContextMediaItem {
-                label: format!("floorplan | {}", path.display()),
+                kind: "floorplan".to_owned(),
+                asset: compact_media_asset(&listing_key, &path),
                 path,
             });
         }
         if let Some(path) = media.satellite {
             items.push(ContextMediaItem {
-                label: format!("satellite | {}", path.display()),
+                kind: "satellite-map".to_owned(),
+                asset: compact_media_asset(&listing_key, &path),
                 path,
             });
         }
         if let Some(path) = media.street {
             items.push(ContextMediaItem {
-                label: format!("street-map | {}", path.display()),
+                kind: "street-map".to_owned(),
+                asset: compact_media_asset(&listing_key, &path),
                 path,
             });
         }
@@ -759,6 +774,14 @@ fn resolve_local_asset(
     candidates.push(cache_root.join(raw));
 
     candidates.into_iter().find(|path| path.exists())
+}
+
+fn compact_media_asset(listing_key: &str, path: &Path) -> String {
+    let file = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown");
+    format!("{listing_key}/{file}")
 }
 
 fn collect_source_status() -> Vec<SourceStatus> {

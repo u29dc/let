@@ -289,13 +289,13 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
 
 fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     let context_focused = app.focus() == FocusPane::Context;
+    let media_items = app.context_rows();
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
         .split(area);
 
     let summary_lines = if let Some(listing) = app.selected_listing() {
-        let media_rows = app.context_rows().len();
         let mut lines = Vec::new();
         let id = listing
             .portal_ids
@@ -316,7 +316,7 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Th
             theme,
         ));
         lines.push(kv_line("cache", truncate(&cache, 128), theme));
-        lines.push(kv_line("media items", media_rows.to_string(), theme));
+        lines.push(kv_line("media items", media_items.len().to_string(), theme));
 
         if !listing.notes.is_empty() {
             lines.push(Line::from(""));
@@ -326,6 +326,55 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Th
                     format!("- {}", truncate(note, 140)),
                     theme.body,
                 )));
+            }
+        }
+
+        if let Some(assessment) = &listing.assessment {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "assessment",
+                theme.section_heading,
+            )));
+            lines.push(kv_line(
+                "recommendation",
+                format!("{:?}", assessment.recommendation).to_lowercase(),
+                theme,
+            ));
+            lines.push(kv_line(
+                "maintenance",
+                format!("{:?}", assessment.maintenance).to_lowercase(),
+                theme,
+            ));
+            lines.push(kv_line(
+                "family",
+                format!("{:?}", assessment.family_suitability).to_lowercase(),
+                theme,
+            ));
+            lines.push(kv_line(
+                "score adjustment",
+                format!("{:.1}", assessment.score_adjustment),
+                theme,
+            ));
+            lines.push(kv_line(
+                "light/space",
+                truncate(&assessment.light_and_space, 220),
+                theme,
+            ));
+            lines.push(kv_line(
+                "photo analysis",
+                truncate(&assessment.photo_analysis, 220),
+                theme,
+            ));
+            lines.push(kv_line(
+                "reasoning",
+                truncate(&assessment.reasoning, 220),
+                theme,
+            ));
+            if let Some(tradeoffs) = &assessment.tradeoffs {
+                lines.push(kv_line("tradeoffs", truncate(tradeoffs, 220), theme));
+            }
+            if let Some(neighborhood) = &assessment.neighborhood_analysis {
+                lines.push(kv_line("neighborhood", truncate(neighborhood, 220), theme));
             }
         }
 
@@ -354,13 +403,19 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Th
         );
     frame.render_widget(summary, sections[0]);
 
-    let media_rows = app
-        .context_rows()
+    let media_rows = media_items
         .iter()
-        .map(|row| Row::new([Cell::from(truncate(row, 140))]).style(theme.body))
+        .map(|(kind, asset)| {
+            Row::new([
+                Cell::from(truncate(kind, 14)),
+                Cell::from(truncate(asset, 120)),
+            ])
+            .style(theme.body)
+        })
         .collect::<Vec<_>>();
 
-    let media_table = Table::new(media_rows, [Constraint::Percentage(100)])
+    let media_table = Table::new(media_rows, [Constraint::Length(14), Constraint::Min(12)])
+        .header(Row::new([Cell::from("type"), Cell::from("asset")]).style(theme.section_heading))
         .row_highlight_style(if context_focused {
             theme.selected
         } else {
@@ -375,7 +430,7 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Th
         );
 
     let mut media_state = ratatui::widgets::TableState::default();
-    if !app.context_rows().is_empty() {
+    if !media_items.is_empty() {
         media_state.select(Some(app.context_selected_index()));
     }
     frame.render_stateful_widget(media_table, sections[1], &mut media_state);

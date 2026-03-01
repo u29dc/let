@@ -31,7 +31,7 @@
 		"util:types": "cargo check --workspace",
 		"util:test": "cargo test --workspace",
 		"util:build": "cargo build --workspace",
-		"util:check": "STATUS=0; bun run util:format || STATUS=1; bun run util:lint || STATUS=1; bun run util:types || STATUS=1; bun run util:test || STATUS=1; bun run util:build || STATUS=1; exit $STATUS",
+		"util:check": "STATUS=0; bun run util:format || STATUS=1; bun run util:lint || STATUS=1; bun run util:types || STATUS=1; bun run util:test || STATUS=1; bun run build || STATUS=1; exit $STATUS",
 		"clean": "cargo clean"
 	},
 	"devDependencies": {
