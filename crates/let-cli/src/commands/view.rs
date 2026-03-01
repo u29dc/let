@@ -87,17 +87,23 @@ pub fn list(shared: &SharedArgs, params: &ViewListParams) -> CommandResult {
     let projection = listings
         .iter()
         .map(|listing| {
+            let score = listing.scores.as_ref().map(|scores| scores.overall);
+            let score_change = listing.assessed_score.zip(score).map(|(assessed, algo)| {
+                let delta = assessed - algo;
+                (delta * 10.0).round() / 10.0
+            });
             json!({
-                "id": listing.id,
+                "id": listing.portal_ids.rightmove.clone().unwrap_or_else(|| listing.id.clone()),
                 "portalId": listing.portal_ids.rightmove,
                 "address": listing.address,
                 "price": listing.price,
                 "priceDisplay": listing.price_display,
                 "bedrooms": listing.bedrooms,
-                "score": listing.scores.as_ref().map(|scores| scores.overall),
+                "score": score,
                 "assessedScore": listing.assessed_score,
+                "scoreChange": score_change,
                 "region": listing.region,
-                "station": listing.nearest_stations.first().map(|station| format!("{} ({:.1} {})", station.name, station.distance, station.unit)),
+                "station": listing.nearest_stations.first().map(format_station),
                 "url": listing.url,
             })
         })
@@ -143,8 +149,14 @@ fn compare_listings(
 ) -> Ordering {
     let ordering = match sort {
         SortField::Score => {
-            let a_score = a.scores.as_ref().map_or(0.0, |scores| scores.overall);
-            let b_score = b.scores.as_ref().map_or(0.0, |scores| scores.overall);
+            let a_score = a
+                .assessed_score
+                .or_else(|| a.scores.as_ref().map(|scores| scores.overall))
+                .unwrap_or(0.0);
+            let b_score = b
+                .assessed_score
+                .or_else(|| b.scores.as_ref().map(|scores| scores.overall))
+                .unwrap_or(0.0);
             a_score.partial_cmp(&b_score).unwrap_or(Ordering::Equal)
         }
         SortField::Price => a.price.cmp(&b.price),
@@ -153,4 +165,20 @@ fn compare_listings(
     };
 
     if asc { ordering } else { ordering.reverse() }
+}
+
+fn format_station(station: &let_sdk::schema::listing::StationDistance) -> String {
+    let name = truncate(&station.name, 25);
+    format!("{:<25} ({:.1}mi)", name, station.distance)
+}
+
+fn truncate(value: &str, max_len: usize) -> String {
+    if value.chars().count() <= max_len {
+        value.to_owned()
+    } else if max_len <= 3 {
+        value.chars().take(max_len).collect()
+    } else {
+        let head = value.chars().take(max_len - 3).collect::<String>();
+        format!("{head}...")
+    }
 }

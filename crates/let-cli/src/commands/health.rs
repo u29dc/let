@@ -4,19 +4,34 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
+use let_sdk::load_listings_file;
 use let_sdk::paths::resolve_paths;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::commands::{CommandOutput, CommandResult, SharedArgs};
 
+const SOURCE_NAMES: [&str; 10] = [
+    "postcodes",
+    "broadband",
+    "deprivation",
+    "census",
+    "population",
+    "income",
+    "flood",
+    "crime",
+    "naptan",
+    "uprn",
+];
+
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct HealthCheck {
-    name: String,
+    id: String,
+    label: String,
     status: String,
+    severity: String,
     detail: String,
-    fix: String,
+    fix: Value,
 }
 
 pub fn run(shared: &SharedArgs) -> CommandResult {
@@ -24,33 +39,68 @@ pub fn run(shared: &SharedArgs) -> CommandResult {
     let mut checks = Vec::new();
 
     checks.push(check_config_file(&bundle.derived.config_file));
+    checks.push(check_database(&bundle.derived.database));
+    for source in SOURCE_NAMES {
+        checks.push(check_source_db(
+            source,
+            &bundle.derived.source_db(&bundle.resolved.sources, source),
+        ));
+    }
+    checks.push(check_env_key(
+        "EPC_API_KEY",
+        "env.epc_api_key",
+        "EPC API Key",
+        &bundle.derived.env_file,
+    ));
+    checks.push(check_env_key(
+        "NOTION_API_KEY",
+        "env.notion_api_key",
+        "Notion API Key",
+        &bundle.derived.env_file,
+    ));
+    checks.push(check_env_key(
+        "MAPBOX_ACCESS_TOKEN",
+        "env.mapbox_access_token",
+        "Mapbox Token",
+        &bundle.derived.env_file,
+    ));
     checks.push(check_writable_dir(
-        "data.dir",
+        "dir.data",
+        "Directory: data",
         &bundle.resolved.data,
-        "ensure data directory exists and is writable",
     ));
     checks.push(check_writable_dir(
-        "cache.dir",
+        "dir.cache",
+        "Directory: cache",
         &bundle.resolved.cache,
-        "ensure cache directory exists and is writable",
     ));
-    checks.push(check_sources_dir(&bundle.resolved.sources));
 
-    let status = overall_status(&checks).to_string();
+    let summary = summarize_checks(&checks);
+    let status = if summary.blocking > 0 {
+        "blocked"
+    } else if summary.degraded > 0 {
+        "degraded"
+    } else {
+        "ready"
+    };
+
     let data = json!({
         "status": status,
-        "checks": checks,
         "paths": {
             "config": bundle.resolved.config.display().to_string(),
             "data": bundle.resolved.data.display().to_string(),
             "cache": bundle.resolved.cache.display().to_string(),
             "sources": bundle.resolved.sources.display().to_string(),
-            "configFile": bundle.derived.config_file.display().to_string(),
-            "database": bundle.derived.database.display().to_string(),
+        },
+        "checks": checks,
+        "summary": {
+            "ok": summary.ok,
+            "blocking": summary.blocking,
+            "degraded": summary.degraded,
         }
     });
-    let count = data["checks"].as_array().map_or(0, |checks| checks.len());
 
+    let count = data["checks"].as_array().map_or(0, |items| items.len());
     Ok(CommandOutput::new(data)
         .with_count(count)
         .with_total(count)
@@ -61,38 +111,128 @@ pub fn run(shared: &SharedArgs) -> CommandResult {
 fn check_config_file(path: &Path) -> HealthCheck {
     if path.exists() {
         HealthCheck {
-            name: "config.file".to_string(),
-            status: "ready".to_string(),
-            detail: format!("found {}", path.display()),
-            fix: "none".to_string(),
+            id: "config".to_owned(),
+            label: "Configuration".to_owned(),
+            status: "ok".to_owned(),
+            severity: "info".to_owned(),
+            detail: path.display().to_string(),
+            fix: Value::Null,
         }
     } else {
         HealthCheck {
-            name: "config.file".to_string(),
-            status: "blocked".to_string(),
+            id: "config".to_owned(),
+            label: "Configuration".to_owned(),
+            status: "missing".to_owned(),
+            severity: "blocking".to_owned(),
             detail: format!("missing {}", path.display()),
-            fix: format!("create {}", path.display()),
+            fix: json!([format!("create {}", path.display())]),
         }
     }
 }
 
-fn check_writable_dir(name: &str, path: &Path, fix_hint: &str) -> HealthCheck {
-    let status = match fs::create_dir_all(path) {
-        Ok(()) => probe_write(path).map_or("blocked", |_| "ready"),
-        Err(_) => "blocked",
-    };
+fn check_database(path: &Path) -> HealthCheck {
+    if !path.exists() {
+        return HealthCheck {
+            id: "database".to_owned(),
+            label: "Listings Database".to_owned(),
+            status: "missing".to_owned(),
+            severity: "degraded".to_owned(),
+            detail: format!("missing {}", path.display()),
+            fix: json!(["run `let fetch <id>` to create and populate the listings database"]),
+        };
+    }
 
-    let detail = if status == "ready" {
-        format!("writable {}", path.display())
+    match load_listings_file(path) {
+        Ok(data) => HealthCheck {
+            id: "database".to_owned(),
+            label: "Listings Database".to_owned(),
+            status: "ok".to_owned(),
+            severity: "info".to_owned(),
+            detail: format!("{} ({} listings)", path.display(), data.listings.len()),
+            fix: Value::Null,
+        },
+        Err(error) => HealthCheck {
+            id: "database".to_owned(),
+            label: "Listings Database".to_owned(),
+            status: "error".to_owned(),
+            severity: "degraded".to_owned(),
+            detail: format!("{} ({})", path.display(), error.message),
+            fix: json!(["restore from backup or recreate database with `let fetch <id>`"]),
+        },
+    }
+}
+
+fn check_source_db(name: &str, path: &Path) -> HealthCheck {
+    if path.exists() {
+        HealthCheck {
+            id: format!("source.{name}"),
+            label: format!("Source: {name}"),
+            status: "ok".to_owned(),
+            severity: "info".to_owned(),
+            detail: path.display().to_string(),
+            fix: Value::Null,
+        }
     } else {
-        format!("cannot write {}", path.display())
+        HealthCheck {
+            id: format!("source.{name}"),
+            label: format!("Source: {name}"),
+            status: "missing".to_owned(),
+            severity: "degraded".to_owned(),
+            detail: format!("missing {}", path.display()),
+            fix: json!([format!("run `let build sources {name}`")]),
+        }
+    }
+}
+
+fn check_env_key(key: &str, id: &str, label: &str, env_file: &Path) -> HealthCheck {
+    if std::env::var(key).ok().is_some() {
+        HealthCheck {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            status: "ok".to_owned(),
+            severity: "info".to_owned(),
+            detail: format!("{key} is set"),
+            fix: Value::Null,
+        }
+    } else {
+        HealthCheck {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            status: "missing".to_owned(),
+            severity: "degraded".to_owned(),
+            detail: format!("{key} not set"),
+            fix: json!([format!("echo '{key}=your-key' >> {}", env_file.display())]),
+        }
+    }
+}
+
+fn check_writable_dir(id: &str, label: &str, path: &Path) -> HealthCheck {
+    let status = match fs::create_dir_all(path) {
+        Ok(()) => probe_write(path).map_or("error", |_| "ok"),
+        Err(_) => "error",
     };
 
-    HealthCheck {
-        name: name.to_string(),
-        status: status.to_string(),
-        detail,
-        fix: format!("{fix_hint}: {}", path.display()),
+    if status == "ok" {
+        HealthCheck {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            status: status.to_owned(),
+            severity: "info".to_owned(),
+            detail: path.display().to_string(),
+            fix: Value::Null,
+        }
+    } else {
+        HealthCheck {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            status: status.to_owned(),
+            severity: "blocking".to_owned(),
+            detail: format!("cannot write {}", path.display()),
+            fix: json!([format!(
+                "ensure directory exists and is writable: {}",
+                path.display()
+            )]),
+        }
     }
 }
 
@@ -109,30 +249,24 @@ fn probe_write(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn check_sources_dir(path: &Path) -> HealthCheck {
-    if path.exists() {
-        HealthCheck {
-            name: "sources.dir".to_string(),
-            status: "ready".to_string(),
-            detail: format!("found {}", path.display()),
-            fix: "none".to_string(),
-        }
-    } else {
-        HealthCheck {
-            name: "sources.dir".to_string(),
-            status: "degraded".to_string(),
-            detail: format!("missing {}", path.display()),
-            fix: "run source build commands before enrichment tasks".to_string(),
-        }
-    }
+struct Summary {
+    ok: usize,
+    blocking: usize,
+    degraded: usize,
 }
 
-fn overall_status(checks: &[HealthCheck]) -> &'static str {
-    if checks.iter().any(|check| check.status == "blocked") {
-        "blocked"
-    } else if checks.iter().any(|check| check.status == "degraded") {
-        "degraded"
-    } else {
-        "ready"
+fn summarize_checks(checks: &[HealthCheck]) -> Summary {
+    let mut summary = Summary {
+        ok: 0,
+        blocking: 0,
+        degraded: 0,
+    };
+    for check in checks {
+        match check.severity.as_str() {
+            "blocking" => summary.blocking += 1,
+            "degraded" => summary.degraded += 1,
+            _ => summary.ok += 1,
+        }
     }
+    summary
 }
