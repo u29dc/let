@@ -34,6 +34,11 @@
 		"util:lint:fix": "biome check --write .",
 		"util:types": "tsgo --noEmit",
 		"util:clean": "rm -rf dist build",
+		"util:rust:fmt": "cargo fmt --all --check",
+		"util:rust:lint": "cargo clippy --workspace --all-targets -- -D warnings",
+		"util:rust:test": "cargo test --workspace",
+		"util:rust:build": "cargo build --workspace --release",
+		"util:rust:check": "STATUS=0; bun run util:rust:fmt || STATUS=1; bun run util:rust:lint || STATUS=1; bun run util:rust:test || STATUS=1; bun run util:rust:build || STATUS=1; exit $STATUS",
 		"util:check": "STATUS=0; bun run util:format || STATUS=1; bun run util:lint || STATUS=1; bun run util:types || STATUS=1; bun test --concurrent || STATUS=1; exit $STATUS"
 	},
 	"devDependencies": {
