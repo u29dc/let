@@ -5,10 +5,10 @@
     "": {
       "name": "acc",
       "devDependencies": {
-        "@commitlint/cli": "^20.4.2",
-        "@commitlint/config-conventional": "^20.4.2",
-        "husky": "^9.1.7",
-        "lint-staged": "^16.3.1",
+        "@commitlint/cli": "latest",
+        "@commitlint/config-conventional": "latest",
+        "husky": "latest",
+        "lint-staged": "latest",
       },
     },
   },
