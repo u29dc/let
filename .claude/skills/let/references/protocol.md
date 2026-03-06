@@ -2,7 +2,8 @@
 
 Full pipeline protocol for the `let` CLI. Follow these phases in order. All commands use `--json` for structured output; read stdout as the contract, ignore stderr (logs only).
 
-> All examples use `bin/let` -- the compiled binary at the repo root. Build with `bun run build` (or `cargo build --workspace --release`) if missing.
+> Set once per session: `LET_BIN="${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let"`.
+> All examples use `"$LET_BIN"`. If it is missing or not executable, return a blocked prerequisite and stop.
 
 ## Principles
 
@@ -14,9 +15,9 @@ Full pipeline protocol for the `let` CLI. Follow these phases in order. All comm
 ## Phase 0: Orient (always)
 
 ```bash
-bin/let tools --json
-bin/let health --json
-bin/let config show --json
+"$LET_BIN" tools --json
+"$LET_BIN" health --json
+"$LET_BIN" config show --json
 ```
 
 If `health.status == "blocked"`: execute fix commands from `checks[].fix`, then re-run health.
@@ -61,17 +62,17 @@ For fetch: `--region <name>` assigns region to fetched listings (use displayName
 **New listings** -- portal IDs not present in the SQLite DB yet.
 
 ```bash
-bin/let search discover --json
-bin/let search diff <comma-separated-ids> --json
+"$LET_BIN" search discover --json
+"$LET_BIN" search diff <comma-separated-ids> --json
 ```
 
 The `discover` output includes `idsByLocation` -- a map of location name to portal IDs. Use this to batch `fetch` calls by region:
 
 ```bash
-bin/let search discover --json
+"$LET_BIN" search discover --json
 # Output includes: idsByLocation: { "Sheffield": ["id1", ...], "Stamford": ["id2", ...] }
-bin/let fetch <sheffield-ids> --region Sheffield --json
-bin/let fetch <stamford-ids> --region Stamford --json
+"$LET_BIN" fetch <sheffield-ids> --region Sheffield --json
+"$LET_BIN" fetch <stamford-ids> --region Stamford --json
 ```
 
 If DB is empty, `diff.new` may be "everything." Start by fetching a small sample first (5-10) to calibrate. Prefer repeated small loops over one giant run: discover, diff, fetch, triage, repeat.
@@ -79,7 +80,7 @@ If DB is empty, `diff.new` may be "everything." Start by fetching a small sample
 ## Phase 3: Acquire (fetch + enrich + score + persist)
 
 ```bash
-bin/let fetch <new-ids> --json
+"$LET_BIN" fetch <new-ids> --json
 ```
 
 **Batching** -- start with batches of **5-10** IDs for fast feedback, then increase to **10-15** once stable. If you see rate limiting, increase delay and retry once (do not spam). Treat missing/removed listings as normal; skip after one retry if clearly permanent.
@@ -89,7 +90,7 @@ bin/let fetch <new-ids> --json
 ## Phase 4: Triage (ranked overview)
 
 ```bash
-bin/let view list --top 30 --json
+"$LET_BIN" view list --top 30 --json
 ```
 
 Suggested triage tiers (algorithm score):
@@ -105,8 +106,8 @@ Prefer to assess a smaller number deeply (2-5) rather than shallowly reviewing 3
 Queue and context:
 
 ```bash
-bin/let assess candidates --json
-bin/let assess context <id> --json
+"$LET_BIN" assess candidates --json
+"$LET_BIN" assess context <id> --json
 ```
 
 How to use assessment context correctly:
@@ -126,7 +127,7 @@ What to look for:
 Submit assessment:
 
 ```bash
-bin/let assess submit <id> '<assessment-json>' --json
+"$LET_BIN" assess submit <id> '<assessment-json>' --json
 ```
 
 Assessment rules:
@@ -145,10 +146,10 @@ Subagent prompt template (replace `{IDS}`):
 Assess listings: {IDS}
 
 For each listing ID:
-1) Run `bin/let assess context {id} --json`
+1) Run `"$LET_BIN" assess context {id} --json`
 2) Use the returned `media` paths (do not guess cache directories)
 3) Review images/maps; do a quick neighborhood web check if needed
-4) Submit: `bin/let assess submit {id} '<valid assessment JSON>' --json`
+4) Submit: `"$LET_BIN" assess submit {id} '<valid assessment JSON>' --json`
 
 Guidance:
 * Maintenance: excellent / good / fair / poor
@@ -162,9 +163,9 @@ Guidance:
 ## Phase 6: Report (shortlist + comparison + next steps)
 
 ```bash
-bin/let view list --top 20 --json
-bin/let view detail <id> --json
-bin/let score explain <id> --json
+"$LET_BIN" view list --top 20 --json
+"$LET_BIN" view detail <id> --json
+"$LET_BIN" score explain <id> --json
 ```
 
 Report structure (compact table-first format):
@@ -192,8 +193,8 @@ Columns surface the key decision factors: price, neighbourhood safety, deprivati
 Use these commands to keep the working set clean between search cycles.
 
 ```bash
-bin/let ops verify --dry-run --limit 20 --json
-bin/let ops prune --dry-run --json
+"$LET_BIN" ops verify --dry-run --limit 20 --json
+"$LET_BIN" ops prune --dry-run --json
 ```
 
 Prune selector rules (must match CLI help and tool metadata):
@@ -208,16 +209,16 @@ Examples:
 
 ```bash
 # Default threshold mode
-bin/let ops prune --dry-run --json
+"$LET_BIN" ops prune --dry-run --json
 
 # Region-only prune
-bin/let ops prune --region Sheffield --dry-run --json
+"$LET_BIN" ops prune --region Sheffield --dry-run --json
 
 # Region + score selector
-bin/let ops prune --region Sheffield --min-score 60 --dry-run --json
+"$LET_BIN" ops prune --region Sheffield --min-score 60 --dry-run --json
 
 # Inactive prune in one region
-bin/let ops prune --inactive --region Sheffield --dry-run --json
+"$LET_BIN" ops prune --inactive --region Sheffield --dry-run --json
 ```
 
 ## Intent mappings

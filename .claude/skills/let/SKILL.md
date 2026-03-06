@@ -6,41 +6,44 @@ description: >-
     candidates (photos/maps + neighborhood research), and produce shortlists and
     region comparisons for a family's preferences.
 compatibility: >-
-    Designed for Claude Code with Bash access. Requires `:let` to be built
-    (`bun run build` or `cargo build --workspace --release`). Network access
-    for Rightmove; optional EPC/Mapbox/Notion
-    keys enable richer enrichment and exports.
+    Designed for Claude Code with Bash access. Requires an already-installed
+    CLI binary at `${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let`. Network
+    access for Rightmove; optional EPC/Mapbox/Notion keys enable richer
+    enrichment and exports.
 allowed-tools: Bash Read Write WebSearch WebFetch
 ---
 
 ## Invocation
 
-`:let` is a shell alias for the compiled binary. Use it directly in bash:
+Resolve the runtime binary path:
 
-    :let <command>
+    LET_BIN="${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let"
 
-Use `cargo run -q -p let-cli -- <command>` only if `:let` is unavailable.
+Then call:
 
-If `:let` is not found, build it first: `bun run build` (repo root).
+    "$LET_BIN" <command>
+
+If `$LET_BIN` is missing or not executable, stop and report a blocked prerequisite
+with the checked path. Do not run repo build commands from this skill.
 
 ## Orientation
 
-> If `:let` is not found, run `bun run build`.
+> If `$LET_BIN` is missing, return a blocked prerequisite and stop.
 
 1. Read `$LET_HOME/data/let.context.md` first (human context for the config: the user's situation, the current benchmark, what "100/100" means, and which tradeoffs are acceptable).
 
 2. Then run the base checks:
 
-- `:let tools --json`
-- `:let health --json`
-- `:let config show --json`
+- `"$LET_BIN" tools --json`
+- `"$LET_BIN" health --json`
+- `"$LET_BIN" config show --json`
 
 If health is blocked, follow the fix guidance in `references/init.md`.
 
 ## Config vs context
 
 - If a config TOML exists and loads successfully, treat it as the baseline for searches.
-- The config should roughly reflect the preferences in `.let/data/let.context.md`, but it may drift over time.
+- The config should roughly reflect the preferences in `$LET_HOME/data/let.context.md`, but it may drift over time.
     - If you notice mismatches (e.g., "must-have garden" missing, budget out of date, regions missing), flag them clearly in your final report.
     - After the run, recommend specific config updates (do not edit config unless explicitly asked).
 - Depending on how "relaxed" the user's request is, you may run some ad-hoc exploration using one-off CLI overrides (e.g., try an extra region/city, switch flats vs houses) without changing the saved config. Always report what you overrode.
@@ -56,7 +59,7 @@ Multi-region searches can be context-token heavy. Use subagents to keep each loc
 
 When delegating a location to a subagent, give it:
 
-- The user context summary (from `.let/data/let.context.md`)
+- The user context summary (from `$LET_HOME/data/let.context.md`)
 - The user's current request (what you're trying to achieve)
 - The location to explore (name + identifier if known)
 - The rule: do not edit config; use overrides if needed; write assessments back; keep work small
@@ -66,7 +69,7 @@ Subagent prompt template (replace `{LOCATION}` / `{LOCATION_ID}`):
 ```
 You are a subagent exploring one location for the `let` property search.
 
-Read this first: .let/data/let.context.md (family context + preferences).
+Read this first: $LET_HOME/data/let.context.md (family context + preferences).
 
 Constraints:
 * Do not edit config files.
@@ -81,7 +84,7 @@ Location:
 * Identifier (if available): {LOCATION_ID}
 
 Steps (use the tool catalog to confirm signatures):
-1) Orient quickly: `:let health --json` (ensure not blocked)
+1) Orient quickly: `"$LET_BIN" health --json` (ensure not blocked)
 2) Discover listings for this location (baseline or override mode as appropriate)
 3) Diff new vs known
 4) Fetch a small batch (5–10), assign region name if relevant
@@ -97,7 +100,7 @@ Steps (use the tool catalog to confirm signatures):
 
 ## Self-describing CLI
 
-Run `:let tools --json` whenever you're uncertain about parameters or command signatures. Treat it as the source of truth.
+Run `"$LET_BIN" tools --json` whenever you're uncertain about parameters or command signatures. Treat it as the source of truth.
 
 ## On-demand references
 

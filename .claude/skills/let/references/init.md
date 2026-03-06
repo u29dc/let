@@ -1,14 +1,16 @@
 # Initialization Guide
 
-Setup wizard for first-run configuration. Work through each section in order; re-run `bin/let health --json` at the end to confirm.
+Setup wizard for first-run configuration. Work through each section in order; re-run `"$LET_BIN" health --json` at the end to confirm.
+Set once per session: `LET_BIN="${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let"`.
+If `"$LET_BIN"` is missing or not executable, return a blocked prerequisite and stop.
 
 ## 1. Configuration
 
-The config file controls search locations, filters, and scoring weights. If `bin/let health --json` reports `NO_CONFIG`, create one from the template.
+The config file controls search locations, filters, and scoring weights. If `"$LET_BIN" health --json` reports `NO_CONFIG`, create one from the template.
 
 ### Conversational setup
 
-The setup has two phases: understanding the person, then translating into config. Start open-ended, then narrow down to specifics. The open-ended answers feed the context file (`.let/data/let.context.md`); the specific answers feed the config TOML.
+The setup has two phases: understanding the person, then translating into config. Start open-ended, then narrow down to specifics. The open-ended answers feed the context file (`$LET_HOME/data/let.context.md`); the specific answers feed the config TOML.
 
 ### Phase 1: Understanding
 
@@ -26,7 +28,7 @@ Use the answers to write/update the context file (see "User context file" below)
 
 Ask these to populate the TOML fields:
 
-- **"What areas are you considering?"** -- Each area needs a location identifier. Use `bin/let search resolve <name> --json` to resolve city/town names to REGION IDs. Example: `bin/let search resolve Sheffield --json` returns `REGION^904`
+- **"What areas are you considering?"** -- Each area needs a location identifier. Use `"$LET_BIN" search resolve <name> --json` to resolve city/town names to REGION IDs. Example: `"$LET_BIN" search resolve Sheffield --json` returns `REGION^904`
 - **"Houses, flats, or both?"** -- Maps to `propertyTypes` in `[search.filters]`. Options: `detached`, `semi-detached`, `terraced`, `flat`, `apartment`, `house`, `bungalow`, `cottage`, `studio`
 - **"Budget range?"** -- Sets `minPrice` and `maxPrice` (monthly rent in GBP) in `[search.filters]`
 - **"How many bedrooms?"** -- Sets `minBedrooms` and `maxBedrooms`
@@ -37,7 +39,7 @@ Many Phase 2 answers will already be implicit from Phase 1. Don't re-ask what's 
 
 ### Config file location
 
-Write the config to `.let/data/let.config.toml` (relative to repo root). The template is at `templates/let.config.toml`. Key sections:
+Write the config to `$LET_HOME/data/let.config.toml`. The template is at `templates/let.config.toml`. Key sections:
 
 - `[search]` -- `locations` array of `{ id, name }` pairs
 - `[search.filters]` -- bedrooms, price range, property types, mustHave, dontShow
@@ -51,7 +53,7 @@ After resolving locations, ask: **"How would you rank these areas by preference?
 
 ### User context file
 
-After the conversational setup, write or update `.let/data/let.context.md` with a prose summary of the user's situation. This file gives future agent runs the human context behind the config numbers. It should capture:
+After the conversational setup, write or update `$LET_HOME/data/let.context.md` with a prose summary of the user's situation. This file gives future agent runs the human context behind the config numbers. It should capture:
 
 - Family composition, life stage, pets (current or planned)
 - Current living situation -- what they pay, what they love about it, what's missing
@@ -63,11 +65,11 @@ After the conversational setup, write or update `.let/data/let.context.md` with 
 
 **If the file already exists**: read it and check whether the conversation revealed anything new or changed (budget shift, new must-have, different regions, life change). If so, update the relevant parts. Don't rewrite what's already accurate.
 
-The context file is personal data (gitignored in `.let/data/`). Write in natural prose, not bullet config. The goal is that any agent reading it cold understands the family's priorities without needing to re-ask.
+The context file is personal data in `$LET_HOME/data/`. Write in natural prose, not bullet config. The goal is that any agent reading it cold understands the family's priorities without needing to re-ask.
 
 ## 2. API keys
 
-Create a `.env` file in the data directory (`.let/data/.env`) with the following keys:
+Create a `.env` file in the data directory (`$LET_HOME/data/.env`) with the following keys:
 
 ### EPC_API_KEY (recommended)
 
@@ -87,7 +89,7 @@ Enables satellite and street map views cached as WebP images. Useful for neighbo
 
 ### Notion export keys (optional)
 
-Required only for `bin/let export notion ...`.
+Required only for `"$LET_BIN" export notion ...`.
 
 1. Create a Notion integration and copy the API key
 2. Create/select a Notion database and copy its database ID
@@ -97,7 +99,7 @@ Required only for `bin/let export notion ...`.
 
 ## 3. Source databases
 
-Source databases provide local enrichment data (broadband speeds, deprivation indices, crime stats, flood risk, census data). They live in the `.let/sources/` directory.
+Source databases provide local enrichment data (broadband speeds, deprivation indices, crime stats, flood risk, census data). They live in the `$LET_HOME/sources/` directory.
 
 ### Degraded mode
 
@@ -115,11 +117,10 @@ Scores will have lower confidence and the location composite will be less accura
 ### Options
 
 - **Proceed degraded** -- recommended for quick starts. The pipeline works; enrichment data can be added later
-- **Build from source** -- requires the full repository:
+- **Build source databases locally** -- from the installed CLI:
 
 ```bash
-bun install
-:let build sources all --jobs 3    # downloads ~5-10GB from government sources
+"$LET_BIN" build sources all --jobs 3    # downloads ~5-10GB from government sources
 ```
 
 Building takes 10-30 minutes depending on network speed. Some government data URLs may expire; the build logs which sources succeeded.
@@ -129,7 +130,7 @@ Building takes 10-30 minutes depending on network speed. Some government data UR
 Run the health check to confirm everything is configured:
 
 ```bash
-bin/let health --json
+"$LET_BIN" health --json
 ```
 
 Expected outcomes:
