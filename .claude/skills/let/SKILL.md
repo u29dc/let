@@ -1,119 +1,506 @@
 ---
 name: let
 description: >-
-    Autonomous UK rental property search workflow powered by the `let` CLI toolbelt.
-    Use this skill to discover Rightmove listings, enrich and score them, assess top
-    candidates (photos/maps + neighborhood research), and produce shortlists and
-    region comparisons for a family's preferences.
+  Autonomous UK rental property search workflow powered by the `let` CLI toolbelt.
+  Use this skill to discover Rightmove listings, enrich and score them, assess top
+  candidates (photos/maps + neighborhood research), and produce shortlists and
+  region comparisons for a family's preferences.
+argument-hint: [search request or location]
 compatibility: >-
-    Designed for Claude Code with Bash access. Requires an already-installed
-    CLI binary at `${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let`. Network
-    access for Rightmove; optional EPC/Mapbox/Notion keys enable richer
-    enrichment and exports.
+  Designed for Claude Code with Bash access. Requires an already-installed
+  CLI binary at `${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let`. Network
+  access for Rightmove; optional EPC/Mapbox/Notion keys enable richer
+  enrichment and exports.
 allowed-tools: Bash Read Write WebSearch WebFetch
 ---
 
+# Let
+
+Autonomous UK rental property search, triage, and neighborhood assessment via the `let` CLI.
+
+## How to Use
+
+- Use when the user wants new rental listings, a region comparison, or a deeper review of shortlisted homes.
+- Use when the user wants an existing `let` setup initialized, repaired, or explained.
+- Use when the user wants listing assessments written back into the local `let` database.
+
 ## Invocation
 
-Resolve the runtime binary path:
+Resolve the runtime binary path once per session:
 
-    LET_BIN="${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let"
+```bash
+LET_BIN="${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let"
+```
 
 Then call:
 
-    "$LET_BIN" <command>
-
-If `$LET_BIN` is missing or not executable, stop and report a blocked prerequisite
-with the checked path. Do not run repo build commands from this skill.
-
-## Orientation
-
-> If `$LET_BIN` is missing, return a blocked prerequisite and stop.
-
-1. Read `$LET_HOME/data/let.context.md` first (human context for the config: the user's situation, the current benchmark, what "100/100" means, and which tradeoffs are acceptable).
-
-2. Then run the base checks:
-
-- `"$LET_BIN" tools --json`
-- `"$LET_BIN" health --json`
-- `"$LET_BIN" config show --json`
-
-If health is blocked, follow the fix guidance in `references/init.md`.
-
-## Config vs context
-
-- If a config TOML exists and loads successfully, treat it as the baseline for searches.
-- The config should roughly reflect the preferences in `$LET_HOME/data/let.context.md`, but it may drift over time.
-    - If you notice mismatches (e.g., "must-have garden" missing, budget out of date, regions missing), flag them clearly in your final report.
-    - After the run, recommend specific config updates (do not edit config unless explicitly asked).
-- Depending on how "relaxed" the user's request is, you may run some ad-hoc exploration using one-off CLI overrides (e.g., try an extra region/city, switch flats vs houses) without changing the saved config. Always report what you overrode.
-
-## Subagent execution
-
-Multi-region searches can be context-token heavy. Use subagents to keep each location's work contained. Use subagents sequentially, not in parallel -- parallel subagents can conflict when writing to the same SQLite DB and cache.
-
-1. Main agent does orientation and sets the plan (locations to explore, batch sizes, "strict vs relaxed" mode).
-2. For each location, spawn one subagent, wait for completion, then spawn the next location's subagent.
-
-## Subagent template
-
-When delegating a location to a subagent, give it:
-
-- The user context summary (from `$LET_HOME/data/let.context.md`)
-- The user's current request (what you're trying to achieve)
-- The location to explore (name + identifier if known)
-- The rule: do not edit config; use overrides if needed; write assessments back; keep work small
-
-Subagent prompt template (replace `{LOCATION}` / `{LOCATION_ID}`):
-
+```bash
+"$LET_BIN" <command>
 ```
+
+Hard rules:
+
+- If `$LET_BIN` is missing or not executable, return a blocked prerequisite and stop.
+- Use `--json` for CLI calls unless a command genuinely lacks JSON output.
+- Read stdout as the contract. Treat stderr as logs only.
+- Do not run repo build commands from this skill.
+
+## Operating Rules
+
+- Read `$LET_HOME/data/let.context.md` first. It contains the human context behind the config.
+- Treat config as the baseline. Use one-off CLI overrides for ad-hoc searches; do not edit config unless explicitly asked.
+- Record every override in the final report.
+- Treat scores as advisory. Use photos, floorplans, maps, and neighborhood research to override shallow algorithmic conclusions.
+- Use repeated small loops: discover, diff, fetch 5-10, triage, assess, repeat.
+- Continue on partial failures. Missing listings, missing media, or missing enrichment are normal.
+- Never guess cache paths. Use paths returned by `assess context`.
+- Search/fetch subagents run sequentially by location because they can contend on the same DB and cache.
+- Assessment-only subagents may run in parallel only when each subagent owns disjoint listing IDs.
+
+## Data Files
+
+- `$LET_HOME/data/let.context.md`: prose summary of the family's situation, priorities, tradeoffs, and what "100/100" means.
+- `$LET_HOME/data/let.config.toml`: baseline search config.
+- `$LET_HOME/data/.env`: EPC, Mapbox, and optional Notion credentials.
+- `templates/let.config.toml`: config template for first-run setup.
+- `$LET_HOME/sources/`: local enrichment databases for broadband, IMD, crime, flood, census, and income.
+
+## Orientation and Health
+
+Run these at the start of every meaningful session:
+
+```bash
+"$LET_BIN" tools --json
+"$LET_BIN" health --json
+"$LET_BIN" config show --json
+```
+
+Interpretation:
+
+- `status: "ready"`: full pipeline available.
+- `status: "degraded"`: continue, but report lower confidence where enrichment is missing.
+- `status: "blocked"`: apply the provided `checks[].fix` commands, then re-run health.
+
+If context or config drift is obvious:
+
+- Flag the mismatch clearly in the final output.
+- Recommend exact config updates after the run.
+- Do not edit config unless explicitly asked.
+
+## Setup and Remediation
+
+Use this section when `health` is blocked, the setup is incomplete, or the user's situation has materially changed.
+
+### Context and Config
+
+- If `NO_CONFIG` is reported, create `$LET_HOME/data/let.config.toml` from `templates/let.config.toml`.
+- Ask open-ended context questions first, then config-specific questions.
+- Write or update `$LET_HOME/data/let.context.md` in natural prose. Do not reduce it to config bullets.
+
+Phase 1 questions capture the human problem:
+
+- What does the perfect home look like?
+- What do you love about where you live now?
+- What is the one thing you would change?
+- Describe the ideal neighborhood in one sentence.
+- Who is moving: family size, ages, pets, remote work, commute needs?
+
+Phase 2 questions fill the config:
+
+- Areas under consideration. Resolve each with `"$LET_BIN" search resolve <name> --json`.
+- Property types.
+- Budget range.
+- Bedroom range.
+- Garden importance.
+- Deal-breakers for `dontShow`.
+- Region preference ranking for `[scoring.regionPriority]`.
+
+Config notes:
+
+- Config path: `$LET_HOME/data/let.config.toml`.
+- Core sections: `[search]`, `[search.filters]`, `[fetch]`, `[scoring]`, `[scoring.regionPriority]`.
+- Region priority scores are `0-100`. Higher values increase ranking preference for that area.
+
+### API Keys
+
+- `EPC_API_KEY` in `$LET_HOME/data/.env`: recommended for EPC rating, floor area, and UPRN enrichment.
+- `MAPBOX_ACCESS_TOKEN`: optional, enables cached satellite and street map views.
+- `NOTION_API_KEY` and `NOTION_DATABASE_ID`: optional, only required for Notion export.
+- If credentials are missing, continue unless the requested task specifically depends on them.
+
+### Source Databases
+
+- If source databases are missing, the pipeline still works in degraded mode.
+- Degraded mode means weaker location confidence: no broadband, IMD, crime, flood, census, or income enrichment.
+- To build sources locally:
+
+```bash
+"$LET_BIN" build sources all --jobs 3
+```
+
+- Expect roughly 5-10GB of downloads and 10-30 minutes of runtime.
+
+### Final Verification
+
+After setup or remediation, run:
+
+```bash
+"$LET_BIN" health --json
+```
+
+Proceed only when status is `ready` or `degraded`.
+
+## Search Modes
+
+### Baseline Mode
+
+Use saved config locations and filters as-is.
+
+### Override Mode
+
+Use for ad-hoc prompts such as:
+
+- check flats in Manchester
+- compare Manchester, Liverpool, Sheffield
+- flats around York within about 30 minutes of the city centre
+
+Use CLI overrides instead of editing config. Always report:
+
+- `Overrides applied`
+- `What stayed from config`
+
+Override flags for `search discover`:
+
+| Flag | Example | Effect |
+| --- | --- | --- |
+| `--location <ID>` | `--location REGION^904` | Search a non-config location |
+| `--location-name <name>` | `--location-name Manchester` | Display name for ad-hoc location |
+| `--property-types <list>` | `--property-types flat,apartment` | Override property types |
+| `--must-have <list\|none>` | `--must-have garden` | Override must-have filters |
+| `--dont-show <list\|none>` | `--dont-show houseShare,student` | Override excluded listing types |
+| `--limit <n>` | `--limit 50` | Max results per location |
+
+Rules:
+
+- When `--location` is used, `mustHave`, `dontShow`, and `propertyTypes` are cleared unless explicitly re-passed.
+- Ad-hoc location searches start from a blank slate. Carry forward desired filters explicitly.
+- When fetching an ad-hoc location batch, use `--region <name>` to stamp the display region.
+
+## Workflow
+
+Follow these phases in order.
+
+### Phase 0: Orient
+
+```bash
+"$LET_BIN" tools --json
+"$LET_BIN" health --json
+"$LET_BIN" config show --json
+```
+
+Run `"$LET_BIN" tools --json` again whenever command shape or parameters are unclear.
+
+### Phase 1: Discover
+
+```bash
+"$LET_BIN" search discover --json
+"$LET_BIN" search diff <comma-separated-ids> --json
+```
+
+Rules:
+
+- Treat new listings as portal IDs not yet present in the SQLite DB.
+- Use `idsByLocation` from `search discover` to batch `fetch` calls by region.
+- If the DB is empty, `diff.new` may be almost everything. Start with a small calibration batch.
+- Prefer repeated small loops over one giant run.
+
+Example region-batched fetch:
+
+```bash
+"$LET_BIN" fetch <sheffield-ids> --region Sheffield --json
+"$LET_BIN" fetch <stamford-ids> --region Stamford --json
+```
+
+### Phase 2: Acquire
+
+```bash
+"$LET_BIN" fetch <new-ids> --json
+```
+
+Rules:
+
+- Start with batches of 5-10 IDs.
+- Increase to 10-15 only once the run is stable.
+- If rate limited, increase delay and retry once. Do not spam.
+- Treat removed listings as normal; skip after one clear failure.
+- If media is missing, mark confidence lower or re-fetch only the top 1-2 candidates.
+
+### Phase 3: Triage
+
+```bash
+"$LET_BIN" view list --top 30 --json
+```
+
+Suggested triage tiers:
+
+- `>= 80`: must assess
+- `65-79`: assess if time permits
+- `< 65`: usually skip unless a specific feature is compelling
+
+Prefer 2-5 deep assessments over 30 shallow reviews.
+
+### Phase 4: Assess
+
+Queue and context:
+
+```bash
+"$LET_BIN" assess candidates --json
+"$LET_BIN" assess context <id> --json
+```
+
+Submission:
+
+```bash
+"$LET_BIN" assess submit <id> '<assessment-json>' --json
+```
+
+Assessment rules:
+
+- Use the assessment schema returned by the CLI as the submission contract.
+- Use `media.*` paths from `assess context`; do not guess directories.
+- Keep conclusions evidence-based.
+- Explain any score adjustment in 1-2 sentences.
+- If media is missing, say so and lower confidence rather than guessing.
+
+What to evaluate:
+
+- maintenance and signs of damp or poor DIY work
+- light, layout, proportions, storage, and flow
+- missing rooms or missing floorplans
+- neighborhood character from maps and nearby context
+- schools, safety, amenities, and transport where relevant to the user's priorities
+
+### Phase 5: Report
+
+Useful commands:
+
+```bash
+"$LET_BIN" view list --top 20 --json
+"$LET_BIN" view detail <id> --json
+"$LET_BIN" score explain <id> --json
+```
+
+Report structure:
+
+1. One-line overview with sample size, freshness, and price range.
+2. One comparison table for the top picks.
+3. Numbered notes keyed to table rows with non-obvious positives, negatives, and red flags.
+4. Short verdict tied to the user's stated priorities.
+5. Clear next steps.
+
+Recommended comparison columns:
+
+```text
+| # | Address | pcm | Beds | Type | Score | Crime/1k | IMD | EPC | Broadband | Station | Link |
+```
+
+If comparing regions, include:
+
+- sample size per region
+- average score by region
+- one or two best-value examples
+- a short verdict per region covering fit and tradeoffs
+
+### Phase 6: Maintain
+
+Use these to verify and prune the working set:
+
+```bash
+"$LET_BIN" ops verify --dry-run --limit 20 --json
+"$LET_BIN" ops prune --dry-run --json
+```
+
+Prune selector rules:
+
+- No selector defaults to `score < 50`.
+- `--region` alone prunes all listings in that region.
+- `--region` can be combined with `--min-score` or `--bottom`.
+- `--inactive` can be combined only with optional `--region`.
+- `--bottom` and `--min-score` are mutually exclusive.
+
+Examples:
+
+```bash
+"$LET_BIN" ops prune --dry-run --json
+"$LET_BIN" ops prune --region Sheffield --dry-run --json
+"$LET_BIN" ops prune --region Sheffield --min-score 60 --dry-run --json
+"$LET_BIN" ops prune --inactive --region Sheffield --dry-run --json
+```
+
+## Postcode and Neighborhood Research
+
+When a fetched listing includes a usable UK postcode, fetch `https://area360.uk/postcode/{POSTCODE}` with WebFetch as a standard part of shortlist assessment.
+
+Normalization:
+
+- Uppercase the postcode.
+- Remove spaces for the URL.
+- Example: `SY2 6BB` becomes `https://area360.uk/postcode/SY26BB`.
+
+What to extract from the fetched page:
+
+- crime and deprivation
+- flood risk and noise
+- nearest station and transport context
+- schools, parks, and local amenities
+- local property price context
+- housing mix, tenure, and demographics only when they materially affect fit
+
+Rules:
+
+- Treat `area360.uk` as a standard context source for shortlist candidates, not an optional extra.
+- Use the fetched page for textual signals. Do not assume interactive maps or charts are visible in WebFetch output.
+- Separate listing quality from location quality in the assessment.
+- Call out major positives, major negatives, and any dealbreakers.
+- If the postcode is missing or the page is unavailable, say so and lower confidence accordingly.
+
+## Scoring
+
+Scores are percentile-relative within the current database. The agent adds value by catching what the algorithm cannot see.
+
+### Score Interpretation
+
+| Range | Meaning | Default Action |
+| --- | --- | --- |
+| 85-100 | Exceptional | Must assess |
+| 70-84 | Good | Assess |
+| 55-69 | Average | Assess if time permits |
+| 40-54 | Below average | Usually skip |
+| < 40 | Poor | Skip |
+
+### Composite Model
+
+- Affordability, default 30%: rent plus estimated heating and price percentile.
+- Location, default 40%: station proximity, broadband, region priority, IMD, crime.
+- Liveability, default 30%: garden type, heating type, property type.
+- Penalties such as EPC, garden, and pets apply multiplicatively after composite aggregation.
+- A single penalty can dominate the final score.
+
+### Score Adjustment Guidance
+
+Use `scoreAdjustment` in the range `-30` to `+30` only when there is evidence the algorithm missed.
+
+| Adjustment | When to Use |
+| --- | --- |
+| `+15` to `+30` | Exceptional quality or fit the algorithm cannot detect |
+| `+1` to `+14` | Minor positives such as layout, renovation, quiet street |
+| `0` | Algorithm score looks fair |
+| `-1` to `-14` | Minor negatives such as dated decor or visible busy road |
+| `-15` to `-30` | Major red flags such as damp, missing rooms, industrial context |
+
+Always explain the adjustment in `reasoning`. If evidence is incomplete, reduce confidence instead of over-adjusting.
+
+## Subagents
+
+### Search and Fetch by Location
+
+Use sequential subagents for multi-region exploration.
+
+1. Main agent orients, decides locations, and sets batch sizes.
+2. Spawn one location subagent.
+3. Wait for completion.
+4. Spawn the next location subagent.
+
+When delegating a location, give the subagent:
+
+- the summary from `$LET_HOME/data/let.context.md`
+- the current user request
+- the location name and identifier if known
+- the rule set: no config edits, use overrides if needed, keep batches small, write assessments back normally
+
+Template:
+
+```text
 You are a subagent exploring one location for the `let` property search.
 
-Read this first: $LET_HOME/data/let.context.md (family context + preferences).
+Read first: $LET_HOME/data/let.context.md.
 
 Constraints:
 * Do not edit config files.
 * Use `--json` for tool calls.
-* Keep the batch small (discover, then fetch 5–10 max).
-* Assess 1–2 best candidates deeply if media is available.
-* Write assessments back using the normal assessment submission flow.
-* Return a compact summary for this location.
+* Keep the batch small: discover, then fetch 5-10 max.
+* Assess 1-2 best candidates deeply if media is available.
+* Write assessments back using normal assessment submission.
+* Return a compact summary.
 
 Location:
 * Name: {LOCATION}
-* Identifier (if available): {LOCATION_ID}
+* Identifier: {LOCATION_ID}
 
-Steps (use the tool catalog to confirm signatures):
-1) Orient quickly: `"$LET_BIN" health --json` (ensure not blocked)
-2) Discover listings for this location (baseline or override mode as appropriate)
+Steps:
+1) `"$LET_BIN" health --json`
+2) Discover listings for this location
 3) Diff new vs known
-4) Fetch a small batch (5–10), assign region name if relevant
-5) Triage (top 10 list)
-6) Deep dive 1–2: context + photos/maps + quick neighborhood research
-7) Submit 1–2 assessments
+4) Fetch a small batch and assign region if needed
+5) Triage the top 10
+6) Deep dive 1-2 using photos, maps, `area360.uk`, and quick neighborhood research
+7) Submit 1-2 assessments
 8) Return:
-    * Top 3 candidates (links + 1–2 sentence rationale each)
-    * Any red flags (crime/deprivation/obvious neighborhood issues, missing media, etc.)
-    * Any overrides used (region/property type/must-have changes)
-    * "Is this location a good fit for our 'Bath-like but affordable' goal?" (short verdict)
+   * Top 3 candidates with short rationale
+   * Red flags
+   * Overrides used
+   * Short verdict on fit for the family's goal
 ```
 
-## Self-describing CLI
+### Assessment-Only Parallelism
 
-Run `"$LET_BIN" tools --json` whenever you're uncertain about parameters or command signatures. Treat it as the source of truth.
+Parallel assessment subagents are allowed only for disjoint listing IDs. Each subagent should own 2-3 listings max and submit only for its assigned IDs.
 
-## On-demand references
+## Error Handling
 
-- Full end-to-end procedure and command patterns: `references/protocol.md`
-- Setup and first-run remediation: `references/init.md`
-- Score interpretation and search override guidance: `references/scoring.md`
-- Error codes and recovery actions: `references/errors.md`
+Error codes appear in `error.code` when `ok: false`.
 
-## Expected output
+| Code | Meaning | Recovery Action |
+| --- | --- | --- |
+| `NO_CONFIG` | Config missing | Create from `templates/let.config.toml`, then re-run health |
+| `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$LET_BIN" build sources all --jobs 3` |
+| `NO_DATABASE` | Listings DB missing | Normal on first run; fetch creates it |
+| `SCHEMA_MISMATCH` | DB schema incompatible | Delete the DB and re-fetch |
+| `RATE_LIMITED` | Portal rate limiting | Wait 10-30s, increase delay, retry once |
+| `NOT_FOUND` | Listing removed | Skip and continue |
+| `VALIDATION_ERROR` | Invalid assessment or input data | Fix according to schema and `error.hint` |
+| `API_ERROR` | External API failed | Log it, skip affected enrichment, continue |
+| `NO_CREDENTIALS` | API credentials missing | Set keys in `$LET_HOME/data/.env` and re-run health |
+| `INVALID_DB` | Notion database inaccessible | Check Notion credentials and DB ID |
 
-When the user asks you to "search," you should return:
+Exit codes:
 
-- A region-by-region comparison (fit + value + tradeoffs)
-- A final shortlist (top 3-5) with links and clear rationale
-- Any suggested config refinements (after the run)
-- A brief list of what you actually did (so the user trusts the process)
+| Code | Meaning |
+| --- | --- |
+| `0` | Success, including partial success |
+| `1` | Runtime error |
+| `2` | Prerequisites blocked |
+
+Recovery rules:
+
+1. Read `error.code` and `error.hint`.
+2. Apply the table action.
+3. If the error persists, re-run `"$LET_BIN" health --json"` to check for systemic issues.
+4. For rate limits, back off and never retry more than twice overall.
+5. For missing enrichment or media, continue with lower confidence instead of blocking the run.
+
+## Intent Mappings
+
+- Top 5 new homes: baseline mode, discover, diff, fetch a small batch, triage, assess top 2-3, report top 5.
+- Compare Manchester, Liverpool, Sheffield: override mode per city, fetch small samples, summarize per region, then compare.
+- Flats around York within about 30 minutes of the centre: override property type to flats, use nearby towns if supported, and label any travel-time approximation clearly.
+
+## Expected Output
+
+When the user asks you to search, return:
+
+- a region-by-region comparison with fit, value, and tradeoffs
+- a shortlist of the top 3-5 listings with links and clear rationale
+- a short location verdict for shortlist items using postcode context when available
+- suggested config refinements when you observed drift
+- a brief summary of what you actually did
