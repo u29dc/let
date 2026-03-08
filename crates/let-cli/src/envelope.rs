@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::commands::ErrorDetail;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Meta {
@@ -81,6 +83,8 @@ pub struct ErrorPayload {
     pub code: String,
     pub message: String,
     pub hint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Vec<ErrorDetail>>,
 }
 
 impl ErrorPayload {
@@ -88,11 +92,13 @@ impl ErrorPayload {
         code: impl Into<String>,
         message: impl Into<String>,
         hint: impl Into<String>,
+        details: Option<Vec<ErrorDetail>>,
     ) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
             hint: hint.into(),
+            details,
         }
     }
 }
@@ -126,7 +132,12 @@ mod tests {
     #[test]
     fn error_envelope_serializes_contract_keys() {
         let envelope = ErrorEnvelope::new(
-            ErrorPayload::new("NO_CONFIG", "missing config", "create let.config.toml"),
+            ErrorPayload::new(
+                "NO_CONFIG",
+                "missing config",
+                "create let.config.toml",
+                None,
+            ),
             Meta::new("config.validate", 8),
         );
         let value = serde_json::to_value(envelope).expect("serialize error envelope");

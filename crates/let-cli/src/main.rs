@@ -43,6 +43,7 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// List tools metadata or show one tool by name.
     Tools { name: Option<String> },
@@ -97,6 +98,12 @@ enum Command {
         /// Region name override for fetched listings.
         #[arg(long)]
         region: Option<String>,
+        /// Optional postcode override used instead of scraped postcode.
+        #[arg(long = "override-postcode")]
+        override_postcode: Option<String>,
+        /// Optional full address override used instead of scraped address.
+        #[arg(long = "override-address")]
+        override_address: Option<String>,
         /// Skip image and map downloads.
         #[arg(long, default_value_t = false)]
         skip_images: bool,
@@ -243,6 +250,7 @@ enum SearchCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum OpsCommand {
     /// Patch listing fields and rescore.
     Patch {
@@ -255,10 +263,58 @@ enum OpsCommand {
         lat: Option<f64>,
         #[arg(long)]
         lng: Option<f64>,
+        #[arg(long)]
+        region: Option<String>,
         #[arg(long = "epc-rating")]
         epc_rating: Option<String>,
         #[arg(long = "floor-area")]
         floor_area: Option<f64>,
+        #[arg(long = "gigabit-availability")]
+        gigabit_availability: Option<f64>,
+        #[arg(long = "crime-rate-per-1k")]
+        crime_rate_per_1k: Option<f64>,
+        #[arg(long = "crime-count-12m")]
+        crime_count_12m: Option<i64>,
+        #[arg(long = "crime-violent-12m")]
+        crime_violent_12m: Option<i64>,
+        #[arg(long = "crime-burglary-12m")]
+        crime_burglary_12m: Option<i64>,
+        #[arg(long = "crime-robbery-12m")]
+        crime_robbery_12m: Option<i64>,
+        #[arg(long = "imd-decile")]
+        imd_decile: Option<i64>,
+        #[arg(long = "imd-rank")]
+        imd_rank: Option<i64>,
+        #[arg(long = "imd-score")]
+        imd_score: Option<f64>,
+        #[arg(long = "lsoa-code")]
+        lsoa_code: Option<String>,
+        #[arg(long = "lsoa-name")]
+        lsoa_name: Option<String>,
+        #[arg(long = "msoa-code")]
+        msoa_code: Option<String>,
+        #[arg(long = "msoa-name")]
+        msoa_name: Option<String>,
+        #[arg(long = "income-bhc")]
+        income_bhc: Option<f64>,
+        #[arg(long = "income-ahc")]
+        income_ahc: Option<f64>,
+        #[arg(long = "social-housing-pct")]
+        social_housing_pct: Option<f64>,
+        #[arg(long)]
+        population: Option<i64>,
+        #[arg(long = "flood-risk-level")]
+        flood_risk_level: Option<String>,
+        #[arg(long = "flood-risk-source")]
+        flood_risk_source: Option<String>,
+        #[arg(long = "crime-band")]
+        crime_band: Option<String>,
+        #[arg(long = "crime-trend")]
+        crime_trend: Option<String>,
+        #[arg(long = "crime-updated-at")]
+        crime_updated_at: Option<String>,
+        #[arg(long = "patch-json")]
+        patch_json: Option<String>,
         #[arg(long, default_value_t = false)]
         skip_re_enrich: bool,
         #[arg(long, default_value_t = false)]
@@ -553,8 +609,32 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                     postcode,
                     lat,
                     lng,
+                    region,
                     epc_rating,
                     floor_area,
+                    gigabit_availability,
+                    crime_rate_per_1k,
+                    crime_count_12m,
+                    crime_violent_12m,
+                    crime_burglary_12m,
+                    crime_robbery_12m,
+                    imd_decile,
+                    imd_rank,
+                    imd_score,
+                    lsoa_code,
+                    lsoa_name,
+                    msoa_code,
+                    msoa_name,
+                    income_bhc,
+                    income_ahc,
+                    social_housing_pct,
+                    population,
+                    flood_risk_level,
+                    flood_risk_source,
+                    crime_band,
+                    crime_trend,
+                    crime_updated_at,
+                    patch_json,
                     skip_re_enrich,
                     skip_images,
                 },
@@ -568,8 +648,32 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                     postcode: postcode.clone(),
                     lat: *lat,
                     lng: *lng,
+                    region: region.clone(),
                     epc_rating: epc_rating.clone(),
                     floor_area: *floor_area,
+                    gigabit_availability: *gigabit_availability,
+                    crime_rate_per_1k: *crime_rate_per_1k,
+                    crime_count_12m: *crime_count_12m,
+                    crime_violent_12m: *crime_violent_12m,
+                    crime_burglary_12m: *crime_burglary_12m,
+                    crime_robbery_12m: *crime_robbery_12m,
+                    imd_decile: *imd_decile,
+                    imd_rank: *imd_rank,
+                    imd_score: *imd_score,
+                    lsoa_code: lsoa_code.clone(),
+                    lsoa_name: lsoa_name.clone(),
+                    msoa_code: msoa_code.clone(),
+                    msoa_name: msoa_name.clone(),
+                    income_bhc: *income_bhc,
+                    income_ahc: *income_ahc,
+                    social_housing_pct: *social_housing_pct,
+                    population: *population,
+                    flood_risk_level: flood_risk_level.clone(),
+                    flood_risk_source: flood_risk_source.clone(),
+                    crime_band: crime_band.clone(),
+                    crime_trend: crime_trend.clone(),
+                    crime_updated_at: crime_updated_at.clone(),
+                    patch_json: patch_json.clone(),
                     skip_re_enrich: *skip_re_enrich,
                     skip_images: *skip_images,
                 },
@@ -673,6 +777,8 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
         Command::Fetch {
             ids,
             region,
+            override_postcode,
+            override_address,
             skip_images,
             skip_epc,
         } => DispatchOutcome::Local {
@@ -682,6 +788,8 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                 &commands::fetch::FetchParams {
                     ids: ids.clone(),
                     region: region.clone(),
+                    override_postcode: override_postcode.clone(),
+                    override_address: override_address.clone(),
                     skip_images: *skip_images,
                     skip_epc: *skip_epc,
                 },
@@ -752,7 +860,12 @@ fn emit_json(result: &Result<CommandOutput, CommandError>, tool: &str, elapsed: 
         }
         Err(err) => {
             let envelope = ErrorEnvelope::new(
-                ErrorPayload::new(err.code.clone(), err.message.clone(), err.hint.clone()),
+                ErrorPayload::new(
+                    err.code.clone(),
+                    err.message.clone(),
+                    err.hint.clone(),
+                    err.details.clone(),
+                ),
                 Meta::new(tool, elapsed),
             );
             println!(

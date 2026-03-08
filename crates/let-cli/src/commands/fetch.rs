@@ -22,8 +22,16 @@ use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs};
 pub struct FetchParams {
     pub ids: String,
     pub region: Option<String>,
+    pub override_postcode: Option<String>,
+    pub override_address: Option<String>,
     pub skip_images: bool,
     pub skip_epc: bool,
+}
+
+#[derive(Debug, Clone)]
+struct FetchOverride {
+    postcode: Option<String>,
+    address: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +58,10 @@ struct FetchOutput {
     skip_images: bool,
     skip_epc: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    override_applied: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    override_fields: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     save_error: Option<String>,
 }
 
@@ -62,6 +74,7 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
             "provide comma-separated portal IDs",
         ));
     }
+    let fetch_override = build_fetch_override(params, &input_ids)?;
 
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let config = load_config(Some(&paths.derived.config_file))?;
@@ -108,7 +121,10 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
             params.region.clone(),
             params.skip_images,
         ) {
-            Ok(listing) => {
+            Ok(mut listing) => {
+                if let Some(override_input) = fetch_override.as_ref() {
+                    apply_fetch_override(&mut listing, override_input);
+                }
                 fetched.push(FetchedItem {
                     id: id.clone(),
                     address: listing.address.clone(),
@@ -185,6 +201,8 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
         total: input_ids.len(),
         skip_images: params.skip_images,
         skip_epc: params.skip_epc,
+        override_applied: fetch_override.as_ref().map(|_| true),
+        override_fields: fetch_override_fields(fetch_override.as_ref()),
         save_error,
     };
 
@@ -205,6 +223,91 @@ fn parse_ids(raw: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn build_fetch_override(
+    params: &FetchParams,
+    input_ids: &[String],
+) -> std::result::Result<Option<FetchOverride>, CommandError> {
+    let postcode = params.override_postcode.as_deref().map(str::trim);
+    let address = params.override_address.as_deref().map(str::trim);
+    if postcode.is_none_or(str::is_empty) && address.is_none_or(str::is_empty) {
+        return Ok(None);
+    }
+
+    if input_ids.len() != 1 {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            "fetch overrides require exactly one id",
+            "run `let fetch <single-id> --override-postcode ... --override-address ...`",
+        ));
+    }
+
+    let normalized_postcode = postcode
+        .filter(|value| !value.is_empty())
+        .map(canonicalize_postcode)
+        .filter(|value| !value.is_empty());
+    let normalized_address = address
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    if normalized_postcode.is_none() && normalized_address.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(FetchOverride {
+        postcode: normalized_postcode,
+        address: normalized_address,
+    }))
+}
+
+fn apply_fetch_override(listing: &mut Listing, override_input: &FetchOverride) {
+    if let Some(postcode) = override_input.postcode.as_ref() {
+        listing.postcode = postcode.clone();
+    }
+    if let Some(address) = override_input.address.as_ref() {
+        listing.address = address.clone();
+    }
+
+    listing.google_maps_url = build_google_maps_url(
+        listing.location.lat,
+        listing.location.lng,
+        &listing.address,
+        &listing.postcode,
+    );
+    listing.epc_search_url = if listing.postcode.is_empty() {
+        None
+    } else {
+        let encoded_postcode =
+            url::form_urlencoded::byte_serialize(listing.postcode.as_bytes()).collect::<String>();
+        Some(format!(
+            "https://find-energy-certificate.service.gov.uk/find-a-certificate/search-by-postcode?postcode={}",
+            encoded_postcode
+        ))
+    };
+}
+
+fn fetch_override_fields(override_input: Option<&FetchOverride>) -> Vec<String> {
+    let Some(override_input) = override_input else {
+        return Vec::new();
+    };
+    let mut fields = Vec::new();
+    if override_input.postcode.is_some() {
+        fields.push("postcode".to_owned());
+    }
+    if override_input.address.is_some() {
+        fields.push("address".to_owned());
+    }
+    fields
+}
+
+fn canonicalize_postcode(raw: &str) -> String {
+    let compact = let_sdk::utils::text::normalize_postcode(raw);
+    if compact.len() <= 3 {
+        return compact;
+    }
+    let split = compact.len() - 3;
+    format!("{} {}", &compact[..split], &compact[split..])
 }
 
 fn fetch_one_listing(

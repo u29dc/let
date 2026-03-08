@@ -4,15 +4,16 @@ use std::cmp::Ordering;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use let_sdk::schema::listing::{EpcBand, Listing, ListingStatus};
+use chrono::NaiveDate;
+use let_sdk::schema::listing::{CrimeBand, CrimeTrend, EpcBand, Listing, ListingStatus};
 use let_sdk::{
     DbMeta, close_listings_db, load_listings_file, open_listings_db, recalc_assessed_scores,
     score_listings_with_config, upsert_listings,
 };
 use rusqlite::{params, params_from_iter};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
-use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs};
+use crate::commands::{CommandError, CommandOutput, CommandResult, ErrorDetail, SharedArgs};
 
 #[derive(Debug, Clone)]
 pub struct PruneParams {
@@ -39,10 +40,73 @@ pub struct PatchParams {
     pub postcode: Option<String>,
     pub lat: Option<f64>,
     pub lng: Option<f64>,
+    pub region: Option<String>,
     pub epc_rating: Option<String>,
     pub floor_area: Option<f64>,
+    pub gigabit_availability: Option<f64>,
+    pub crime_rate_per_1k: Option<f64>,
+    pub crime_count_12m: Option<i64>,
+    pub crime_violent_12m: Option<i64>,
+    pub crime_burglary_12m: Option<i64>,
+    pub crime_robbery_12m: Option<i64>,
+    pub imd_decile: Option<i64>,
+    pub imd_rank: Option<i64>,
+    pub imd_score: Option<f64>,
+    pub lsoa_code: Option<String>,
+    pub lsoa_name: Option<String>,
+    pub msoa_code: Option<String>,
+    pub msoa_name: Option<String>,
+    pub income_bhc: Option<f64>,
+    pub income_ahc: Option<f64>,
+    pub social_housing_pct: Option<f64>,
+    pub population: Option<i64>,
+    pub flood_risk_level: Option<String>,
+    pub flood_risk_source: Option<String>,
+    pub crime_band: Option<String>,
+    pub crime_trend: Option<String>,
+    pub crime_updated_at: Option<String>,
+    pub patch_json: Option<String>,
     pub skip_re_enrich: bool,
     pub skip_images: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PatchUpdate {
+    address: Option<String>,
+    postcode: Option<String>,
+    lat: Option<f64>,
+    lng: Option<f64>,
+    region: Option<Option<String>>,
+    epc_rating: Option<Option<EpcBand>>,
+    floor_area: Option<Option<f64>>,
+    gigabit_availability: Option<Option<f64>>,
+    crime_rate_per_1k: Option<Option<f64>>,
+    crime_count_12m: Option<Option<i64>>,
+    crime_violent_12m: Option<Option<i64>>,
+    crime_burglary_12m: Option<Option<i64>>,
+    crime_robbery_12m: Option<Option<i64>>,
+    imd_decile: Option<Option<i64>>,
+    imd_rank: Option<Option<i64>>,
+    imd_score: Option<Option<f64>>,
+    lsoa_code: Option<Option<String>>,
+    lsoa_name: Option<Option<String>>,
+    msoa_code: Option<Option<String>>,
+    msoa_name: Option<Option<String>>,
+    income_bhc: Option<Option<f64>>,
+    income_ahc: Option<Option<f64>>,
+    social_housing_pct: Option<Option<f64>>,
+    population: Option<Option<i64>>,
+    flood_risk_level: Option<Option<String>>,
+    flood_risk_source: Option<Option<String>>,
+    crime_band: Option<Option<CrimeBand>>,
+    crime_trend: Option<Option<CrimeTrend>>,
+    crime_updated_at: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct JsonPatchParse {
+    update: PatchUpdate,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -123,54 +187,34 @@ pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
 }
 
 pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
-    if params.address.is_none()
-        && params.postcode.is_none()
-        && params.lat.is_none()
-        && params.lng.is_none()
-        && params.epc_rating.is_none()
-        && params.floor_area.is_none()
+    let mut update = PatchUpdate::default();
+    let mut warnings = Vec::new();
+
+    if let Some(raw_json) = params.patch_json.as_deref().map(str::trim)
+        && !raw_json.is_empty()
     {
+        let parsed = parse_patch_json(raw_json)?;
+        update = parsed.update;
+        warnings.extend(parsed.warnings);
+    }
+
+    apply_scalar_overrides(params, &mut update, &mut warnings)?;
+    if !has_any_patch(&update) {
         return Err(CommandError::runtime(
             "VALIDATION_ERROR",
             "no overrides provided",
-            "provide at least one override field",
+            "provide at least one override field or --patch-json payload",
         ));
     }
 
-    if params.lat.is_some() ^ params.lng.is_some() {
+    let validation_errors = validate_patch_update(&update);
+    if !validation_errors.is_empty() {
         return Err(CommandError::runtime(
-            "VALIDATION_ERROR",
-            "--lat and --lng must be provided together",
-            "provide both coordinates or neither",
-        ));
-    }
-
-    if let Some(lat) = params.lat
-        && !(-90.0..=90.0).contains(&lat)
-    {
-        return Err(CommandError::runtime(
-            "VALIDATION_ERROR",
-            format!("invalid latitude: {lat}"),
-            "latitude must be between -90 and 90",
-        ));
-    }
-    if let Some(lng) = params.lng
-        && !(-180.0..=180.0).contains(&lng)
-    {
-        return Err(CommandError::runtime(
-            "VALIDATION_ERROR",
-            format!("invalid longitude: {lng}"),
-            "longitude must be between -180 and 180",
-        ));
-    }
-    if let Some(area) = params.floor_area
-        && area <= 0.0
-    {
-        return Err(CommandError::runtime(
-            "VALIDATION_ERROR",
-            format!("invalid floor area: {area}"),
-            "floor area must be a positive number",
-        ));
+            "PATCH_JSON_VALIDATION_ERROR",
+            "patch validation failed",
+            "inspect `error.details` and correct the invalid fields",
+        )
+        .with_details(validation_errors));
     }
 
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
@@ -206,77 +250,7 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
             .listings
             .get_mut(index)
             .expect("listing index should be valid");
-        if let Some(address) = params.address.as_ref()
-            && listing.address != *address
-        {
-            applied.insert(
-                "address".to_owned(),
-                json!({ "from": listing.address, "to": address }),
-            );
-            listing.address = address.clone();
-        }
-        if let Some(postcode) = params.postcode.as_ref()
-            && listing.postcode != *postcode
-        {
-            applied.insert(
-                "postcode".to_owned(),
-                json!({ "from": listing.postcode, "to": postcode }),
-            );
-            listing.postcode = postcode.clone();
-        }
-        if let (Some(lat), Some(lng)) = (params.lat, params.lng) {
-            if (listing.location.lat - lat).abs() > f64::EPSILON {
-                applied.insert(
-                    "lat".to_owned(),
-                    json!({ "from": listing.location.lat, "to": lat }),
-                );
-                listing.location.lat = lat;
-            }
-            if (listing.location.lng - lng).abs() > f64::EPSILON {
-                applied.insert(
-                    "lng".to_owned(),
-                    json!({ "from": listing.location.lng, "to": lng }),
-                );
-                listing.location.lng = lng;
-            }
-        }
-        if let Some(epc_rating) = params.epc_rating.as_ref() {
-            let parsed = parse_epc_rating(epc_rating)?;
-            if listing.epc_rating.as_ref() != Some(&parsed) {
-                applied.insert(
-                    "epcRating".to_owned(),
-                    json!({
-                        "from": listing.epc_rating.as_ref().map(epc_band_to_text),
-                        "to": epc_band_to_text(&parsed),
-                    }),
-                );
-                listing.epc_rating = Some(parsed);
-            }
-        }
-        if let Some(area) = params.floor_area
-            && listing.floor_area_sqm != Some(area)
-        {
-            applied.insert(
-                "floorArea".to_owned(),
-                json!({ "from": listing.floor_area_sqm, "to": area }),
-            );
-            listing.floor_area_sqm = Some(area);
-        }
-
-        if applied.contains_key("address")
-            || applied.contains_key("postcode")
-            || applied.contains_key("lat")
-            || applied.contains_key("lng")
-        {
-            listing.google_maps_url = build_google_maps_url(
-                listing.location.lat,
-                listing.location.lng,
-                &listing.address,
-                &listing.postcode,
-            );
-            listing.google_maps_street_view_url =
-                build_google_maps_street_view_url(listing.location.lat, listing.location.lng);
-        }
+        apply_update_to_listing(listing, &update, &mut applied);
     }
 
     if applied.is_empty() {
@@ -287,6 +261,7 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
             "rescored": data.listings.len(),
             "previousScore": previous_score,
             "newScore": previous_score,
+            "warnings": warnings,
             "skipReEnrich": params.skip_re_enrich,
             "skipImages": params.skip_images,
         }))
@@ -323,6 +298,7 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
         "rescored": rescored.len(),
         "previousScore": previous_score,
         "newScore": new_score,
+        "warnings": warnings,
         "skipReEnrich": params.skip_re_enrich,
         "skipImages": params.skip_images,
     }))
@@ -331,6 +307,1526 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
         params.id,
         rescored.len()
     )))
+}
+
+fn parse_patch_json(raw_json: &str) -> Result<JsonPatchParse, CommandError> {
+    let value: Value = serde_json::from_str(raw_json).map_err(|error| {
+        CommandError::runtime(
+            "PATCH_JSON_PARSE_ERROR",
+            format!("invalid --patch-json payload: {error}"),
+            "provide a valid JSON object string for --patch-json",
+        )
+        .with_details(vec![error_detail(
+            "$".to_owned(),
+            "invalid_json",
+            "patch payload is not valid JSON".to_owned(),
+            Some("JSON object".to_owned()),
+            Some(error.to_string()),
+            Some("check commas, quotes, and braces in --patch-json".to_owned()),
+        )])
+    })?;
+
+    let Some(object) = value.as_object() else {
+        return Err(CommandError::runtime(
+            "PATCH_JSON_SCHEMA_ERROR",
+            "invalid --patch-json payload",
+            "--patch-json must be a JSON object",
+        )
+        .with_details(vec![error_detail(
+            "$".to_owned(),
+            "invalid_type",
+            "patch payload must be an object".to_owned(),
+            Some("object".to_owned()),
+            Some(value_type_name(&value).to_owned()),
+            Some("wrap fields in { ... }".to_owned()),
+        )]));
+    };
+
+    let mut parsed = JsonPatchParse::default();
+    let mut details = Vec::new();
+
+    const TOP_LEVEL_FIELDS: &[&str] = &[
+        "address",
+        "postcode",
+        "lat",
+        "lng",
+        "region",
+        "epcRating",
+        "floorArea",
+        "gigabitAvailability",
+        "crimeRatePer1k",
+        "crimeCount12m",
+        "crimeViolent12m",
+        "crimeBurglary12m",
+        "crimeRobbery12m",
+        "imdDecile",
+        "imdRank",
+        "imdScore",
+        "lsoaCode",
+        "lsoaName",
+        "msoaCode",
+        "msoaName",
+        "incomeBhc",
+        "incomeAhc",
+        "socialHousingPct",
+        "population",
+        "floodRiskLevel",
+        "floodRiskSource",
+        "crimeBand",
+        "crimeTrend",
+        "crimeUpdatedAt",
+        "area",
+    ];
+
+    for key in object.keys() {
+        if !TOP_LEVEL_FIELDS.contains(&key.as_str()) {
+            details.push(error_detail(
+                format!("$.{key}"),
+                "unknown_field",
+                format!("unknown patch field `{key}`"),
+                Some("one of the documented patch fields".to_owned()),
+                None,
+                Some("remove this field or move it to a supported path".to_owned()),
+            ));
+        }
+    }
+
+    if let Some(value) = object.get("area") {
+        parse_area_patch(value, &mut parsed.update, &mut details);
+    }
+
+    if let Some(value) = object.get("address")
+        && let Some(parsed_value) = parse_required_string("$.address", value, &mut details)
+    {
+        parsed.update.address = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("postcode")
+        && let Some(parsed_value) = parse_required_string("$.postcode", value, &mut details)
+    {
+        parsed.update.postcode = Some(canonicalize_postcode(&parsed_value));
+    }
+
+    if let Some(value) = object.get("lat")
+        && let Some(parsed_value) = parse_required_f64("$.lat", value, &mut details)
+    {
+        parsed.update.lat = Some(parsed_value);
+    }
+    if let Some(value) = object.get("lng")
+        && let Some(parsed_value) = parse_required_f64("$.lng", value, &mut details)
+    {
+        parsed.update.lng = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("region")
+        && let Some(parsed_value) = parse_nullable_string("$.region", value, &mut details)
+    {
+        parsed.update.region = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("epcRating")
+        && let Some(parsed_value) = parse_nullable_epc_rating("$.epcRating", value, &mut details)
+    {
+        parsed.update.epc_rating = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("floorArea")
+        && let Some(parsed_value) = parse_nullable_f64("$.floorArea", value, &mut details)
+    {
+        parsed.update.floor_area = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("gigabitAvailability")
+        && let Some(parsed_value) = parse_nullable_f64("$.gigabitAvailability", value, &mut details)
+    {
+        parsed.update.gigabit_availability = Some(parsed_value);
+    }
+    if let Some(value) = object.get("crimeRatePer1k")
+        && let Some(parsed_value) = parse_nullable_f64("$.crimeRatePer1k", value, &mut details)
+    {
+        parsed.update.crime_rate_per_1k = Some(parsed_value);
+    }
+    if let Some(value) = object.get("crimeCount12m")
+        && let Some(parsed_value) = parse_nullable_i64("$.crimeCount12m", value, &mut details)
+    {
+        parsed.update.crime_count_12m = Some(parsed_value);
+    }
+    if let Some(value) = object.get("crimeViolent12m")
+        && let Some(parsed_value) = parse_nullable_i64("$.crimeViolent12m", value, &mut details)
+    {
+        parsed.update.crime_violent_12m = Some(parsed_value);
+    }
+    if let Some(value) = object.get("crimeBurglary12m")
+        && let Some(parsed_value) = parse_nullable_i64("$.crimeBurglary12m", value, &mut details)
+    {
+        parsed.update.crime_burglary_12m = Some(parsed_value);
+    }
+    if let Some(value) = object.get("crimeRobbery12m")
+        && let Some(parsed_value) = parse_nullable_i64("$.crimeRobbery12m", value, &mut details)
+    {
+        parsed.update.crime_robbery_12m = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("imdDecile")
+        && let Some(parsed_value) = parse_nullable_i64("$.imdDecile", value, &mut details)
+    {
+        parsed.update.imd_decile = Some(parsed_value);
+    }
+    if let Some(value) = object.get("imdRank")
+        && let Some(parsed_value) = parse_nullable_i64("$.imdRank", value, &mut details)
+    {
+        parsed.update.imd_rank = Some(parsed_value);
+    }
+    if let Some(value) = object.get("imdScore")
+        && let Some(parsed_value) = parse_nullable_f64("$.imdScore", value, &mut details)
+    {
+        parsed.update.imd_score = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("lsoaCode")
+        && let Some(parsed_value) = parse_nullable_string("$.lsoaCode", value, &mut details)
+    {
+        parsed.update.lsoa_code = Some(parsed_value);
+    }
+    if let Some(value) = object.get("lsoaName")
+        && let Some(parsed_value) = parse_nullable_string("$.lsoaName", value, &mut details)
+    {
+        parsed.update.lsoa_name = Some(parsed_value);
+    }
+    if let Some(value) = object.get("msoaCode")
+        && let Some(parsed_value) = parse_nullable_string("$.msoaCode", value, &mut details)
+    {
+        parsed.update.msoa_code = Some(parsed_value);
+    }
+    if let Some(value) = object.get("msoaName")
+        && let Some(parsed_value) = parse_nullable_string("$.msoaName", value, &mut details)
+    {
+        parsed.update.msoa_name = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("incomeBhc")
+        && let Some(parsed_value) = parse_nullable_f64("$.incomeBhc", value, &mut details)
+    {
+        parsed.update.income_bhc = Some(parsed_value);
+    }
+    if let Some(value) = object.get("incomeAhc")
+        && let Some(parsed_value) = parse_nullable_f64("$.incomeAhc", value, &mut details)
+    {
+        parsed.update.income_ahc = Some(parsed_value);
+    }
+    if let Some(value) = object.get("socialHousingPct")
+        && let Some(parsed_value) = parse_nullable_f64("$.socialHousingPct", value, &mut details)
+    {
+        parsed.update.social_housing_pct = Some(parsed_value);
+    }
+    if let Some(value) = object.get("population")
+        && let Some(parsed_value) = parse_nullable_i64("$.population", value, &mut details)
+    {
+        parsed.update.population = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("floodRiskLevel")
+        && let Some(parsed_value) = parse_nullable_string("$.floodRiskLevel", value, &mut details)
+    {
+        parsed.update.flood_risk_level = Some(parsed_value);
+    }
+    if let Some(value) = object.get("floodRiskSource")
+        && let Some(parsed_value) = parse_nullable_string("$.floodRiskSource", value, &mut details)
+    {
+        parsed.update.flood_risk_source = Some(parsed_value);
+    }
+
+    if let Some(value) = object.get("crimeBand")
+        && let Some(parsed_value) = parse_nullable_crime_band("$.crimeBand", value, &mut details)
+    {
+        parsed.update.crime_band = Some(parsed_value);
+    }
+    if let Some(value) = object.get("crimeTrend")
+        && let Some(parsed_value) = parse_nullable_crime_trend("$.crimeTrend", value, &mut details)
+    {
+        parsed.update.crime_trend = Some(parsed_value);
+    }
+    if let Some(value) = object.get("crimeUpdatedAt")
+        && let Some(parsed_value) = parse_nullable_string("$.crimeUpdatedAt", value, &mut details)
+    {
+        parsed.update.crime_updated_at = Some(parsed_value);
+    }
+
+    if !details.is_empty() {
+        return Err(CommandError::runtime(
+            "PATCH_JSON_VALIDATION_ERROR",
+            "invalid --patch-json payload",
+            "inspect `error.details` and correct the patch fields",
+        )
+        .with_details(details));
+    }
+
+    Ok(parsed)
+}
+
+fn parse_area_patch(value: &Value, update: &mut PatchUpdate, details: &mut Vec<ErrorDetail>) {
+    let path = "$.area";
+    let Some(area_object) = value.as_object() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            "area must be an object".to_owned(),
+            Some("object".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return;
+    };
+
+    const AREA_FIELDS: &[&str] = &[
+        "lsoa",
+        "msoa",
+        "imd",
+        "income",
+        "socialHousingPct",
+        "population",
+        "floodRisk",
+        "crime",
+    ];
+    for key in area_object.keys() {
+        if !AREA_FIELDS.contains(&key.as_str()) {
+            details.push(error_detail(
+                format!("{path}.{key}"),
+                "unknown_field",
+                format!("unknown area field `{key}`"),
+                Some("lsoa,msoa,imd,income,socialHousingPct,population,floodRisk,crime".to_owned()),
+                None,
+                None,
+            ));
+        }
+    }
+
+    if let Some(value) = area_object.get("socialHousingPct")
+        && let Some(parsed_value) = parse_nullable_f64("$.area.socialHousingPct", value, details)
+    {
+        update.social_housing_pct = Some(parsed_value);
+    }
+
+    if let Some(value) = area_object.get("population")
+        && let Some(parsed_value) = parse_nullable_i64("$.area.population", value, details)
+    {
+        update.population = Some(parsed_value);
+    }
+
+    if let Some(value) = area_object.get("lsoa") {
+        parse_area_code_patch(
+            "$.area.lsoa",
+            value,
+            details,
+            &mut update.lsoa_code,
+            &mut update.lsoa_name,
+        );
+    }
+    if let Some(value) = area_object.get("msoa") {
+        parse_area_code_patch(
+            "$.area.msoa",
+            value,
+            details,
+            &mut update.msoa_code,
+            &mut update.msoa_name,
+        );
+    }
+    if let Some(value) = area_object.get("imd") {
+        parse_imd_patch(value, update, details);
+    }
+    if let Some(value) = area_object.get("income") {
+        parse_income_patch(value, update, details);
+    }
+    if let Some(value) = area_object.get("floodRisk") {
+        parse_flood_risk_patch(value, update, details);
+    }
+    if let Some(value) = area_object.get("crime") {
+        parse_crime_patch(value, update, details);
+    }
+}
+
+fn parse_area_code_patch(
+    path: &str,
+    value: &Value,
+    details: &mut Vec<ErrorDetail>,
+    code_target: &mut Option<Option<String>>,
+    name_target: &mut Option<Option<String>>,
+) {
+    let Some(object) = value.as_object() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            format!("{path} must be an object"),
+            Some("object".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return;
+    };
+
+    const FIELDS: &[&str] = &["code", "name"];
+    for key in object.keys() {
+        if !FIELDS.contains(&key.as_str()) {
+            details.push(error_detail(
+                format!("{path}.{key}"),
+                "unknown_field",
+                format!("unknown field `{key}` in {path}"),
+                Some("code,name".to_owned()),
+                None,
+                None,
+            ));
+        }
+    }
+
+    if let Some(value) = object.get("code")
+        && let Some(parsed_value) = parse_nullable_string(&format!("{path}.code"), value, details)
+    {
+        *code_target = Some(parsed_value);
+    }
+    if let Some(value) = object.get("name")
+        && let Some(parsed_value) = parse_nullable_string(&format!("{path}.name"), value, details)
+    {
+        *name_target = Some(parsed_value);
+    }
+}
+
+fn parse_imd_patch(value: &Value, update: &mut PatchUpdate, details: &mut Vec<ErrorDetail>) {
+    let path = "$.area.imd";
+    let Some(object) = value.as_object() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            "area.imd must be an object".to_owned(),
+            Some("object".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return;
+    };
+
+    const FIELDS: &[&str] = &["decile", "rank", "score"];
+    for key in object.keys() {
+        if !FIELDS.contains(&key.as_str()) {
+            details.push(error_detail(
+                format!("{path}.{key}"),
+                "unknown_field",
+                format!("unknown field `{key}` in area.imd"),
+                Some("decile,rank,score".to_owned()),
+                None,
+                None,
+            ));
+        }
+    }
+
+    if let Some(value) = object.get("decile")
+        && let Some(parsed_value) = parse_nullable_i64("$.area.imd.decile", value, details)
+    {
+        update.imd_decile = Some(parsed_value);
+    }
+    if let Some(value) = object.get("rank")
+        && let Some(parsed_value) = parse_nullable_i64("$.area.imd.rank", value, details)
+    {
+        update.imd_rank = Some(parsed_value);
+    }
+    if let Some(value) = object.get("score")
+        && let Some(parsed_value) = parse_nullable_f64("$.area.imd.score", value, details)
+    {
+        update.imd_score = Some(parsed_value);
+    }
+}
+
+fn parse_income_patch(value: &Value, update: &mut PatchUpdate, details: &mut Vec<ErrorDetail>) {
+    let path = "$.area.income";
+    let Some(object) = value.as_object() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            "area.income must be an object".to_owned(),
+            Some("object".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return;
+    };
+
+    const FIELDS: &[&str] = &["bhc", "ahc"];
+    for key in object.keys() {
+        if !FIELDS.contains(&key.as_str()) {
+            details.push(error_detail(
+                format!("{path}.{key}"),
+                "unknown_field",
+                format!("unknown field `{key}` in area.income"),
+                Some("bhc,ahc".to_owned()),
+                None,
+                None,
+            ));
+        }
+    }
+
+    if let Some(value) = object.get("bhc")
+        && let Some(parsed_value) = parse_nullable_f64("$.area.income.bhc", value, details)
+    {
+        update.income_bhc = Some(parsed_value);
+    }
+    if let Some(value) = object.get("ahc")
+        && let Some(parsed_value) = parse_nullable_f64("$.area.income.ahc", value, details)
+    {
+        update.income_ahc = Some(parsed_value);
+    }
+}
+
+fn parse_flood_risk_patch(value: &Value, update: &mut PatchUpdate, details: &mut Vec<ErrorDetail>) {
+    let path = "$.area.floodRisk";
+    let Some(object) = value.as_object() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            "area.floodRisk must be an object".to_owned(),
+            Some("object".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return;
+    };
+
+    const FIELDS: &[&str] = &["level", "source"];
+    for key in object.keys() {
+        if !FIELDS.contains(&key.as_str()) {
+            details.push(error_detail(
+                format!("{path}.{key}"),
+                "unknown_field",
+                format!("unknown field `{key}` in area.floodRisk"),
+                Some("level,source".to_owned()),
+                None,
+                None,
+            ));
+        }
+    }
+
+    if let Some(value) = object.get("level")
+        && let Some(parsed_value) = parse_nullable_string("$.area.floodRisk.level", value, details)
+    {
+        update.flood_risk_level = Some(parsed_value);
+    }
+    if let Some(value) = object.get("source")
+        && let Some(parsed_value) = parse_nullable_string("$.area.floodRisk.source", value, details)
+    {
+        update.flood_risk_source = Some(parsed_value);
+    }
+}
+
+fn parse_crime_patch(value: &Value, update: &mut PatchUpdate, details: &mut Vec<ErrorDetail>) {
+    let path = "$.area.crime";
+    let Some(object) = value.as_object() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            "area.crime must be an object".to_owned(),
+            Some("object".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return;
+    };
+
+    const FIELDS: &[&str] = &[
+        "ratePer1k",
+        "count12m",
+        "violent12m",
+        "burglary12m",
+        "robbery12m",
+        "band",
+        "trend",
+        "updatedAt",
+    ];
+    for key in object.keys() {
+        if !FIELDS.contains(&key.as_str()) {
+            details.push(error_detail(
+                format!("{path}.{key}"),
+                "unknown_field",
+                format!("unknown field `{key}` in area.crime"),
+                Some(
+                    "ratePer1k,count12m,violent12m,burglary12m,robbery12m,band,trend,updatedAt"
+                        .to_owned(),
+                ),
+                None,
+                None,
+            ));
+        }
+    }
+
+    if let Some(value) = object.get("ratePer1k")
+        && let Some(parsed_value) = parse_nullable_f64("$.area.crime.ratePer1k", value, details)
+    {
+        update.crime_rate_per_1k = Some(parsed_value);
+    }
+    if let Some(value) = object.get("count12m")
+        && let Some(parsed_value) = parse_nullable_i64("$.area.crime.count12m", value, details)
+    {
+        update.crime_count_12m = Some(parsed_value);
+    }
+    if let Some(value) = object.get("violent12m")
+        && let Some(parsed_value) = parse_nullable_i64("$.area.crime.violent12m", value, details)
+    {
+        update.crime_violent_12m = Some(parsed_value);
+    }
+    if let Some(value) = object.get("burglary12m")
+        && let Some(parsed_value) = parse_nullable_i64("$.area.crime.burglary12m", value, details)
+    {
+        update.crime_burglary_12m = Some(parsed_value);
+    }
+    if let Some(value) = object.get("robbery12m")
+        && let Some(parsed_value) = parse_nullable_i64("$.area.crime.robbery12m", value, details)
+    {
+        update.crime_robbery_12m = Some(parsed_value);
+    }
+    if let Some(value) = object.get("band")
+        && let Some(parsed_value) = parse_nullable_crime_band("$.area.crime.band", value, details)
+    {
+        update.crime_band = Some(parsed_value);
+    }
+    if let Some(value) = object.get("trend")
+        && let Some(parsed_value) = parse_nullable_crime_trend("$.area.crime.trend", value, details)
+    {
+        update.crime_trend = Some(parsed_value);
+    }
+    if let Some(value) = object.get("updatedAt")
+        && let Some(parsed_value) = parse_nullable_string("$.area.crime.updatedAt", value, details)
+    {
+        update.crime_updated_at = Some(parsed_value);
+    }
+}
+
+fn parse_required_string(
+    path: &str,
+    value: &Value,
+    details: &mut Vec<ErrorDetail>,
+) -> Option<String> {
+    if value.is_null() {
+        details.push(error_detail(
+            path.to_owned(),
+            "null_not_allowed",
+            format!("{path} cannot be null"),
+            Some("string".to_owned()),
+            Some("null".to_owned()),
+            Some("provide a string value".to_owned()),
+        ));
+        return None;
+    }
+
+    match value.as_str() {
+        Some(text) => Some(text.to_owned()),
+        None => {
+            details.push(error_detail(
+                path.to_owned(),
+                "invalid_type",
+                format!("{path} must be a string"),
+                Some("string".to_owned()),
+                Some(value_type_name(value).to_owned()),
+                None,
+            ));
+            None
+        }
+    }
+}
+
+fn parse_required_f64(path: &str, value: &Value, details: &mut Vec<ErrorDetail>) -> Option<f64> {
+    if value.is_null() {
+        details.push(error_detail(
+            path.to_owned(),
+            "null_not_allowed",
+            format!("{path} cannot be null"),
+            Some("number".to_owned()),
+            Some("null".to_owned()),
+            Some("provide a numeric value".to_owned()),
+        ));
+        return None;
+    }
+
+    match value.as_f64() {
+        Some(number) => Some(number),
+        None => {
+            details.push(error_detail(
+                path.to_owned(),
+                "invalid_type",
+                format!("{path} must be a number"),
+                Some("number".to_owned()),
+                Some(value_type_name(value).to_owned()),
+                None,
+            ));
+            None
+        }
+    }
+}
+
+fn parse_nullable_string(
+    path: &str,
+    value: &Value,
+    details: &mut Vec<ErrorDetail>,
+) -> Option<Option<String>> {
+    if value.is_null() {
+        return Some(None);
+    }
+
+    match value.as_str() {
+        Some(text) => Some(Some(text.to_owned())),
+        None => {
+            details.push(error_detail(
+                path.to_owned(),
+                "invalid_type",
+                format!("{path} must be a string or null"),
+                Some("string|null".to_owned()),
+                Some(value_type_name(value).to_owned()),
+                None,
+            ));
+            None
+        }
+    }
+}
+
+fn parse_nullable_f64(
+    path: &str,
+    value: &Value,
+    details: &mut Vec<ErrorDetail>,
+) -> Option<Option<f64>> {
+    if value.is_null() {
+        return Some(None);
+    }
+
+    match value.as_f64() {
+        Some(number) => Some(Some(number)),
+        None => {
+            details.push(error_detail(
+                path.to_owned(),
+                "invalid_type",
+                format!("{path} must be a number or null"),
+                Some("number|null".to_owned()),
+                Some(value_type_name(value).to_owned()),
+                None,
+            ));
+            None
+        }
+    }
+}
+
+fn parse_nullable_i64(
+    path: &str,
+    value: &Value,
+    details: &mut Vec<ErrorDetail>,
+) -> Option<Option<i64>> {
+    if value.is_null() {
+        return Some(None);
+    }
+
+    match value.as_i64() {
+        Some(number) => Some(Some(number)),
+        None => {
+            details.push(error_detail(
+                path.to_owned(),
+                "invalid_type",
+                format!("{path} must be an integer or null"),
+                Some("integer|null".to_owned()),
+                Some(value_type_name(value).to_owned()),
+                None,
+            ));
+            None
+        }
+    }
+}
+
+fn parse_nullable_epc_rating(
+    path: &str,
+    value: &Value,
+    details: &mut Vec<ErrorDetail>,
+) -> Option<Option<EpcBand>> {
+    if value.is_null() {
+        return Some(None);
+    }
+
+    let Some(raw) = value.as_str() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            format!("{path} must be a string or null"),
+            Some("string|null".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return None;
+    };
+
+    match parse_epc_band(raw) {
+        Some(parsed) => Some(Some(parsed)),
+        None => {
+            details.push(error_detail(
+                path.to_owned(),
+                "invalid_enum",
+                format!("invalid EPC rating `{raw}`"),
+                Some("A|B|C|D|E|F|G".to_owned()),
+                Some(raw.to_owned()),
+                None,
+            ));
+            None
+        }
+    }
+}
+
+fn parse_nullable_crime_band(
+    path: &str,
+    value: &Value,
+    details: &mut Vec<ErrorDetail>,
+) -> Option<Option<CrimeBand>> {
+    if value.is_null() {
+        return Some(None);
+    }
+
+    let Some(raw) = value.as_str() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            format!("{path} must be a string or null"),
+            Some("string|null".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return None;
+    };
+
+    match parse_crime_band(raw) {
+        Some(parsed) => Some(Some(parsed)),
+        None => {
+            details.push(error_detail(
+                path.to_owned(),
+                "invalid_enum",
+                format!("invalid crime band `{raw}`"),
+                Some("excellent|good|mixed|concerning".to_owned()),
+                Some(raw.to_owned()),
+                None,
+            ));
+            None
+        }
+    }
+}
+
+fn parse_nullable_crime_trend(
+    path: &str,
+    value: &Value,
+    details: &mut Vec<ErrorDetail>,
+) -> Option<Option<CrimeTrend>> {
+    if value.is_null() {
+        return Some(None);
+    }
+
+    let Some(raw) = value.as_str() else {
+        details.push(error_detail(
+            path.to_owned(),
+            "invalid_type",
+            format!("{path} must be a string or null"),
+            Some("string|null".to_owned()),
+            Some(value_type_name(value).to_owned()),
+            None,
+        ));
+        return None;
+    };
+
+    match parse_crime_trend(raw) {
+        Some(parsed) => Some(Some(parsed)),
+        None => {
+            details.push(error_detail(
+                path.to_owned(),
+                "invalid_enum",
+                format!("invalid crime trend `{raw}`"),
+                Some("improving|stable|worsening".to_owned()),
+                Some(raw.to_owned()),
+                None,
+            ));
+            None
+        }
+    }
+}
+
+fn apply_scalar_overrides(
+    params: &PatchParams,
+    update: &mut PatchUpdate,
+    warnings: &mut Vec<String>,
+) -> Result<(), CommandError> {
+    if let Some(address) = params.address.as_ref() {
+        overwrite_required_field("address", update.address.is_some(), warnings);
+        update.address = Some(address.trim().to_owned());
+    }
+    if let Some(postcode) = params.postcode.as_ref() {
+        overwrite_required_field("postcode", update.postcode.is_some(), warnings);
+        update.postcode = Some(canonicalize_postcode(postcode));
+    }
+    if let Some(lat) = params.lat {
+        overwrite_required_field("lat", update.lat.is_some(), warnings);
+        update.lat = Some(lat);
+    }
+    if let Some(lng) = params.lng {
+        overwrite_required_field("lng", update.lng.is_some(), warnings);
+        update.lng = Some(lng);
+    }
+    if let Some(region) = params.region.as_ref() {
+        overwrite_nullable_field("region", update.region.is_some(), warnings);
+        update.region = Some(Some(region.trim().to_owned()));
+    }
+    if let Some(epc_rating) = params.epc_rating.as_ref() {
+        let parsed = parse_epc_rating(epc_rating)?;
+        overwrite_nullable_field("epcRating", update.epc_rating.is_some(), warnings);
+        update.epc_rating = Some(Some(parsed));
+    }
+    if let Some(floor_area) = params.floor_area {
+        overwrite_nullable_field("floorArea", update.floor_area.is_some(), warnings);
+        update.floor_area = Some(Some(floor_area));
+    }
+    if let Some(value) = params.gigabit_availability {
+        overwrite_nullable_field(
+            "gigabitAvailability",
+            update.gigabit_availability.is_some(),
+            warnings,
+        );
+        update.gigabit_availability = Some(Some(value));
+    }
+    if let Some(value) = params.crime_rate_per_1k {
+        overwrite_nullable_field(
+            "crimeRatePer1k",
+            update.crime_rate_per_1k.is_some(),
+            warnings,
+        );
+        update.crime_rate_per_1k = Some(Some(value));
+    }
+    if let Some(value) = params.crime_count_12m {
+        overwrite_nullable_field("crimeCount12m", update.crime_count_12m.is_some(), warnings);
+        update.crime_count_12m = Some(Some(value));
+    }
+    if let Some(value) = params.crime_violent_12m {
+        overwrite_nullable_field(
+            "crimeViolent12m",
+            update.crime_violent_12m.is_some(),
+            warnings,
+        );
+        update.crime_violent_12m = Some(Some(value));
+    }
+    if let Some(value) = params.crime_burglary_12m {
+        overwrite_nullable_field(
+            "crimeBurglary12m",
+            update.crime_burglary_12m.is_some(),
+            warnings,
+        );
+        update.crime_burglary_12m = Some(Some(value));
+    }
+    if let Some(value) = params.crime_robbery_12m {
+        overwrite_nullable_field(
+            "crimeRobbery12m",
+            update.crime_robbery_12m.is_some(),
+            warnings,
+        );
+        update.crime_robbery_12m = Some(Some(value));
+    }
+    if let Some(value) = params.imd_decile {
+        overwrite_nullable_field("imdDecile", update.imd_decile.is_some(), warnings);
+        update.imd_decile = Some(Some(value));
+    }
+    if let Some(value) = params.imd_rank {
+        overwrite_nullable_field("imdRank", update.imd_rank.is_some(), warnings);
+        update.imd_rank = Some(Some(value));
+    }
+    if let Some(value) = params.imd_score {
+        overwrite_nullable_field("imdScore", update.imd_score.is_some(), warnings);
+        update.imd_score = Some(Some(value));
+    }
+    if let Some(value) = params.lsoa_code.as_ref() {
+        overwrite_nullable_field("lsoaCode", update.lsoa_code.is_some(), warnings);
+        update.lsoa_code = Some(Some(value.trim().to_owned()));
+    }
+    if let Some(value) = params.lsoa_name.as_ref() {
+        overwrite_nullable_field("lsoaName", update.lsoa_name.is_some(), warnings);
+        update.lsoa_name = Some(Some(value.trim().to_owned()));
+    }
+    if let Some(value) = params.msoa_code.as_ref() {
+        overwrite_nullable_field("msoaCode", update.msoa_code.is_some(), warnings);
+        update.msoa_code = Some(Some(value.trim().to_owned()));
+    }
+    if let Some(value) = params.msoa_name.as_ref() {
+        overwrite_nullable_field("msoaName", update.msoa_name.is_some(), warnings);
+        update.msoa_name = Some(Some(value.trim().to_owned()));
+    }
+    if let Some(value) = params.income_bhc {
+        overwrite_nullable_field("incomeBhc", update.income_bhc.is_some(), warnings);
+        update.income_bhc = Some(Some(value));
+    }
+    if let Some(value) = params.income_ahc {
+        overwrite_nullable_field("incomeAhc", update.income_ahc.is_some(), warnings);
+        update.income_ahc = Some(Some(value));
+    }
+    if let Some(value) = params.social_housing_pct {
+        overwrite_nullable_field(
+            "socialHousingPct",
+            update.social_housing_pct.is_some(),
+            warnings,
+        );
+        update.social_housing_pct = Some(Some(value));
+    }
+    if let Some(value) = params.population {
+        overwrite_nullable_field("population", update.population.is_some(), warnings);
+        update.population = Some(Some(value));
+    }
+    if let Some(value) = params.flood_risk_level.as_ref() {
+        overwrite_nullable_field(
+            "floodRiskLevel",
+            update.flood_risk_level.is_some(),
+            warnings,
+        );
+        update.flood_risk_level = Some(Some(value.trim().to_owned()));
+    }
+    if let Some(value) = params.flood_risk_source.as_ref() {
+        overwrite_nullable_field(
+            "floodRiskSource",
+            update.flood_risk_source.is_some(),
+            warnings,
+        );
+        update.flood_risk_source = Some(Some(value.trim().to_owned()));
+    }
+    if let Some(value) = params.crime_band.as_ref() {
+        let Some(parsed) = parse_crime_band(value) else {
+            return Err(CommandError::runtime(
+                "VALIDATION_ERROR",
+                format!("invalid crime band: {value}"),
+                "crime band must be one of excellent|good|mixed|concerning",
+            ));
+        };
+        overwrite_nullable_field("crimeBand", update.crime_band.is_some(), warnings);
+        update.crime_band = Some(Some(parsed));
+    }
+    if let Some(value) = params.crime_trend.as_ref() {
+        let Some(parsed) = parse_crime_trend(value) else {
+            return Err(CommandError::runtime(
+                "VALIDATION_ERROR",
+                format!("invalid crime trend: {value}"),
+                "crime trend must be one of improving|stable|worsening",
+            ));
+        };
+        overwrite_nullable_field("crimeTrend", update.crime_trend.is_some(), warnings);
+        update.crime_trend = Some(Some(parsed));
+    }
+    if let Some(value) = params.crime_updated_at.as_ref() {
+        overwrite_nullable_field(
+            "crimeUpdatedAt",
+            update.crime_updated_at.is_some(),
+            warnings,
+        );
+        update.crime_updated_at = Some(Some(value.trim().to_owned()));
+    }
+
+    Ok(())
+}
+
+fn overwrite_required_field(field: &str, already_present: bool, warnings: &mut Vec<String>) {
+    if already_present {
+        warnings.push(format!(
+            "scalar `{field}` override replaced value provided in --patch-json"
+        ));
+    }
+}
+
+fn overwrite_nullable_field(field: &str, already_present: bool, warnings: &mut Vec<String>) {
+    if already_present {
+        warnings.push(format!(
+            "scalar `{field}` override replaced value provided in --patch-json"
+        ));
+    }
+}
+
+fn has_any_patch(update: &PatchUpdate) -> bool {
+    update.address.is_some()
+        || update.postcode.is_some()
+        || update.lat.is_some()
+        || update.lng.is_some()
+        || update.region.is_some()
+        || update.epc_rating.is_some()
+        || update.floor_area.is_some()
+        || update.gigabit_availability.is_some()
+        || update.crime_rate_per_1k.is_some()
+        || update.crime_count_12m.is_some()
+        || update.crime_violent_12m.is_some()
+        || update.crime_burglary_12m.is_some()
+        || update.crime_robbery_12m.is_some()
+        || update.imd_decile.is_some()
+        || update.imd_rank.is_some()
+        || update.imd_score.is_some()
+        || update.lsoa_code.is_some()
+        || update.lsoa_name.is_some()
+        || update.msoa_code.is_some()
+        || update.msoa_name.is_some()
+        || update.income_bhc.is_some()
+        || update.income_ahc.is_some()
+        || update.social_housing_pct.is_some()
+        || update.population.is_some()
+        || update.flood_risk_level.is_some()
+        || update.flood_risk_source.is_some()
+        || update.crime_band.is_some()
+        || update.crime_trend.is_some()
+        || update.crime_updated_at.is_some()
+}
+
+fn validate_patch_update(update: &PatchUpdate) -> Vec<ErrorDetail> {
+    let mut details = Vec::new();
+
+    if update.lat.is_some() ^ update.lng.is_some() {
+        details.push(error_detail(
+            "$.lat/$.lng".to_owned(),
+            "missing_pair",
+            "lat and lng must be provided together".to_owned(),
+            Some("both lat and lng".to_owned()),
+            None,
+            Some("set both coordinates or remove both".to_owned()),
+        ));
+    }
+
+    if let Some(lat) = update.lat
+        && !(-90.0..=90.0).contains(&lat)
+    {
+        details.push(range_error("$.lat", "-90..90", lat));
+    }
+
+    if let Some(lng) = update.lng
+        && !(-180.0..=180.0).contains(&lng)
+    {
+        details.push(range_error("$.lng", "-180..180", lng));
+    }
+
+    if let Some(Some(value)) = update.floor_area
+        && value <= 0.0
+    {
+        details.push(range_error("$.floorArea", "> 0", value));
+    }
+    if let Some(Some(value)) = update.gigabit_availability
+        && !(0.0..=100.0).contains(&value)
+    {
+        details.push(range_error("$.gigabitAvailability", "0..100", value));
+    }
+    if let Some(Some(value)) = update.crime_rate_per_1k
+        && value < 0.0
+    {
+        details.push(range_error("$.crimeRatePer1k", ">= 0", value));
+    }
+    if let Some(Some(value)) = update.imd_decile
+        && !(1..=10).contains(&value)
+    {
+        details.push(range_error("$.imdDecile", "1..10", value));
+    }
+    if let Some(Some(value)) = update.imd_rank
+        && value <= 0
+    {
+        details.push(range_error("$.imdRank", "> 0", value));
+    }
+    if let Some(Some(value)) = update.imd_score
+        && value < 0.0
+    {
+        details.push(range_error("$.imdScore", ">= 0", value));
+    }
+    if let Some(Some(value)) = update.income_bhc
+        && value < 0.0
+    {
+        details.push(range_error("$.incomeBhc", ">= 0", value));
+    }
+    if let Some(Some(value)) = update.income_ahc
+        && value < 0.0
+    {
+        details.push(range_error("$.incomeAhc", ">= 0", value));
+    }
+    if let Some(Some(value)) = update.social_housing_pct
+        && !(0.0..=100.0).contains(&value)
+    {
+        details.push(range_error("$.socialHousingPct", "0..100", value));
+    }
+    if let Some(Some(value)) = update.population
+        && value < 0
+    {
+        details.push(range_error("$.population", ">= 0", value));
+    }
+    if let Some(Some(value)) = update.crime_count_12m
+        && value < 0
+    {
+        details.push(range_error("$.crimeCount12m", ">= 0", value));
+    }
+    if let Some(Some(value)) = update.crime_violent_12m
+        && value < 0
+    {
+        details.push(range_error("$.crimeViolent12m", ">= 0", value));
+    }
+    if let Some(Some(value)) = update.crime_burglary_12m
+        && value < 0
+    {
+        details.push(range_error("$.crimeBurglary12m", ">= 0", value));
+    }
+    if let Some(Some(value)) = update.crime_robbery_12m
+        && value < 0
+    {
+        details.push(range_error("$.crimeRobbery12m", ">= 0", value));
+    }
+
+    if let Some(address) = update.address.as_ref()
+        && address.trim().is_empty()
+    {
+        details.push(error_detail(
+            "$.address".to_owned(),
+            "empty_string",
+            "address cannot be empty".to_owned(),
+            Some("non-empty string".to_owned()),
+            Some("empty string".to_owned()),
+            None,
+        ));
+    }
+    if let Some(postcode) = update.postcode.as_ref()
+        && postcode.trim().is_empty()
+    {
+        details.push(error_detail(
+            "$.postcode".to_owned(),
+            "empty_string",
+            "postcode cannot be empty".to_owned(),
+            Some("non-empty string".to_owned()),
+            Some("empty string".to_owned()),
+            None,
+        ));
+    }
+    validate_nullable_non_empty("$.region", update.region.as_ref(), &mut details);
+    validate_nullable_non_empty("$.lsoaCode", update.lsoa_code.as_ref(), &mut details);
+    validate_nullable_non_empty("$.lsoaName", update.lsoa_name.as_ref(), &mut details);
+    validate_nullable_non_empty("$.msoaCode", update.msoa_code.as_ref(), &mut details);
+    validate_nullable_non_empty("$.msoaName", update.msoa_name.as_ref(), &mut details);
+    validate_nullable_non_empty(
+        "$.floodRiskLevel",
+        update.flood_risk_level.as_ref(),
+        &mut details,
+    );
+    validate_nullable_non_empty(
+        "$.floodRiskSource",
+        update.flood_risk_source.as_ref(),
+        &mut details,
+    );
+    validate_nullable_non_empty(
+        "$.crimeUpdatedAt",
+        update.crime_updated_at.as_ref(),
+        &mut details,
+    );
+
+    if let Some(Some(date_raw)) = update.crime_updated_at.as_ref()
+        && NaiveDate::parse_from_str(date_raw, "%Y-%m-%d").is_err()
+    {
+        details.push(error_detail(
+            "$.crimeUpdatedAt".to_owned(),
+            "invalid_date",
+            "crimeUpdatedAt must be in YYYY-MM-DD format".to_owned(),
+            Some("YYYY-MM-DD".to_owned()),
+            Some(date_raw.clone()),
+            None,
+        ));
+    }
+
+    details
+}
+
+fn validate_nullable_non_empty(
+    path: &str,
+    value: Option<&Option<String>>,
+    details: &mut Vec<ErrorDetail>,
+) {
+    if let Some(Some(text)) = value
+        && text.trim().is_empty()
+    {
+        details.push(error_detail(
+            path.to_owned(),
+            "empty_string",
+            format!("{path} cannot be empty"),
+            Some("non-empty string or null".to_owned()),
+            Some("empty string".to_owned()),
+            Some("set null to clear this field".to_owned()),
+        ));
+    }
+}
+
+fn apply_update_to_listing(
+    listing: &mut Listing,
+    update: &PatchUpdate,
+    applied: &mut Map<String, Value>,
+) {
+    apply_required_field(applied, "address", &mut listing.address, &update.address);
+    apply_required_field(applied, "postcode", &mut listing.postcode, &update.postcode);
+    apply_required_field(applied, "lat", &mut listing.location.lat, &update.lat);
+    apply_required_field(applied, "lng", &mut listing.location.lng, &update.lng);
+
+    apply_nullable_field(applied, "region", &mut listing.region, &update.region);
+    apply_nullable_field(
+        applied,
+        "epcRating",
+        &mut listing.epc_rating,
+        &update.epc_rating,
+    );
+    apply_nullable_field(
+        applied,
+        "floorArea",
+        &mut listing.floor_area_sqm,
+        &update.floor_area,
+    );
+    apply_nullable_field(
+        applied,
+        "gigabitAvailability",
+        &mut listing.gigabit_availability,
+        &update.gigabit_availability,
+    );
+    apply_nullable_field(
+        applied,
+        "crimeRatePer1k",
+        &mut listing.area.crime.rate_per_1k,
+        &update.crime_rate_per_1k,
+    );
+    apply_nullable_field(
+        applied,
+        "crimeCount12m",
+        &mut listing.area.crime.count_12m,
+        &update.crime_count_12m,
+    );
+    apply_nullable_field(
+        applied,
+        "crimeViolent12m",
+        &mut listing.area.crime.violent_12m,
+        &update.crime_violent_12m,
+    );
+    apply_nullable_field(
+        applied,
+        "crimeBurglary12m",
+        &mut listing.area.crime.burglary_12m,
+        &update.crime_burglary_12m,
+    );
+    apply_nullable_field(
+        applied,
+        "crimeRobbery12m",
+        &mut listing.area.crime.robbery_12m,
+        &update.crime_robbery_12m,
+    );
+    apply_nullable_field(
+        applied,
+        "imdDecile",
+        &mut listing.area.imd.decile,
+        &update.imd_decile,
+    );
+    apply_nullable_field(
+        applied,
+        "imdRank",
+        &mut listing.area.imd.rank,
+        &update.imd_rank,
+    );
+    apply_nullable_field(
+        applied,
+        "imdScore",
+        &mut listing.area.imd.score,
+        &update.imd_score,
+    );
+    apply_nullable_field(
+        applied,
+        "lsoaCode",
+        &mut listing.area.lsoa.code,
+        &update.lsoa_code,
+    );
+    apply_nullable_field(
+        applied,
+        "lsoaName",
+        &mut listing.area.lsoa.name,
+        &update.lsoa_name,
+    );
+    apply_nullable_field(
+        applied,
+        "msoaCode",
+        &mut listing.area.msoa.code,
+        &update.msoa_code,
+    );
+    apply_nullable_field(
+        applied,
+        "msoaName",
+        &mut listing.area.msoa.name,
+        &update.msoa_name,
+    );
+    apply_nullable_field(
+        applied,
+        "incomeBhc",
+        &mut listing.area.income.bhc,
+        &update.income_bhc,
+    );
+    apply_nullable_field(
+        applied,
+        "incomeAhc",
+        &mut listing.area.income.ahc,
+        &update.income_ahc,
+    );
+    apply_nullable_field(
+        applied,
+        "socialHousingPct",
+        &mut listing.area.social_housing_pct,
+        &update.social_housing_pct,
+    );
+    apply_nullable_field(
+        applied,
+        "population",
+        &mut listing.area.population,
+        &update.population,
+    );
+    apply_nullable_field(
+        applied,
+        "floodRiskLevel",
+        &mut listing.area.flood_risk.level,
+        &update.flood_risk_level,
+    );
+    apply_nullable_field(
+        applied,
+        "floodRiskSource",
+        &mut listing.area.flood_risk.source,
+        &update.flood_risk_source,
+    );
+    apply_nullable_field(
+        applied,
+        "crimeBand",
+        &mut listing.area.crime.band,
+        &update.crime_band,
+    );
+    apply_nullable_field(
+        applied,
+        "crimeTrend",
+        &mut listing.area.crime.trend,
+        &update.crime_trend,
+    );
+    apply_nullable_field(
+        applied,
+        "crimeUpdatedAt",
+        &mut listing.area.crime.updated_at,
+        &update.crime_updated_at,
+    );
+
+    if applied.contains_key("address")
+        || applied.contains_key("postcode")
+        || applied.contains_key("lat")
+        || applied.contains_key("lng")
+    {
+        listing.google_maps_url = build_google_maps_url(
+            listing.location.lat,
+            listing.location.lng,
+            &listing.address,
+            &listing.postcode,
+        );
+        listing.google_maps_street_view_url =
+            build_google_maps_street_view_url(listing.location.lat, listing.location.lng);
+        listing.epc_search_url = if listing.postcode.is_empty() {
+            None
+        } else {
+            let encoded_postcode =
+                url::form_urlencoded::byte_serialize(listing.postcode.as_bytes())
+                    .collect::<String>();
+            Some(format!(
+                "https://find-energy-certificate.service.gov.uk/find-a-certificate/search-by-postcode?postcode={}",
+                encoded_postcode
+            ))
+        };
+    }
+}
+
+fn apply_required_field<T>(
+    applied: &mut Map<String, Value>,
+    key: &str,
+    current: &mut T,
+    incoming: &Option<T>,
+) where
+    T: Clone + PartialEq + serde::Serialize,
+{
+    let Some(next) = incoming else {
+        return;
+    };
+    if *current == *next {
+        return;
+    }
+    applied.insert(
+        key.to_owned(),
+        json!({
+            "from": current,
+            "to": next,
+        }),
+    );
+    *current = next.clone();
+}
+
+fn apply_nullable_field<T>(
+    applied: &mut Map<String, Value>,
+    key: &str,
+    current: &mut Option<T>,
+    incoming: &Option<Option<T>>,
+) where
+    T: Clone + PartialEq + serde::Serialize,
+{
+    let Some(next) = incoming else {
+        return;
+    };
+    if *current == *next {
+        return;
+    }
+    applied.insert(
+        key.to_owned(),
+        json!({
+            "from": current,
+            "to": next,
+        }),
+    );
+    *current = next.clone();
+}
+
+fn error_detail(
+    path: String,
+    code: &str,
+    message: String,
+    expected: Option<String>,
+    actual: Option<String>,
+    suggestion: Option<String>,
+) -> ErrorDetail {
+    ErrorDetail {
+        path,
+        code: code.to_owned(),
+        message,
+        expected,
+        actual,
+        suggestion,
+    }
+}
+
+fn range_error<T>(path: &str, expected: &str, actual: T) -> ErrorDetail
+where
+    T: ToString,
+{
+    error_detail(
+        path.to_owned(),
+        "out_of_range",
+        format!("{path} value is out of range"),
+        Some(expected.to_owned()),
+        Some(actual.to_string()),
+        None,
+    )
+}
+
+fn value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn canonicalize_postcode(raw: &str) -> String {
+    let compact = let_sdk::utils::text::normalize_postcode(raw);
+    if compact.len() <= 3 {
+        return compact;
+    }
+    let split = compact.len() - 3;
+    format!("{} {}", &compact[..split], &compact[split..])
 }
 
 pub fn verify(shared: &SharedArgs, params: &VerifyParams) -> CommandResult {
@@ -704,33 +2200,65 @@ fn detect_inactive_html(html: &str) -> bool {
         || lower.contains("this property has been removed")
 }
 
-fn parse_epc_rating(raw: &str) -> Result<EpcBand, CommandError> {
+fn parse_epc_band(raw: &str) -> Option<EpcBand> {
     match raw.trim().to_ascii_uppercase().as_str() {
-        "A" => Ok(EpcBand::A),
-        "B" => Ok(EpcBand::B),
-        "C" => Ok(EpcBand::C),
-        "D" => Ok(EpcBand::D),
-        "E" => Ok(EpcBand::E),
-        "F" => Ok(EpcBand::F),
-        "G" => Ok(EpcBand::G),
-        _ => Err(CommandError::runtime(
-            "VALIDATION_ERROR",
-            format!("invalid epc rating: {raw}"),
-            "epc rating must be one of A,B,C,D,E,F,G",
-        )),
+        "A" => Some(EpcBand::A),
+        "B" => Some(EpcBand::B),
+        "C" => Some(EpcBand::C),
+        "D" => Some(EpcBand::D),
+        "E" => Some(EpcBand::E),
+        "F" => Some(EpcBand::F),
+        "G" => Some(EpcBand::G),
+        _ => None,
     }
 }
 
-fn epc_band_to_text(band: &EpcBand) -> &'static str {
-    match band {
-        EpcBand::A => "A",
-        EpcBand::B => "B",
-        EpcBand::C => "C",
-        EpcBand::D => "D",
-        EpcBand::E => "E",
-        EpcBand::F => "F",
-        EpcBand::G => "G",
+fn parse_crime_band(raw: &str) -> Option<CrimeBand> {
+    match normalize_enum_token(raw).as_str() {
+        "excellent" => Some(CrimeBand::Excellent),
+        "good" => Some(CrimeBand::Good),
+        "mixed" => Some(CrimeBand::Mixed),
+        "concerning" => Some(CrimeBand::Concerning),
+        _ => None,
     }
+}
+
+fn parse_crime_trend(raw: &str) -> Option<CrimeTrend> {
+    match normalize_enum_token(raw).as_str() {
+        "improving" => Some(CrimeTrend::Improving),
+        "stable" => Some(CrimeTrend::Stable),
+        "worsening" => Some(CrimeTrend::Worsening),
+        _ => None,
+    }
+}
+
+fn normalize_enum_token(raw: &str) -> String {
+    let mut token = String::with_capacity(raw.len());
+    let mut previous_dash = false;
+    for character in raw.trim().chars() {
+        if character.is_ascii_whitespace() || character == '_' {
+            if !previous_dash && !token.is_empty() {
+                token.push('-');
+                previous_dash = true;
+            }
+            continue;
+        }
+
+        let normalized = character.to_ascii_lowercase();
+        token.push(normalized);
+        previous_dash = normalized == '-';
+    }
+    token.trim_matches('-').to_owned()
+}
+
+fn parse_epc_rating(raw: &str) -> Result<EpcBand, CommandError> {
+    parse_epc_band(raw).ok_or_else(|| {
+        CommandError::runtime(
+            "VALIDATION_ERROR",
+            format!("invalid epc rating: {raw}"),
+            "epc rating must be one of A,B,C,D,E,F,G",
+        )
+    })
 }
 
 fn build_google_maps_url(lat: f64, lng: f64, address: &str, postcode: &str) -> String {

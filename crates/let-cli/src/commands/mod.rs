@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use let_sdk::paths::PathOverrides;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod assess;
@@ -72,6 +72,7 @@ pub struct CommandError {
     pub message: String,
     pub hint: String,
     pub exit_code: i32,
+    pub details: Option<Vec<ErrorDetail>>,
 }
 
 impl CommandError {
@@ -86,6 +87,7 @@ impl CommandError {
             message: message.into(),
             hint: hint.into(),
             exit_code,
+            details: None,
         }
     }
 
@@ -95,6 +97,14 @@ impl CommandError {
         hint: impl Into<String>,
     ) -> Self {
         Self::new(code, message, hint, 1)
+    }
+
+    pub fn with_details(mut self, details: Vec<ErrorDetail>) -> Self {
+        if details.is_empty() {
+            return self;
+        }
+        self.details = Some(details);
+        self
     }
 }
 
@@ -106,11 +116,26 @@ impl From<let_sdk::LetError> for CommandError {
             message: err.message,
             hint: err.hint,
             exit_code,
+            details: None,
         }
     }
 }
 
 pub type CommandResult = Result<CommandOutput, CommandError>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorDetail {
+    pub path: String,
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+}
 
 pub fn to_camel_json<T: Serialize>(value: &T) -> Value {
     let raw = serde_json::to_value(value).expect("serialization should succeed");
