@@ -225,6 +225,7 @@ Example region-batched fetch:
 
 ```bash
 "$LET_BIN" fetch <new-ids> --json
+"$LET_BIN" fetch <single-id> --override-postcode "SY2 5WP" --override-address "Flat 2, Example House, SY2 5WP" --json
 ```
 
 Rules:
@@ -234,6 +235,9 @@ Rules:
 - If rate limited, increase delay and retry once. Do not spam.
 - Treat removed listings as normal; skip after one clear failure.
 - If media is missing, mark confidence lower or re-fetch only the top 1-2 candidates.
+- `--override-postcode` and `--override-address` are optional and only for known-bad source data.
+- Use fetch overrides with exactly one listing ID.
+- Fetch overrides are early-stage corrections: downstream enrichment and scoring use the overridden values.
 
 ### Phase 3: Triage
 
@@ -318,6 +322,8 @@ Use these to verify and prune the working set:
 ```bash
 "$LET_BIN" ops verify --dry-run --limit 20 --json
 "$LET_BIN" ops prune --dry-run --json
+"$LET_BIN" ops patch <id> --patch-json '{"crimeRatePer1k": 12.3}' --json
+"$LET_BIN" score compute --json
 ```
 
 Prune selector rules:
@@ -327,6 +333,12 @@ Prune selector rules:
 - `--region` can be combined with `--min-score` or `--bottom`.
 - `--inactive` can be combined only with optional `--region`.
 - `--bottom` and `--min-score` are mutually exclusive.
+
+Patch and rescore rules:
+
+- Use `ops patch` for post-run data correction when enrichment is missing or wrong (for example broadband/crime/IMD/flood/income fields).
+- Prefer `--patch-json` for structured updates; if validation fails, read `error.details` and retry with corrected field paths/values.
+- Run `score compute` after patching batches to rescore stored listings without refetching.
 
 Examples:
 
@@ -469,6 +481,7 @@ Error codes appear in `error.code` when `ok: false`.
 | `RATE_LIMITED` | Portal rate limiting | Wait 10-30s, increase delay, retry once |
 | `NOT_FOUND` | Listing removed | Skip and continue |
 | `VALIDATION_ERROR` | Invalid assessment or input data | Fix according to schema and `error.hint` |
+| `PATCH_JSON_PARSE_ERROR` / `PATCH_JSON_SCHEMA_ERROR` / `PATCH_JSON_VALIDATION_ERROR` | Invalid `ops patch --patch-json` payload | Fix JSON shape/values using `error.details`, then retry |
 | `API_ERROR` | External API failed | Log it, skip affected enrichment, continue |
 | `NO_CREDENTIALS` | API credentials missing | Set keys in `$LET_HOME/data/.env` and re-run health |
 | `INVALID_DB` | Notion database inaccessible | Check Notion credentials and DB ID |
