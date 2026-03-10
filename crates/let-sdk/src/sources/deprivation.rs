@@ -7,7 +7,10 @@ use csv::{ReaderBuilder, StringRecord};
 
 use crate::errors::{ErrorCode, LetError, Result};
 
-use super::common::{download_file, open_source_db, to_f64, to_i64, with_temp_dir};
+use super::common::{
+    download_file_checked, open_source_db, to_f64, to_i64, verify_file_checksum_from_env,
+    with_temp_dir,
+};
 
 const IMD_CSV_URL: &str = "https://assets.publishing.service.gov.uk/media/691ded56d140bbbaa59a2a7d/File_7_IoD2025_All_Ranks_Scores_Deciles_Population_Denominators.csv";
 
@@ -172,12 +175,19 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
 fn resolve_input_csv_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
     if let Ok(local_path) = env::var("DEPRIVATION_CSV_PATH") {
-        return Ok(PathBuf::from(local_path));
+        let path = PathBuf::from(local_path);
+        verify_file_checksum_from_env(&path, &["DEPRIVATION_CSV_SHA256"], "deprivation CSV")?;
+        return Ok(path);
     }
 
     let csv_path = temp.path().join("deprivation.csv");
     let url = env::var("DEPRIVATION_CSV_URL").unwrap_or_else(|_| IMD_CSV_URL.to_owned());
-    download_file(&url, &csv_path)?;
+    download_file_checked(
+        &url,
+        &csv_path,
+        &["DEPRIVATION_CSV_SHA256"],
+        "deprivation CSV",
+    )?;
     Ok(csv_path)
 }
 

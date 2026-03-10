@@ -3,7 +3,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -12,6 +12,7 @@ use chrono::Utc;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -77,8 +78,24 @@ pub fn http_client() -> Result<Client> {
         })
 }
 
-pub fn download_file(url: &str, destination: &Path) -> Result<()> {
-    download_file_with_headers(url, destination, &[])
+pub fn download_file_with_integrity(
+    url: &str,
+    destination: &Path,
+    headers: &[(&str, &str)],
+    checksum_envs: &[&str],
+    source_id: &str,
+) -> Result<()> {
+    download_file_with_headers(url, destination, headers)?;
+    verify_file_checksum_from_env(destination, checksum_envs, source_id)
+}
+
+pub fn download_file_checked(
+    url: &str,
+    destination: &Path,
+    checksum_envs: &[&str],
+    source_id: &str,
+) -> Result<()> {
+    download_file_with_integrity(url, destination, &[], checksum_envs, source_id)
 }
 
 pub fn download_file_with_headers(
@@ -189,6 +206,119 @@ fn download_file_once(url: &str, destination: &Path, headers: &[(&str, &str)]) -
             "check disk health and retry",
         )
     })?;
+
+    Ok(())
+}
+
+pub fn verify_file_checksum_from_env(
+    path: &Path,
+    checksum_envs: &[&str],
+    source_id: &str,
+) -> Result<()> {
+    let Some(expected_hash) = resolve_expected_sha256(checksum_envs)? else {
+        return Ok(());
+    };
+
+    verify_file_checksum(path, &expected_hash, source_id)
+}
+
+fn resolve_expected_sha256(checksum_envs: &[&str]) -> Result<Option<String>> {
+    let mut configured = checksum_envs
+        .iter()
+        .filter_map(|key| env::var(key).ok().map(|value| (key, value)))
+        .map(|(key, value)| (key, value.trim().to_owned()))
+        .filter(|(_key, value)| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    if configured.is_empty() {
+        return Ok(None);
+    }
+
+    let (first_key, first_value) = configured.remove(0);
+    let normalized = normalize_sha256_value(first_key, &first_value)?;
+
+    for (key, value) in configured {
+        let candidate = normalize_sha256_value(key, &value)?;
+        if candidate != normalized {
+            return Err(LetError::new(
+                ErrorCode::InvalidInput,
+                format!("conflicting checksum values configured in `{first_key}` and `{key}`"),
+                "set one checksum env variable per source input",
+            ));
+        }
+    }
+
+    Ok(Some(normalized))
+}
+
+fn normalize_sha256_value(env_key: &str, value: &str) -> Result<String> {
+    if value.len() != 64 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err(LetError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid SHA-256 value in `{env_key}`"),
+            "set a 64-character lowercase or uppercase hex SHA-256 value",
+        ));
+    }
+
+    Ok(value.to_ascii_lowercase())
+}
+
+fn verify_file_checksum(path: &Path, expected_sha256: &str, source_id: &str) -> Result<()> {
+    if !path.exists() {
+        return Err(LetError::new(
+            ErrorCode::NotFound,
+            format!(
+                "cannot verify checksum for `{source_id}` because file is missing: {}",
+                path.display()
+            ),
+            "verify source path configuration and retry",
+        ));
+    }
+
+    let file = File::open(path).map_err(|error| {
+        LetError::new(
+            ErrorCode::Internal,
+            format!(
+                "failed to open source file for checksum verification {}: {error}",
+                path.display()
+            ),
+            "ensure source file is readable and retry",
+        )
+    })?;
+
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+
+    loop {
+        let bytes = reader.read(&mut buffer).map_err(|error| {
+            LetError::new(
+                ErrorCode::Internal,
+                format!(
+                    "failed to read source file for checksum verification {}: {error}",
+                    path.display()
+                ),
+                "ensure source file is readable and retry",
+            )
+        })?;
+
+        if bytes == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..bytes]);
+    }
+
+    let actual_sha256 = format!("{:x}", hasher.finalize());
+    if actual_sha256 != expected_sha256 {
+        return Err(LetError::new(
+            ErrorCode::Parse,
+            format!(
+                "checksum verification failed for `{source_id}` (expected {expected_sha256}, got {actual_sha256})"
+            ),
+            "refresh source input or update checksum env value",
+        ));
+    }
 
     Ok(())
 }
@@ -334,30 +464,55 @@ pub fn temp_db_path_for(source_name: &str, final_path: &Path) -> Result<PathBuf>
 
 pub fn replace_file_atomically(temp_path: &Path, final_path: &Path) -> Result<()> {
     ensure_parent_dir(final_path)?;
-    if final_path.exists() {
-        fs::remove_file(final_path).map_err(|error| {
+    if fs::rename(temp_path, final_path).is_ok() {
+        return Ok(());
+    }
+
+    if !final_path.exists() {
+        return fs::rename(temp_path, final_path).map_err(|error| {
             LetError::new(
                 ErrorCode::Internal,
                 format!(
-                    "failed to remove existing file {}: {error}",
-                    final_path.display()
+                    "failed to replace {} with {}: {error}",
+                    final_path.display(),
+                    temp_path.display(),
                 ),
-                "close active file handles and retry",
+                "ensure sources directory is writable and retry",
             )
-        })?;
+        });
     }
 
-    fs::rename(temp_path, final_path).map_err(|error| {
+    let backup_path = final_path.with_extension(format!("swap-{}", Uuid::new_v4()));
+    fs::rename(final_path, &backup_path).map_err(|error| {
         LetError::new(
             ErrorCode::Internal,
             format!(
-                "failed to replace {} with {}: {error}",
+                "failed to move existing file {} to backup {}: {error}",
                 final_path.display(),
-                temp_path.display(),
+                backup_path.display()
             ),
-            "ensure sources directory is writable and retry",
+            "close active file handles and retry",
         )
-    })
+    })?;
+
+    match fs::rename(temp_path, final_path) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup_path);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::rename(&backup_path, final_path);
+            Err(LetError::new(
+                ErrorCode::Internal,
+                format!(
+                    "failed to replace {} with {}: {error}",
+                    final_path.display(),
+                    temp_path.display(),
+                ),
+                "ensure sources directory is writable and retry",
+            ))
+        }
+    }
 }
 
 pub fn remove_file_if_exists(path: &Path) -> Result<()> {

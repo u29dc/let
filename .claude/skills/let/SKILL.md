@@ -41,7 +41,7 @@ Then call:
 Hard rules:
 
 - If `$LET_BIN` is missing or not executable, return a blocked prerequisite and stop.
-- Use `--json` for CLI calls unless a command genuinely lacks JSON output.
+- All commands except `build sources` emit JSON envelopes on stdout by default. Treat `build sources` as text/progress output.
 - Read stdout as the contract. Treat stderr as logs only.
 - Do not run repo build commands from this skill.
 
@@ -70,9 +70,9 @@ Hard rules:
 Run these at the start of every meaningful session:
 
 ```bash
-"$LET_BIN" tools --json
-"$LET_BIN" health --json
-"$LET_BIN" config show --json
+"$LET_BIN" tools
+"$LET_BIN" health
+"$LET_BIN" config show
 ```
 
 Interpretation:
@@ -107,7 +107,7 @@ Phase 1 questions capture the human problem:
 
 Phase 2 questions fill the config:
 
-- Areas under consideration. Resolve each with `"$LET_BIN" search resolve <name> --json`.
+- Areas under consideration. Resolve each with `"$LET_BIN" search resolve <name>`.
 - Property types.
 - Budget range.
 - Bedroom range.
@@ -138,6 +138,7 @@ Config notes:
 "$LET_BIN" build sources all --jobs 3
 ```
 
+- Optional integrity guard: set matching `*_SHA256` env vars (for example `POSTCODES_ZIP_SHA256`) before running source builds to enforce SHA-256 verification.
 - Expect roughly 5-10GB of downloads and 10-30 minutes of runtime.
 
 ### Final Verification
@@ -145,7 +146,7 @@ Config notes:
 After setup or remediation, run:
 
 ```bash
-"$LET_BIN" health --json
+"$LET_BIN" health
 ```
 
 Proceed only when status is `ready` or `degraded`.
@@ -193,18 +194,18 @@ Follow these phases in order.
 ### Phase 0: Orient
 
 ```bash
-"$LET_BIN" tools --json
-"$LET_BIN" health --json
-"$LET_BIN" config show --json
+"$LET_BIN" tools
+"$LET_BIN" health
+"$LET_BIN" config show
 ```
 
-Run `"$LET_BIN" tools --json` again whenever command shape or parameters are unclear.
+Run `"$LET_BIN" tools` again whenever command shape or parameters are unclear.
 
 ### Phase 1: Discover
 
 ```bash
-"$LET_BIN" search discover --json
-"$LET_BIN" search diff <comma-separated-ids> --json
+"$LET_BIN" search discover
+"$LET_BIN" search diff <comma-separated-ids>
 ```
 
 Rules:
@@ -217,16 +218,16 @@ Rules:
 Example region-batched fetch:
 
 ```bash
-"$LET_BIN" fetch <sheffield-ids> --region Sheffield --json
-"$LET_BIN" fetch <stamford-ids> --region Stamford --json
+"$LET_BIN" fetch <sheffield-ids> --region Sheffield
+"$LET_BIN" fetch <stamford-ids> --region Stamford
 ```
 
 ### Phase 2: Acquire
 
 ```bash
-"$LET_BIN" fetch <new-ids> --json
-"$LET_BIN" fetch <single-id> --override-postcode "SY2 5WP" --override-address "Flat 2, Example House, SY2 5WP" --json
-"$LET_BIN" fetch <new-ids> --min-score 70 --json
+"$LET_BIN" fetch <new-ids>
+"$LET_BIN" fetch <single-id> --override-postcode "SY2 5WP" --override-address "Flat 2, Example House, SY2 5WP"
+"$LET_BIN" fetch <new-ids> --min-score 70
 ```
 
 Rules:
@@ -247,7 +248,7 @@ Rules:
 ### Phase 3: Triage
 
 ```bash
-"$LET_BIN" view list --top 30 --json
+"$LET_BIN" view list --top 30
 ```
 
 Suggested triage tiers:
@@ -263,14 +264,14 @@ Prefer 2-5 deep assessments over 30 shallow reviews.
 Queue and context:
 
 ```bash
-"$LET_BIN" assess candidates --json
-"$LET_BIN" assess context <id> --json
+"$LET_BIN" assess candidates
+"$LET_BIN" assess context <id>
 ```
 
 Submission:
 
 ```bash
-"$LET_BIN" assess submit <id> '<assessment-json>' --json
+"$LET_BIN" assess submit <id> '<assessment-json>'
 ```
 
 Assessment rules:
@@ -294,9 +295,9 @@ What to evaluate:
 Useful commands:
 
 ```bash
-"$LET_BIN" view list --top 20 --json
-"$LET_BIN" view detail <id> --json
-"$LET_BIN" score explain <id> --json
+"$LET_BIN" view list --top 20
+"$LET_BIN" view detail <id>
+"$LET_BIN" score explain <id>
 ```
 
 Report structure:
@@ -325,10 +326,10 @@ If comparing regions, include:
 Use these to verify and prune the working set:
 
 ```bash
-"$LET_BIN" ops verify --dry-run --limit 20 --json
-"$LET_BIN" ops prune --dry-run --json
-"$LET_BIN" ops patch <id> --patch-json '{"crimeRatePer1k": 12.3}' --json
-"$LET_BIN" score compute --json
+"$LET_BIN" ops verify --dry-run --limit 20
+"$LET_BIN" ops prune --dry-run
+"$LET_BIN" ops patch <id> --patch-json '{"crimeRatePer1k": 12.3}'
+"$LET_BIN" score compute
 ```
 
 Prune selector rules:
@@ -348,10 +349,10 @@ Patch and rescore rules:
 Examples:
 
 ```bash
-"$LET_BIN" ops prune --dry-run --json
-"$LET_BIN" ops prune --region Sheffield --dry-run --json
-"$LET_BIN" ops prune --region Sheffield --min-score 60 --dry-run --json
-"$LET_BIN" ops prune --inactive --region Sheffield --dry-run --json
+"$LET_BIN" ops prune --dry-run
+"$LET_BIN" ops prune --region Sheffield --dry-run
+"$LET_BIN" ops prune --region Sheffield --min-score 60 --dry-run
+"$LET_BIN" ops prune --inactive --region Sheffield --dry-run
 ```
 
 ## Postcode and Neighborhood Research
@@ -444,7 +445,7 @@ Read first: $LET_HOME/data/let.context.md.
 
 Constraints:
 * Do not edit config files.
-* Use `--json` for tool calls.
+* Use default command output for tool calls. Expect JSON envelopes for all commands except `build sources`.
 * Keep the batch small: discover, then fetch 5-10 max.
 * Assess 1-2 best candidates deeply if media is available.
 * Write assessments back using normal assessment submission.
@@ -455,7 +456,7 @@ Location:
 * Identifier: {LOCATION_ID}
 
 Steps:
-1) `"$LET_BIN" health --json`
+1) `"$LET_BIN" health`
 2) Discover listings for this location
 3) Diff new vs known
 4) Fetch a small batch and assign region if needed
@@ -503,7 +504,7 @@ Recovery rules:
 
 1. Read `error.code` and `error.hint`.
 2. Apply the table action.
-3. If the error persists, re-run `"$LET_BIN" health --json"` to check for systemic issues.
+3. If the error persists, re-run `"$LET_BIN" health"` to check for systemic issues.
 4. For rate limits, back off and never retry more than twice overall.
 5. For missing enrichment or media, continue with lower confidence instead of blocking the run.
 

@@ -82,7 +82,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     ],
                     vec!["candidates", "total", "assessed", "remaining"],
                     true,
-                    "let assess candidates --top 10 --json",
+                    "let assess candidates --top 10",
                 ),
                 tool(
                     "assess.context",
@@ -105,7 +105,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                         "notes",
                     ],
                     true,
-                    "let assess context 170448131 --json",
+                    "let assess context 170448131",
                 ),
                 tool(
                     "assess.submit",
@@ -128,7 +128,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     ],
                     vec!["id", "assessedScore", "algoScore", "scoreAdjustment"],
                     false,
-                    "let assess submit 170448131 '{\"maintenance\":\"good\",...}' --json",
+                    "let assess submit 170448131 '{\"maintenance\":\"good\",...}'",
                 ),
                 tool(
                     "build.group",
@@ -193,7 +193,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     }],
                     vec!["path", "count"],
                     true,
-                    "let export json --output /tmp/let-export.json --json",
+                    "let export json --output /tmp/let-export.json",
                 ),
                 tool(
                     "export.notion",
@@ -234,7 +234,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     ],
                     vec!["created", "updated", "skipped", "failed", "total", "dryRun"],
                     false,
-                    "let export notion --json",
+                    "let export notion",
                 ),
                 tool(
                     "fetch",
@@ -313,7 +313,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                         "saveError",
                     ],
                     false,
-                    "let fetch 170448131,170448132 --json",
+                    "let fetch 170448131,170448132",
                 ),
                 tool(
                     "ops.group",
@@ -374,7 +374,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     ],
                     vec!["removed", "remaining", "mode", "dryRun"],
                     false,
-                    "let ops prune --inactive --dry-run --json",
+                    "let ops prune --inactive --dry-run",
                 ),
                 tool(
                     "ops.patch",
@@ -572,7 +572,8 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             name: "--skip-re-enrich",
                             param_type: "bool",
                             required: false,
-                            description: "Accepted for compatibility; enrichment reruns are deferred.",
+                            description:
+                                "Skip source re-enrichment during this patch run; only explicit patch fields are applied before rescoring.",
                         },
                         ToolParameter {
                             name: "--skip-images",
@@ -591,7 +592,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                         "warnings",
                     ],
                     false,
-                    "let ops patch 172223234 --postcode SY2\\ 5WP --json",
+                    "let ops patch 172223234 --postcode SY2\\ 5WP",
                 ),
                 tool(
                     "ops.verify",
@@ -626,7 +627,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     ],
                     vec!["checked", "active", "inactive", "errors", "dryRun", "results"],
                     false,
-                    "let ops verify --dry-run --limit 10 --json",
+                    "let ops verify --dry-run --limit 10",
                 ),
                 tool(
                     "score.group",
@@ -646,7 +647,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     vec![],
                     vec!["total", "scored", "avgScore", "avgConfidence"],
                     false,
-                    "let score compute --json",
+                    "let score compute",
                 ),
                 tool(
                     "score.explain",
@@ -661,7 +662,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     }],
                     vec!["id", "overall", "assessedScore", "confidence", "composites", "penalties"],
                     true,
-                    "let score explain 170448131 --json",
+                    "let score explain 170448131",
                 ),
                 tool(
                     "search.group",
@@ -686,7 +687,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     }],
                     vec!["new", "known", "total"],
                     true,
-                    "let search diff 170448131,170448132 --json",
+                    "let search diff 170448131,170448132",
                 ),
                 tool(
                     "search.resolve",
@@ -701,7 +702,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     }],
                     vec!["query", "locations"],
                     true,
-                    "let search resolve York --json",
+                    "let search resolve York",
                 ),
                 tool(
                     "search.discover",
@@ -754,7 +755,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     ],
                     vec!["ids", "idsByLocation", "total", "locations"],
                     true,
-                    "let search discover --json",
+                    "let search discover",
                 ),
                 tool(
                     "view.group",
@@ -811,7 +812,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     ],
                     vec!["listings", "total", "filtered"],
                     true,
-                    "let view list --top 10 --region Sheffield --json",
+                    "let view list --top 10 --region Sheffield",
                 ),
                 tool(
                     "view.detail",
@@ -826,7 +827,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     }],
                     vec!["listing"],
                     true,
-                    "let view detail 170448131 --json",
+                    "let view detail 170448131",
                 ),
                 tool(
                     "config.show",
@@ -836,7 +837,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     vec![],
                     vec!["path", "config"],
                     true,
-                    "let config show --json",
+                    "let config show",
                 ),
                 tool(
                     "health",
@@ -846,7 +847,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     vec![],
                     vec!["status", "checks", "paths"],
                     true,
-                    "let health --json",
+                    "let health",
                 ),
                 tool(
                     "tools",
@@ -861,7 +862,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     }],
                     vec!["tools", "globalFlags"],
                     true,
-                    "let tools --json",
+                    "let tools",
                 ),
                 tool(
                     "start",
@@ -871,7 +872,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     vec![],
                     vec!["status", "code"],
                     false,
-                    "let start --json",
+                    "let start",
                 ),
                 tool(
                     "config.validate",
@@ -881,7 +882,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     vec![],
                     vec!["path", "valid"],
                     true,
-                    "let config validate --json",
+                    "let config validate",
                 ),
             ];
             tools.sort_by(|a, b| a.category.cmp(b.category).then_with(|| a.name.cmp(b.name)));
@@ -895,12 +896,7 @@ pub fn find_tool(name: &str) -> Option<&'static ToolMetadata> {
 }
 
 pub fn global_flags() -> &'static [GlobalFlag] {
-    static FLAGS: [GlobalFlag; 5] = [
-        GlobalFlag {
-            name: "--json",
-            flag_type: "bool",
-            description: "Emit exactly one JSON envelope object to stdout.",
-        },
+    static FLAGS: [GlobalFlag; 4] = [
         GlobalFlag {
             name: "--data-dir",
             flag_type: "path",

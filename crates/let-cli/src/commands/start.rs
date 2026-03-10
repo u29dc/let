@@ -8,16 +8,7 @@ use serde_json::json;
 
 use crate::commands::{CommandError, CommandOutput, CommandResult};
 
-pub fn run(json_mode: bool) -> CommandResult {
-    if json_mode {
-        return Ok(CommandOutput::new(json!({
-            "status": "ready",
-            "message": "tui launch requires interactive terminal mode",
-            "hint": "run `let start` without `--json`",
-        }))
-        .with_text("start command is available"));
-    }
-
+pub fn run() -> CommandResult {
     let binary = resolve_tui_binary().ok_or_else(|| {
         CommandError::runtime(
             "TUI_NOT_FOUND",

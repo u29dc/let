@@ -8,8 +8,8 @@ use csv::{ReaderBuilder, StringRecord};
 use crate::errors::{ErrorCode, LetError, Result};
 
 use super::common::{
-    download_file, extract_zip, find_first_matching_file, normalize_postcode, open_source_db,
-    to_f64, with_temp_dir,
+    download_file_checked, extract_zip, find_first_matching_file, normalize_postcode,
+    open_source_db, to_f64, verify_file_checksum_from_env, with_temp_dir,
 };
 
 const ONSPD_ZIP_URL: &str =
@@ -145,12 +145,19 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
 fn resolve_input_zip_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
     if let Ok(local_path) = env::var("POSTCODES_ZIP_PATH") {
-        return Ok(PathBuf::from(local_path));
+        let path = PathBuf::from(local_path);
+        verify_file_checksum_from_env(&path, &["POSTCODES_ZIP_SHA256"], "postcodes archive")?;
+        return Ok(path);
     }
 
     let zip_path = temp.path().join("postcodes.zip");
     let download_url = env::var("POSTCODES_ZIP_URL").unwrap_or_else(|_| ONSPD_ZIP_URL.to_owned());
-    download_file(&download_url, &zip_path)?;
+    download_file_checked(
+        &download_url,
+        &zip_path,
+        &["POSTCODES_ZIP_SHA256"],
+        "postcodes archive",
+    )?;
     Ok(zip_path)
 }
 

@@ -8,8 +8,9 @@ use csv::{ReaderBuilder, StringRecord};
 use crate::errors::{ErrorCode, LetError, Result};
 
 use super::common::{
-    collect_matching_files, download_file, extract_zip, file_name, find_column_index,
-    find_first_matching_file, open_source_db, to_f64, to_i64, with_temp_dir,
+    collect_matching_files, download_file_checked, extract_zip, file_name, find_column_index,
+    find_first_matching_file, open_source_db, to_f64, to_i64, verify_file_checksum_from_env,
+    with_temp_dir,
 };
 
 const OFCOM_ZIP_URL: &str = "https://www.ofcom.org.uk/siteassets/resources/documents/research-and-data/multi-sector/infrastructure-research/connected-nations-2025/202507_fixed_broadband_coverage_r01.zip";
@@ -205,12 +206,19 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
 fn resolve_top_level_archive(temp: &tempfile::TempDir) -> Result<PathBuf> {
     if let Ok(path) = env::var("BROADBAND_ZIP_PATH") {
-        return Ok(PathBuf::from(path));
+        let path = PathBuf::from(path);
+        verify_file_checksum_from_env(&path, &["BROADBAND_ZIP_SHA256"], "broadband archive")?;
+        return Ok(path);
     }
 
     let zip_path = temp.path().join("broadband.zip");
     let download_url = env::var("BROADBAND_ZIP_URL").unwrap_or_else(|_| OFCOM_ZIP_URL.to_owned());
-    download_file(&download_url, &zip_path)?;
+    download_file_checked(
+        &download_url,
+        &zip_path,
+        &["BROADBAND_ZIP_SHA256"],
+        "broadband archive",
+    )?;
     Ok(zip_path)
 }
 

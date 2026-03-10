@@ -562,7 +562,6 @@ impl App {
         command
             .args([
                 "run", "-q", "-p", "let-cli", "--", "build", "sources", target, "--jobs", "3",
-                "--json",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null());

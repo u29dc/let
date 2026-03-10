@@ -67,14 +67,12 @@ enum ProgressStyle {
 }
 
 impl ProgressMode {
-    fn resolve(self, json_mode: bool) -> ProgressStyle {
+    fn resolve(self) -> ProgressStyle {
         match self {
             Self::Off => ProgressStyle::Off,
             Self::Plain => ProgressStyle::Plain,
             Self::Auto => {
-                if json_mode {
-                    ProgressStyle::Off
-                } else if io::stderr().is_terminal() {
+                if io::stderr().is_terminal() {
                     ProgressStyle::Tty
                 } else {
                     ProgressStyle::Plain
@@ -259,7 +257,6 @@ pub fn run_sources(
     target: SourceTarget,
     jobs: usize,
     shared: &SharedArgs,
-    json_mode: bool,
     progress_mode: ProgressMode,
 ) -> CommandResult {
     if target == SourceTarget::List {
@@ -275,7 +272,7 @@ pub fn run_sources(
 
     let started = Instant::now();
     let job_count = jobs.max(1);
-    let progress_style = progress_mode.resolve(json_mode);
+    let progress_style = progress_mode.resolve();
     let source_results = match target {
         SourceTarget::All => run_all_sources(job_count, shared, progress_style, target.as_str())?,
         _ => vec![run_single_source(
@@ -513,13 +510,17 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn auto_progress_is_off_in_json_mode() {
-        assert_eq!(ProgressMode::Auto.resolve(true), ProgressStyle::Off);
+    fn auto_progress_uses_terminal_detection() {
+        let resolved = ProgressMode::Auto.resolve();
+        assert!(matches!(
+            resolved,
+            ProgressStyle::Tty | ProgressStyle::Plain
+        ));
     }
 
     #[test]
-    fn plain_progress_stays_plain_in_json_mode() {
-        assert_eq!(ProgressMode::Plain.resolve(true), ProgressStyle::Plain);
+    fn plain_progress_stays_plain() {
+        assert_eq!(ProgressMode::Plain.resolve(), ProgressStyle::Plain);
     }
 
     #[test]

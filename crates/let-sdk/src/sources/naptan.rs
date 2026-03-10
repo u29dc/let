@@ -7,7 +7,10 @@ use csv::{ReaderBuilder, StringRecord};
 
 use crate::errors::{ErrorCode, LetError, Result};
 
-use super::common::{download_file, find_column_index, open_source_db, to_f64, with_temp_dir};
+use super::common::{
+    download_file_checked, find_column_index, open_source_db, to_f64,
+    verify_file_checksum_from_env, with_temp_dir,
+};
 
 const NAPTAN_CSV_URL: &str = "https://naptan.api.dft.gov.uk/v1/access-nodes?dataFormat=csv";
 
@@ -117,12 +120,14 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
 fn resolve_input_csv_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
     if let Ok(local_path) = env::var("NAPTAN_CSV_PATH") {
-        return Ok(PathBuf::from(local_path));
+        let path = PathBuf::from(local_path);
+        verify_file_checksum_from_env(&path, &["NAPTAN_CSV_SHA256"], "naptan CSV")?;
+        return Ok(path);
     }
 
     let csv_path = temp.path().join("naptan.csv");
     let url = env::var("NAPTAN_CSV_URL").unwrap_or_else(|_| NAPTAN_CSV_URL.to_owned());
-    download_file(&url, &csv_path)?;
+    download_file_checked(&url, &csv_path, &["NAPTAN_CSV_SHA256"], "naptan CSV")?;
     Ok(csv_path)
 }
 

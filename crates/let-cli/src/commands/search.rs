@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use let_sdk::config::{RIGHTMOVE_SEARCH_TYPES, SearchFilters, load_config, reset_config_cache};
-use let_sdk::load_listings_file;
+use let_sdk::{ErrorCode, load_listings_file};
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, HeaderMap, HeaderValue};
 use serde_json::json;
 
@@ -34,9 +34,17 @@ pub fn diff(shared: &SharedArgs, ids_raw: &str) -> CommandResult {
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let db_path = paths.derived.database;
 
-    let known_ids = load_listings_file(&db_path)
-        .map(|data| known_portal_ids(&data.listings))
-        .unwrap_or_default();
+    let (known_ids, database_present) = match load_listings_file(&db_path) {
+        Ok(data) => (known_portal_ids(&data.listings), true),
+        Err(error) if error.code == ErrorCode::NotFound => (HashSet::new(), false),
+        Err(error) => {
+            return Err(CommandError::runtime(
+                "DB_ERROR",
+                format!("failed to load listings database: {error}"),
+                "run `let health` and repair database issues before diffing IDs",
+            ));
+        }
+    };
 
     let mut known = Vec::new();
     let mut new_ids = Vec::new();
@@ -51,6 +59,7 @@ pub fn diff(shared: &SharedArgs, ids_raw: &str) -> CommandResult {
     Ok(CommandOutput::new(json!({
         "new": new_ids,
         "known": known,
+        "databasePresent": database_present,
         "total": input_ids.len(),
     }))
     .with_count(input_ids.len())
@@ -195,9 +204,19 @@ pub fn discover(shared: &SharedArgs, params: &DiscoverParams) -> CommandResult {
                     .to_owned();
 
                 if status.is_success() && content_type.contains("application/json") {
-                    let body = runtime
-                        .block_on(async { response.text().await })
-                        .unwrap_or_default();
+                    let body = match runtime.block_on(async { response.text().await }) {
+                        Ok(body) => body,
+                        Err(error) => {
+                            ids_by_location.insert(location.name.clone(), Vec::new());
+                            location_stats.push(json!({
+                                "name": location.name,
+                                "id": location.id,
+                                "count": 0,
+                                "error": format!("failed to read search API response body: {error}"),
+                            }));
+                            continue;
+                        }
+                    };
                     match serde_json::from_str::<SearchApiResponse>(&body) {
                         Ok(payload) => {
                             let location_ids = payload
@@ -227,9 +246,19 @@ pub fn discover(shared: &SharedArgs, params: &DiscoverParams) -> CommandResult {
                     continue;
                 }
 
-                let body = runtime
-                    .block_on(async { response.text().await })
-                    .unwrap_or_default();
+                let body = match runtime.block_on(async { response.text().await }) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        ids_by_location.insert(location.name.clone(), Vec::new());
+                        location_stats.push(json!({
+                            "name": location.name,
+                            "id": location.id,
+                            "count": 0,
+                            "error": format!("failed to read listing HTML response body: {error}"),
+                        }));
+                        continue;
+                    }
+                };
                 let mut location_ids = extract_listing_ids_from_html(&body);
 
                 if location_ids.is_empty() {
@@ -240,7 +269,16 @@ pub fn discover(shared: &SharedArgs, params: &DiscoverParams) -> CommandResult {
                     {
                         let fallback_html = runtime
                             .block_on(async { fallback_response.text().await })
-                            .unwrap_or_default();
+                            .map_err(|error| {
+                                CommandError::runtime(
+                                    "NETWORK_ERROR",
+                                    format!(
+                                        "failed to read fallback listing HTML for location {}: {error}",
+                                        location.id
+                                    ),
+                                    "retry command or reduce requested locations",
+                                )
+                            })?;
                         location_ids = extract_listing_ids_from_html(&fallback_html);
                     }
                 }

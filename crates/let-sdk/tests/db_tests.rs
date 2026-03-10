@@ -39,6 +39,15 @@ fn open_listings_db_initializes_schema_and_pragmas() {
         .expect("check listings table");
     assert_eq!(listings_table, 1);
 
+    let score_contexts_table: i64 = connection
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'score_contexts'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check score_contexts table");
+    assert_eq!(score_contexts_table, 1);
+
     close_listings_db(connection).expect("close sqlite db");
 }
 
@@ -96,7 +105,7 @@ fn upsert_and_roundtrip_listing_data() {
             .expect("scores are present")
             .context
             .config_hash,
-        "legacy"
+        "score-config-v1"
     );
 
     let by_uuid = find_listing_by_id_from_db(&db_path, listing.id.as_str())

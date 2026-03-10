@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;
+use std::env;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, named_params, params};
 use serde::Serialize;
@@ -10,7 +12,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::db::{close_listings_db, open_listings_db};
+use crate::db::{close_listings_db, open_listings_db, open_listings_db_readonly};
 use crate::errors::{ErrorCode, LetError, Result};
 use crate::schema::listing::{
     Agent, AreaCodeName, AreaMetrics, CrimeMetrics, ExtractionStatus, FloodRisk, GeoLocation,
@@ -28,7 +30,7 @@ pub struct DbMeta {
 }
 
 pub fn load_listings_file(path: impl AsRef<Path>) -> Result<ListingsFile> {
-    let connection = open_listings_db(path)?;
+    let connection = open_listings_db_readonly(path)?;
     let result = (|| {
         let meta = load_meta(&connection)?;
         let search_urls =
@@ -75,8 +77,15 @@ pub fn upsert_listings(
             insert_listing_graph(&tx, listing)?;
         }
 
-        tx.execute("DELETE FROM scores", [])?;
         for listing in all_scored_listings {
+            tx.execute(
+                "DELETE FROM scores WHERE listing_id = ?1",
+                params![listing.id],
+            )?;
+            tx.execute(
+                "DELETE FROM score_contexts WHERE listing_id = ?1",
+                params![listing.id],
+            )?;
             insert_score_row(&tx, listing)?;
         }
 
@@ -149,7 +158,7 @@ pub fn update_listing_assessment(
 }
 
 pub fn find_listing_by_id_from_db(path: impl AsRef<Path>, id: &str) -> Result<Option<Listing>> {
-    let connection = open_listings_db(path)?;
+    let connection = open_listings_db_readonly(path)?;
     let result = find_listing_by_id_with_connection(&connection, id);
     finalize_connection(connection, result)
 }
@@ -165,10 +174,33 @@ fn finalize_connection<T>(connection: Connection, result: Result<T>) -> Result<T
 }
 
 fn backup_listings_db(path: &Path) -> Result<()> {
-    if path.exists() {
-        let backup_path = format!("{}.bak", path.display());
-        fs::copy(path, backup_path)?;
+    if !path.exists() {
+        return Ok(());
     }
+
+    if env::var("LET_SKIP_DB_BACKUP")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let backup_path = format!("{}.bak", path.display());
+    let min_interval_secs = env::var("LET_DB_BACKUP_MIN_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(300);
+
+    if min_interval_secs > 0
+        && let Ok(metadata) = fs::metadata(&backup_path)
+        && let Ok(modified_at) = metadata.modified()
+        && let Ok(elapsed) = modified_at.elapsed()
+        && elapsed < Duration::from_secs(min_interval_secs)
+    {
+        return Ok(());
+    }
+
+    fs::copy(path, backup_path)?;
     Ok(())
 }
 
@@ -200,13 +232,14 @@ fn load_string_column(connection: &Connection, sql: &str) -> Result<Vec<String>>
 }
 
 fn load_all_listings(connection: &Connection) -> Result<Vec<Listing>> {
+    let has_score_contexts = table_exists(connection, "score_contexts")?;
     let mut statement = connection.prepare("SELECT * FROM listings ORDER BY id")?;
     let rows = statement.query_map([], ListingRow::from_row)?;
     let listing_rows = rows.collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
 
     listing_rows
         .into_iter()
-        .map(|row| hydrate_listing(connection, row))
+        .map(|row| hydrate_listing(connection, row, has_score_contexts))
         .collect()
 }
 
@@ -214,6 +247,7 @@ fn find_listing_by_id_with_connection(
     connection: &Connection,
     id: &str,
 ) -> Result<Option<Listing>> {
+    let has_score_contexts = table_exists(connection, "score_contexts")?;
     let sql = if Uuid::parse_str(id).is_ok() {
         "SELECT * FROM listings WHERE id = ?1"
     } else {
@@ -224,16 +258,20 @@ fn find_listing_by_id_with_connection(
         .query_row(sql, params![id], ListingRow::from_row)
         .optional()?;
 
-    row.map(|item| hydrate_listing(connection, item))
+    row.map(|item| hydrate_listing(connection, item, has_score_contexts))
         .transpose()
 }
 
-fn hydrate_listing(connection: &Connection, row: ListingRow) -> Result<Listing> {
+fn hydrate_listing(
+    connection: &Connection,
+    row: ListingRow,
+    has_score_contexts: bool,
+) -> Result<Listing> {
     let listing_id = row.id.clone();
     let notes = load_notes(connection, &listing_id)?;
     let images = load_images(connection, &listing_id)?;
     let stations = load_stations(connection, &listing_id)?;
-    let scores = load_scores(connection, &listing_id)?;
+    let scores = load_scores(connection, &listing_id, has_score_contexts)?;
     let assessment = load_assessment(connection, &listing_id)?;
 
     let extraction_status: ExtractionStatus =
@@ -248,13 +286,13 @@ fn hydrate_listing(connection: &Connection, row: ListingRow) -> Result<Listing> 
             onthemarket: row.portal_onthemarket,
         },
         uprn: row.uprn,
-        uprn_source: parse_optional_enum(row.uprn_source),
-        uprn_confidence: parse_optional_enum(row.uprn_confidence),
+        uprn_source: parse_optional_enum(row.uprn_source, "listings.uprn_source")?,
+        uprn_confidence: parse_optional_enum(row.uprn_confidence, "listings.uprn_confidence")?,
         url: row.url,
         location: GeoLocation {
             lat: row.lat,
             lng: row.lng,
-            pin_type: parse_optional_enum(row.pin_type),
+            pin_type: parse_optional_enum(row.pin_type, "listings.pin_type")?,
         },
         postcode: row.postcode,
         address: row.address,
@@ -291,8 +329,8 @@ fn hydrate_listing(connection: &Connection, row: ListingRow) -> Result<Listing> 
                 violent_12m: row.crime_violent_12m,
                 burglary_12m: row.crime_burglary_12m,
                 robbery_12m: row.crime_robbery_12m,
-                band: parse_optional_enum(row.crime_band),
-                trend: parse_optional_enum(row.crime_trend),
+                band: parse_optional_enum(row.crime_band, "listings.crime_band")?,
+                trend: parse_optional_enum(row.crime_trend, "listings.crime_trend")?,
                 updated_at: row.crime_updated_at,
             },
         },
@@ -322,7 +360,7 @@ fn hydrate_listing(connection: &Connection, row: ListingRow) -> Result<Listing> 
                 local: row.map_street_local,
             },
         },
-        epc_rating: parse_optional_enum(row.epc_rating),
+        epc_rating: parse_optional_enum(row.epc_rating, "listings.epc_rating")?,
         floor_area_sqm: row.floor_area_sqm,
         epc_lodgement_date: row.epc_lodgement_date,
         epc_address_match: row.epc_address_match.map(|value| value == 1),
@@ -332,8 +370,7 @@ fn hydrate_listing(connection: &Connection, row: ListingRow) -> Result<Listing> 
         listed_date: row.listed_date,
         lettings: Lettings {
             available_date: row.available_date,
-            // TODO(SDK-012): Store deposit as INTEGER in schema; current REAL column requires lossy cast.
-            deposit: row.deposit.map(|value| value.round() as i64),
+            deposit: parse_deposit(row.deposit)?,
         },
         agent: Agent {
             name: row.agent_name,
@@ -386,7 +423,11 @@ fn load_stations(connection: &Connection, listing_id: &str) -> Result<Vec<Statio
     Ok(values)
 }
 
-fn load_scores(connection: &Connection, listing_id: &str) -> Result<Option<Scores>> {
+fn load_scores(
+    connection: &Connection,
+    listing_id: &str,
+    has_score_contexts: bool,
+) -> Result<Option<Scores>> {
     let row = connection
         .query_row(
             "SELECT * FROM scores WHERE listing_id = ?1",
@@ -395,7 +436,12 @@ fn load_scores(connection: &Connection, listing_id: &str) -> Result<Option<Score
         )
         .optional()?;
 
-    row.map(decode_scores).transpose()
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let context = load_score_context(connection, listing_id, has_score_contexts)?;
+    decode_scores(row, context).map(Some)
 }
 
 fn load_assessment(connection: &Connection, listing_id: &str) -> Result<Option<ListingAssessment>> {
@@ -410,7 +456,7 @@ fn load_assessment(connection: &Connection, listing_id: &str) -> Result<Option<L
     row.map(decode_assessment).transpose()
 }
 
-fn decode_scores(row: ScoreRow) -> Result<Scores> {
+fn decode_scores(row: ScoreRow, context: Option<ScoreContext>) -> Result<Scores> {
     Ok(Scores {
         overall: row.overall,
         confidence: row.confidence,
@@ -449,8 +495,7 @@ fn decode_scores(row: ScoreRow) -> Result<Scores> {
             pets: row.penalty_pets,
             combined: row.penalty_combined,
         },
-        // TODO(SDK-012): Persist ScoreContext fields once the schema includes dedicated columns.
-        context: legacy_score_context(),
+        context: context.unwrap_or_else(legacy_score_context),
     })
 }
 
@@ -468,6 +513,36 @@ fn decode_assessment(row: AssessmentRow) -> Result<ListingAssessment> {
         )?,
         reasoning: row.reasoning,
         score_adjustment: row.score_adjustment,
+    })
+}
+
+fn load_score_context(
+    connection: &Connection,
+    listing_id: &str,
+    has_score_contexts: bool,
+) -> Result<Option<ScoreContext>> {
+    if !has_score_contexts {
+        return Ok(None);
+    }
+
+    let raw = connection
+        .query_row(
+            "SELECT context_json FROM score_contexts WHERE listing_id = ?1",
+            params![listing_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    raw.map(|value| decode_score_context(&value)).transpose()
+}
+
+fn decode_score_context(raw: &str) -> Result<ScoreContext> {
+    serde_json::from_str::<ScoreContext>(raw).map_err(|error| {
+        LetError::new(
+            ErrorCode::SchemaMismatch,
+            format!("invalid score context JSON: {error}"),
+            "rebuild or migrate the listings database to match current schema",
+        )
     })
 }
 
@@ -517,7 +592,7 @@ fn insert_listing_row(tx: &Transaction<'_>, listing: &Listing) -> Result<()> {
     let epc_address_match = listing
         .epc_address_match
         .map(|value| if value { 1 } else { 0 });
-    let deposit = listing.lettings.deposit.map(|value| value as f64);
+    let deposit = listing.lettings.deposit;
 
     tx.execute(
         "INSERT INTO listings (
@@ -730,6 +805,18 @@ fn insert_score_row(tx: &Transaction<'_>, listing: &Listing) -> Result<()> {
         ],
     )?;
 
+    let context_json = serde_json::to_string(&score.context).map_err(|error| {
+        LetError::new(
+            ErrorCode::Internal,
+            format!("failed to serialize score context for sqlite: {error}"),
+            "verify score context serde attributes and schema compatibility",
+        )
+    })?;
+    tx.execute(
+        "INSERT OR REPLACE INTO score_contexts (listing_id, context_json) VALUES (?1, ?2)",
+        params![listing.id, context_json],
+    )?;
+
     Ok(())
 }
 
@@ -796,12 +883,20 @@ where
     })
 }
 
-fn parse_optional_enum<T>(raw: Option<String>) -> Option<T>
+fn parse_optional_enum<T>(raw: Option<String>, field: &str) -> Result<Option<T>>
 where
     T: DeserializeOwned,
 {
-    // TODO(SDK-012): Promote invalid optional enum values to explicit schema errors after migration support lands.
-    raw.and_then(|value| parse_enum(value.as_str()))
+    match raw {
+        None => Ok(None),
+        Some(value) => parse_enum(value.as_str()).map(Some).ok_or_else(|| {
+            LetError::new(
+                ErrorCode::SchemaMismatch,
+                format!("invalid enum value `{value}` for {field}"),
+                "rebuild or migrate the listings database to match current schema",
+            )
+        }),
+    }
 }
 
 fn parse_enum<T>(raw: &str) -> Option<T>
@@ -838,6 +933,51 @@ where
     T: Serialize,
 {
     value.map(encode_enum).transpose()
+}
+
+fn parse_deposit(raw: Option<f64>) -> Result<Option<i64>> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+
+    if !value.is_finite() {
+        return Err(LetError::new(
+            ErrorCode::SchemaMismatch,
+            format!("invalid deposit value `{value}` in listings.deposit"),
+            "rebuild or migrate the listings database to match current schema",
+        ));
+    }
+
+    let rounded = value.round();
+    if (value - rounded).abs() > 1e-6 {
+        return Err(LetError::new(
+            ErrorCode::SchemaMismatch,
+            format!(
+                "non-integer deposit value `{value}` in listings.deposit; expected whole-number amount"
+            ),
+            "rebuild or migrate the listings database to match current schema",
+        ));
+    }
+
+    if rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
+        return Err(LetError::new(
+            ErrorCode::SchemaMismatch,
+            format!("deposit value `{value}` is out of supported range"),
+            "rebuild or migrate the listings database to match current schema",
+        ));
+    }
+
+    Ok(Some(rounded as i64))
+}
+
+fn table_exists(connection: &Connection, table_name: &str) -> Result<bool> {
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![table_name],
+        |row| row.get(0),
+    )?;
+
+    Ok(count > 0)
 }
 
 #[derive(Debug)]

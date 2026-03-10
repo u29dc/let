@@ -82,10 +82,8 @@ pub fn export_json(shared: &SharedArgs, output: Option<PathBuf>) -> CommandResul
 pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResult {
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let notion = load_notion_config(&paths.derived.env_file)?;
-    let mapbox_token =
-        resolve_env_var("MAPBOX_ACCESS_TOKEN", &paths.derived.env_file).map(|(token, _)| token);
     let runtime = build_runtime()?;
-    let mut client = NotionClient::new(&runtime, notion, mapbox_token)?;
+    let mut client = NotionClient::new(&runtime, notion)?;
     client.validate_database()?;
 
     let db_path = paths.derived.database;
@@ -282,7 +280,6 @@ struct NotionClient<'a> {
     runtime: &'a tokio::runtime::Runtime,
     http: reqwest::Client,
     config: NotionConfig,
-    mapbox_access_token: Option<String>,
     last_request_at: Option<Instant>,
 }
 
@@ -290,7 +287,6 @@ impl<'a> NotionClient<'a> {
     fn new(
         runtime: &'a tokio::runtime::Runtime,
         config: NotionConfig,
-        mapbox_access_token: Option<String>,
     ) -> Result<Self, CommandError> {
         let http = runtime
             .block_on(async {
@@ -310,7 +306,6 @@ impl<'a> NotionClient<'a> {
             runtime,
             http,
             config,
-            mapbox_access_token,
             last_request_at: None,
         })
     }
@@ -332,7 +327,7 @@ impl<'a> NotionClient<'a> {
     fn create_page(&mut self, listing: &Listing) -> Result<String, CommandError> {
         let body = json!({
             "parent": { "database_id": self.config.database_id },
-            "properties": build_notion_properties(listing, self.mapbox_access_token.as_deref()),
+            "properties": build_notion_properties(listing),
         });
 
         let response = self.request_json(reqwest::Method::POST, "/pages", Some(body))?;
@@ -352,7 +347,7 @@ impl<'a> NotionClient<'a> {
 
     fn update_page(&mut self, page_id: &str, listing: &Listing) -> Result<(), CommandError> {
         let body = json!({
-            "properties": build_notion_properties(listing, self.mapbox_access_token.as_deref()),
+            "properties": build_notion_properties(listing),
         });
         self.request_json(
             reqwest::Method::PATCH,
@@ -463,7 +458,7 @@ impl<'a> NotionClient<'a> {
     }
 }
 
-fn build_notion_properties(listing: &Listing, mapbox_access_token: Option<&str>) -> Value {
+fn build_notion_properties(listing: &Listing) -> Value {
     let score = listing
         .assessed_score
         .or_else(|| listing.scores.as_ref().map(|scores| scores.overall));
@@ -486,12 +481,8 @@ fn build_notion_properties(listing: &Listing, mapbox_access_token: Option<&str>)
         .iter()
         .map(|image| image.remote.clone())
         .collect::<Vec<_>>();
-    if let (Some(satellite), Some(token)) = (
-        listing.map_views.satellite.remote.as_ref(),
-        mapbox_access_token,
-    ) {
-        let separator = if satellite.contains('?') { '&' } else { '?' };
-        image_urls.insert(0, format!("{satellite}{separator}access_token={token}"));
+    if let Some(satellite) = listing.map_views.satellite.remote.as_ref() {
+        image_urls.insert(0, satellite.clone());
     }
 
     json!({

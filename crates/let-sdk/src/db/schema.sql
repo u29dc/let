@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS listings (
     gigabit_availability REAL NULL,
     listed_date TEXT NULL,
     available_date TEXT NULL,
-    deposit REAL NULL,
+    deposit INTEGER NULL,
     agent_name TEXT NULL,
     agent_phone TEXT NULL,
     area_lsoa_code TEXT NULL,
@@ -171,6 +171,17 @@ CREATE TABLE IF NOT EXISTS scores (
     factor_pet_policy TEXT NOT NULL,
     factor_property_type TEXT NULL,
     factor_bedrooms INTEGER NOT NULL,
+    FOREIGN KEY (listing_id) REFERENCES listings(id) ON DELETE CASCADE
+);
+
+--------------------------------------------------------------------------------
+-- score_contexts: Scoring context metadata for each listing score
+--------------------------------------------------------------------------------
+-- Persists score config hash and percentile stats used when computing scores.
+
+CREATE TABLE IF NOT EXISTS score_contexts (
+    listing_id TEXT PRIMARY KEY,
+    context_json TEXT NOT NULL,
     FOREIGN KEY (listing_id) REFERENCES listings(id) ON DELETE CASCADE
 );
 

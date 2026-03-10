@@ -8,8 +8,8 @@ use csv::{ReaderBuilder, StringRecord};
 use crate::errors::{ErrorCode, LetError, Result};
 
 use super::common::{
-    download_file, extract_zip, find_column_index, find_first_matching_file, open_source_db,
-    to_i64, with_temp_dir,
+    download_file_checked, extract_zip, find_column_index, find_first_matching_file,
+    open_source_db, to_i64, verify_file_checksum_from_env, with_temp_dir,
 };
 
 const TS054_URL: &str = "https://www.nomisweb.co.uk/output/census/2021/census2021-ts054.zip";
@@ -242,12 +242,19 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
 fn resolve_input_zip_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
     if let Ok(local_path) = env::var("CENSUS_TS054_ZIP_PATH") {
-        return Ok(PathBuf::from(local_path));
+        let path = PathBuf::from(local_path);
+        verify_file_checksum_from_env(&path, &["CENSUS_TS054_ZIP_SHA256"], "census TS054 archive")?;
+        return Ok(path);
     }
 
     let zip_path = temp.path().join("census-ts054.zip");
     let url = env::var("CENSUS_TS054_ZIP_URL").unwrap_or_else(|_| TS054_URL.to_owned());
-    download_file(&url, &zip_path)?;
+    download_file_checked(
+        &url,
+        &zip_path,
+        &["CENSUS_TS054_ZIP_SHA256"],
+        "census TS054 archive",
+    )?;
     Ok(zip_path)
 }
 

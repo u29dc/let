@@ -3,10 +3,10 @@
 - Purpose: run `let` as an agent-native UK property search/scoring toolbelt with composable primitives.
 - Source priority: executable CLI contracts -> Rust code -> docs.
 - Runtime truth commands:
-    - `:let tools --json`
-    - `:let health --json`
-    - `:let config show --json`
-- JSON contract: in `--json` mode emit exactly one envelope object to stdout; logs go to stderr only.
+    - `:let tools`
+    - `:let health`
+    - `:let config show`
+- JSON contract: all commands except `build sources` emit exactly one envelope object to stdout; logs go to stderr only.
 - Skill entrypoint: `.claude/skills/let/SKILL.md`.
 - External APIs:
     - EPC: `https://epc.opendatacommunities.org/docs/api`
@@ -50,6 +50,7 @@
 | Quality  | cargo fmt/clippy/test/build | Required completion gates       |
 
 - Optional environment keys: `EPC_API_KEY`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `MAPBOX_ACCESS_TOKEN`.
+- Optional source integrity keys: `<SOURCE_INPUT>_SHA256` (for example `POSTCODES_ZIP_SHA256`) to enforce SHA-256 verification for local or downloaded source files.
 - Storage root: `$LET_HOME` (default `~/.tools/let`).
 
 ## 4. Commands
@@ -59,10 +60,11 @@
 - Agent entrypoint: `:let <command>`.
 - Dev entrypoint: `cargo run -q -p let-cli -- <command>`.
 - Source builds:
-    - `bun run build:all`
-    - `:let build sources list --json`
-    - `:let build sources <name> --json`
-    - `:let build sources all --jobs 3 --json`
+    - `bun run build:sources`
+    - `:let build sources list`
+    - `:let build sources <name>`
+    - `:let build sources all --jobs 3`
+    - Optional: set matching checksum env keys before build to enforce source integrity verification.
 
 - Infrastructure:
     - `let tools`
@@ -112,16 +114,16 @@
 
 ```bash
 bun run build
-:let tools --json
-:let health --json
-:let config show --json
-:let search discover --json
-:let search diff <id1>,<id2> --json
-:let fetch <id> --skip-images --json
-:let view list --json
-:let score explain <id> --json
-:let export json --json
-:let build sources naptan --json
+:let tools
+:let health
+:let config show
+:let search discover
+:let search diff <id1>,<id2>
+:let fetch <id> --skip-images
+:let view list
+:let score explain <id>
+:let export json
+:let build sources naptan
 ```
 
 - Risks to surface in outputs:

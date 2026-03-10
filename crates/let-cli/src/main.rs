@@ -18,10 +18,6 @@ use envelope::{ErrorEnvelope, ErrorPayload, Meta, SuccessEnvelope};
 #[derive(Debug, Parser)]
 #[command(name = "let", version, about = "Agent-native rental CLI")]
 struct Cli {
-    /// Emit one JSON envelope object on stdout.
-    #[arg(long, global = true)]
-    json: bool,
-
     /// Override data directory path.
     #[arg(long, value_name = "DIR", global = true)]
     data_dir: Option<PathBuf>,
@@ -444,6 +440,12 @@ enum DispatchOutcome {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputMode {
+    EnvelopeJson,
+    Text,
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -457,18 +459,18 @@ fn main() {
     };
 
     let started = Instant::now();
-    let outcome = dispatch(&cli.command, &shared, cli.json);
+    let outcome = dispatch(&cli.command, &shared);
 
     match outcome {
         DispatchOutcome::Local { tool, result } => {
             let elapsed = started.elapsed().as_millis() as u64;
-            let exit_code = emit(&result, tool, elapsed, cli.json);
+            let exit_code = emit(&result, tool, elapsed, output_mode_for_tool(tool));
             process::exit(exit_code);
         }
     }
 }
 
-fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> DispatchOutcome {
+fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
     match command {
         Command::Tools { name } => DispatchOutcome::Local {
             tool: "tools",
@@ -492,7 +494,7 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
         },
         Command::Start => DispatchOutcome::Local {
             tool: "start",
-            result: commands::start::run(json_mode),
+            result: commands::start::run(),
         },
         Command::Score {
             command: ScoreCommand::Compute,
@@ -776,7 +778,6 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                 (*target).into(),
                 *jobs,
                 shared,
-                json_mode,
                 (*progress).into(),
             ),
         },
@@ -812,7 +813,7 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                     result: Err(CommandError::runtime(
                         "VALIDATION_ERROR",
                         "missing command",
-                        "run `let tools --json` to list available commands",
+                        "run `let tools` to list available commands",
                     )),
                 }
             } else {
@@ -821,7 +822,7 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                     result: Err(CommandError::runtime(
                         "UNSUPPORTED_COMMAND",
                         format!("unsupported command: {}", args.join(" ")),
-                        "run `let tools --json` to list available commands",
+                        "run `let tools` to list available commands",
                     )),
                 }
             }
@@ -841,16 +842,28 @@ fn unsupported_external(group: &str, args: &[String]) -> DispatchOutcome {
         result: Err(CommandError::runtime(
             "UNSUPPORTED_COMMAND",
             detail,
-            "run `let tools --json` to list available commands",
+            "run `let tools` to list available commands",
         )),
     }
 }
 
-fn emit(result: &Result<CommandOutput, CommandError>, tool: &str, elapsed: u64, json: bool) -> i32 {
-    if json {
-        emit_json(result, tool, elapsed)
+fn output_mode_for_tool(tool: &str) -> OutputMode {
+    if tool == "build.sources" {
+        OutputMode::Text
     } else {
-        emit_text(result)
+        OutputMode::EnvelopeJson
+    }
+}
+
+fn emit(
+    result: &Result<CommandOutput, CommandError>,
+    tool: &str,
+    elapsed: u64,
+    mode: OutputMode,
+) -> i32 {
+    match mode {
+        OutputMode::EnvelopeJson => emit_json(result, tool, elapsed),
+        OutputMode::Text => emit_text(result),
     }
 }
 

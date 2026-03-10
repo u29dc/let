@@ -40,7 +40,7 @@ fn detail(name: &str) -> CommandResult {
         return Err(CommandError::runtime(
             "NOT_FOUND",
             format!("tool `{name}` not found"),
-            "run `let tools --json` to list valid tool names",
+            "run `let tools` to list valid tool names",
         ));
     };
 

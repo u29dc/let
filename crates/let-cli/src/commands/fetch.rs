@@ -12,9 +12,9 @@ use let_sdk::pipeline::fetch::rightmove::{
 };
 use let_sdk::pipeline::fetch::{carry_over_persistent_fields, is_newer_listing};
 use let_sdk::pipeline::geocode::{GeocodeSource, GeocodedCoordinates, mapbox_forward_geocode};
-use let_sdk::schema::listing::{Listing, MapViews, PinType};
+use let_sdk::schema::listing::{Listing, ListingsFile, MapViews, PinType};
 use let_sdk::{
-    DbMeta, EnrichmentMode, SourceEnricher, load_listings_file, recalc_assessed_scores,
+    DbMeta, EnrichmentMode, ErrorCode, SourceEnricher, load_listings_file, recalc_assessed_scores,
     score_listings_with_config, upsert_listings,
 };
 use serde::Serialize;
@@ -116,8 +116,6 @@ struct FetchOutput {
     override_fields: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     coordinate_resolution: Option<CoordinateResolution>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    save_error: Option<String>,
 }
 
 pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
@@ -134,7 +132,17 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let config = load_config(Some(&paths.derived.config_file))?;
     let db_path = paths.derived.database;
-    let existing = load_listings_file(&db_path)?;
+    let existing = match load_listings_file(&db_path) {
+        Ok(data) => data,
+        Err(error) if error.code == ErrorCode::NotFound => ListingsFile {
+            updated_at: let_sdk::utils::time::now_iso(),
+            search_urls: Vec::new(),
+            locations: Vec::new(),
+            last_search_total: 0,
+            listings: Vec::new(),
+        },
+        Err(error) => return Err(error.into()),
+    };
     let source_enricher = SourceEnricher::open(&paths.resolved.sources)?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -429,7 +437,7 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
         .cloned()
         .collect::<Vec<_>>();
 
-    let save_error = upsert_listings(
+    upsert_listings(
         &db_path,
         &truly_new,
         &updated,
@@ -441,8 +449,13 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
         &existing.search_urls,
         &existing.locations,
     )
-    .err()
-    .map(|error| error.to_string());
+    .map_err(|error| {
+        CommandError::runtime(
+            "DB_ERROR",
+            format!("failed to persist fetched listings: {error}"),
+            "check database integrity, restore from backup if needed, and retry",
+        )
+    })?;
 
     let payload = FetchOutput {
         fetched,
@@ -472,7 +485,6 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
         override_applied: fetch_override.as_ref().map(|_| true),
         override_fields: fetch_override_fields(fetch_override.as_ref()),
         coordinate_resolution: coord_resolution,
-        save_error,
     };
 
     Ok(CommandOutput::new(crate::commands::to_camel_json(&payload))

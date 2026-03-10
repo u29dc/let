@@ -4,9 +4,9 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
-use crate::{LetError, Result};
+use crate::{ErrorCode, LetError, Result};
 
 mod repository;
 
@@ -30,6 +30,23 @@ pub fn open_listings_db(path: impl AsRef<Path>) -> Result<Connection> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
     init_schema(&connection)?;
+
+    Ok(connection)
+}
+
+pub fn open_listings_db_readonly(path: impl AsRef<Path>) -> Result<Connection> {
+    let path = path.as_ref();
+    if !path.exists() {
+        return Err(LetError::new(
+            ErrorCode::NotFound,
+            format!("listings database not found at {}", path.display()),
+            "run `let fetch <id>` to create and populate the listings database",
+        ));
+    }
+
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
 
     Ok(connection)
 }

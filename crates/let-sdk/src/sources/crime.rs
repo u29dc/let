@@ -9,8 +9,8 @@ use csv::{ReaderBuilder, StringRecord};
 use crate::errors::{ErrorCode, LetError, Result};
 
 use super::common::{
-    collect_matching_files, download_file, extract_zip, find_column_index, open_source_db,
-    with_temp_dir,
+    collect_matching_files, download_file_checked, extract_zip, find_column_index, open_source_db,
+    verify_file_checksum_from_env, with_temp_dir,
 };
 
 const CRIME_ZIP_URL: &str = "https://data.police.uk/data/archive/latest.zip";
@@ -254,12 +254,19 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
 fn resolve_archive_path() -> Result<(PathBuf, Option<tempfile::TempDir>)> {
     if let Ok(local_path) = env::var("CRIME_ARCHIVE_PATH") {
-        return Ok((PathBuf::from(local_path), None));
+        let path = PathBuf::from(local_path);
+        verify_file_checksum_from_env(&path, &["CRIME_ARCHIVE_SHA256"], "crime archive")?;
+        return Ok((path, None));
     }
 
     let temp = with_temp_dir()?;
     let zip_path = temp.path().join("crime-latest.zip");
-    download_file(CRIME_ZIP_URL, &zip_path)?;
+    download_file_checked(
+        CRIME_ZIP_URL,
+        &zip_path,
+        &["CRIME_ARCHIVE_SHA256"],
+        "crime archive",
+    )?;
     Ok((zip_path, Some(temp)))
 }
 

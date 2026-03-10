@@ -116,11 +116,7 @@ impl Fixture {
 #[test]
 fn tools_json_returns_catalog() {
     let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["--json", "tools"])
-        .output()
-        .expect("run tools");
+    let output = fixture.cmd().args(["tools"]).output().expect("run tools");
     assert_eq!(output.status.code(), Some(0));
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
@@ -133,7 +129,7 @@ fn view_list_json_reads_seeded_listing() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
-        .args(["--json", "view", "list", "--top", "5"])
+        .args(["view", "list", "--top", "5"])
         .output()
         .expect("run view list");
     assert_eq!(output.status.code(), Some(0));
@@ -148,7 +144,7 @@ fn search_diff_marks_known_and_new_ids() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
-        .args(["--json", "search", "diff", "165432101,999999999"])
+        .args(["search", "diff", "165432101,999999999"])
         .output()
         .expect("run search diff");
     assert_eq!(output.status.code(), Some(0));
@@ -165,15 +161,7 @@ fn prune_dry_run_does_not_mutate_database() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
-        .args([
-            "--json",
-            "ops",
-            "prune",
-            "--min-score",
-            "90",
-            "--dry-run",
-            "--force",
-        ])
+        .args(["ops", "prune", "--min-score", "90", "--dry-run", "--force"])
         .output()
         .expect("run prune dry-run");
     assert_eq!(output.status.code(), Some(0));
@@ -191,7 +179,7 @@ fn fetch_with_empty_ids_returns_validation_error() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
-        .args(["--json", "fetch", ",,,"])
+        .args(["fetch", ",,,"])
         .output()
         .expect("run fetch");
     assert_eq!(output.status.code(), Some(1));
@@ -210,7 +198,6 @@ fn ops_patch_re_enriches_from_sources_by_default() {
     let output = fixture
         .cmd()
         .args([
-            "--json",
             "ops",
             "patch",
             "165432101",
@@ -250,7 +237,6 @@ fn ops_patch_skip_re_enrich_keeps_source_fields_untouched() {
     let output = fixture
         .cmd()
         .args([
-            "--json",
             "ops",
             "patch",
             "165432101",
@@ -273,6 +259,59 @@ fn ops_patch_skip_re_enrich_keeps_source_fields_untouched() {
     assert_eq!(listing.gigabit_availability, None);
     assert_eq!(listing.area.lsoa.code, None);
     assert_eq!(listing.area.msoa.code, None);
+}
+
+#[test]
+fn global_json_flag_is_rejected() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["--json", "tools"])
+        .output()
+        .expect("run tools with removed flag");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument '--json'"),
+        "expected clap to reject removed flag, got: {stderr}"
+    );
+}
+
+#[test]
+fn build_sources_list_uses_text_output_mode() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["build", "sources", "list"])
+        .output()
+        .expect("run build sources list");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).is_err(),
+        "build sources list should use text/progress output mode"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("available sources listed"),
+        "expected text summary output, got: {stdout}"
+    );
+}
+
+#[test]
+fn prune_requires_force_in_non_interactive_mode() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["ops", "prune", "--min-score", "90"])
+        .output()
+        .expect("run prune without force");
+
+    assert_eq!(output.status.code(), Some(1));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
 }
 
 fn seed_minimal_sources(sources_dir: &Path) {

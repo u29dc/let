@@ -9,8 +9,8 @@ use csv::{ReaderBuilder, StringRecord};
 use crate::errors::{ErrorCode, LetError, Result};
 
 use super::common::{
-    download_file, download_file_with_headers, find_column_index, open_source_db, to_f64, to_i64,
-    with_temp_dir,
+    download_file_checked, download_file_with_integrity, find_column_index, open_source_db, to_f64,
+    to_i64, verify_file_checksum_from_env, with_temp_dir,
 };
 
 const INCOME_XLSX_URL: &str =
@@ -77,13 +77,15 @@ pub fn build(db_path: &Path) -> Result<usize> {
 
 fn resolve_input_xlsx_path() -> Result<(PathBuf, Option<tempfile::TempDir>)> {
     if let Ok(local_path) = env::var("INCOME_XLSX_PATH") {
-        return Ok((PathBuf::from(local_path), None));
+        let path = PathBuf::from(local_path);
+        verify_file_checksum_from_env(&path, &["INCOME_XLSX_SHA256"], "income workbook")?;
+        return Ok((path, None));
     }
 
     let temp = with_temp_dir()?;
     let xlsx_path = temp.path().join("income.xlsx");
     let download_url = env::var("INCOME_XLSX_URL").unwrap_or_else(|_| INCOME_XLSX_URL.to_owned());
-    download_file_with_headers(
+    download_file_with_integrity(
         &download_url,
         &xlsx_path,
         &[
@@ -93,6 +95,8 @@ fn resolve_input_xlsx_path() -> Result<(PathBuf, Option<tempfile::TempDir>)> {
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             ),
         ],
+        &["INCOME_XLSX_SHA256"],
+        "income workbook",
     )?;
 
     Ok((xlsx_path, Some(temp)))
@@ -100,12 +104,19 @@ fn resolve_input_xlsx_path() -> Result<(PathBuf, Option<tempfile::TempDir>)> {
 
 fn resolve_imd_csv_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
     if let Ok(local_path) = env::var("INCOME_IMD_CSV_PATH") {
-        return Ok(PathBuf::from(local_path));
+        let path = PathBuf::from(local_path);
+        verify_file_checksum_from_env(&path, &["INCOME_IMD_CSV_SHA256"], "income IMD CSV")?;
+        return Ok(path);
     }
 
     let csv_path = temp.path().join("imd-income.csv");
     let url = env::var("INCOME_IMD_CSV_URL").unwrap_or_else(|_| IMD_CSV_URL.to_owned());
-    download_file(&url, &csv_path)?;
+    download_file_checked(
+        &url,
+        &csv_path,
+        &["INCOME_IMD_CSV_SHA256"],
+        "income IMD CSV",
+    )?;
     Ok(csv_path)
 }
 

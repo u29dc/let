@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use chrono::NaiveDate;
@@ -2067,13 +2067,12 @@ fn select_prune_ids(
             .collect::<Vec<_>>();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
-        let cutoff_idx = ((scored.len() as f64) * (percent as f64 / 100.0)).floor() as usize;
-        let clamped_idx = cutoff_idx.min(scored.len().saturating_sub(1));
-        let cutoff = scored.get(clamped_idx).map_or(0.0, |item| item.1);
+        let target_count = ((scored.len() as f64) * (percent as f64 / 100.0)).floor() as usize;
+        let target_count = target_count.min(scored.len());
 
         let ids = scored
             .into_iter()
-            .filter(|(_, score)| *score < cutoff)
+            .take(target_count)
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
         let mode = if region_patterns.is_empty() {
@@ -2141,11 +2140,19 @@ fn matches_region(region: Option<&str>, patterns: &[String]) -> bool {
 }
 
 fn confirm_delete(count: usize) -> Result<bool, CommandError> {
-    print!("Remove {count} listing(s)? (y/N) ");
-    io::stdout().flush().map_err(|error| {
+    if !io::stdin().is_terminal() {
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            "confirmation prompt requires interactive terminal input",
+            "rerun with --force to skip prompt in non-interactive mode",
+        ));
+    }
+
+    eprint!("Remove {count} listing(s)? (y/N) ");
+    io::stderr().flush().map_err(|error| {
         CommandError::runtime(
             "IO_ERROR",
-            format!("failed to flush stdout for confirmation: {error}"),
+            format!("failed to flush stderr for confirmation: {error}"),
             "retry with --force to skip prompt",
         )
     })?;
@@ -2200,9 +2207,17 @@ fn verify_one_listing(
                 };
             }
 
-            let html = runtime
-                .block_on(async { resp.text().await })
-                .unwrap_or_default();
+            let html = match runtime.block_on(async { resp.text().await }) {
+                Ok(body) => body,
+                Err(error) => {
+                    return VerifyResult {
+                        id: listing.id.clone(),
+                        rightmove_id,
+                        status: "active".to_owned(),
+                        error: Some(format!("failed to read response body: {error}")),
+                    };
+                }
+            };
             let status_value = if detect_inactive_html(&html) {
                 "inactive"
             } else {
