@@ -59,6 +59,7 @@
 - Agent entrypoint: `:let <command>`.
 - Dev entrypoint: `cargo run -q -p let-cli -- <command>`.
 - Source builds:
+    - `bun run build:all`
     - `:let build sources list --json`
     - `:let build sources <name> --json`
     - `:let build sources all --jobs 3 --json`
