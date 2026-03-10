@@ -309,6 +309,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                         "mediaSummary",
                         "overrideApplied",
                         "overrideFields",
+                        "coordinateResolution",
                         "saveError",
                     ],
                     false,

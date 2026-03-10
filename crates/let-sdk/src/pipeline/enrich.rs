@@ -63,6 +63,12 @@ struct PostcodeLookup {
 }
 
 #[derive(Debug, Clone)]
+pub struct PostcodeCoordinates {
+    pub lat: f64,
+    pub lng: f64,
+}
+
+#[derive(Debug, Clone)]
 struct FloodLookup {
     level: Option<String>,
     source: Option<String>,
@@ -376,6 +382,16 @@ impl SourceEnricher {
             unavailable_sources: self.unavailable_sources.clone(),
         })
     }
+
+    pub fn lookup_postcode_coordinates(
+        &self,
+        postcode: &str,
+    ) -> Result<Option<PostcodeCoordinates>> {
+        let Some(connection) = self.postcodes.as_ref() else {
+            return Ok(None);
+        };
+        query_postcode_coordinates(connection, postcode)
+    }
 }
 
 fn open_optional_source_db(
@@ -424,6 +440,32 @@ fn query_postcode_lookup(
             },
         )
         .optional()
+        .map_err(Into::into)
+}
+
+fn query_postcode_coordinates(
+    connection: &Connection,
+    postcode: &str,
+) -> Result<Option<PostcodeCoordinates>> {
+    connection
+        .query_row(
+            "SELECT lat, lng FROM postcodes
+             WHERE postcode = ?1 OR REPLACE(postcode_display, ' ', '') = ?1
+             LIMIT 1",
+            params![postcode],
+            |row| {
+                let lat: Option<f64> = row.get(0)?;
+                let lng: Option<f64> = row.get(1)?;
+                Ok(match (lat, lng) {
+                    (Some(lat), Some(lng)) if !(lat == 0.0 && lng == 0.0) => {
+                        Some(PostcodeCoordinates { lat, lng })
+                    }
+                    _ => None,
+                })
+            },
+        )
+        .optional()
+        .map(|value| value.flatten())
         .map_err(Into::into)
 }
 
@@ -770,13 +812,15 @@ mod tests {
                 CREATE TABLE postcodes (
                     postcode TEXT PRIMARY KEY,
                     postcode_display TEXT,
+                    lat REAL,
+                    lng REAL,
                     lsoa_code TEXT,
                     lsoa_name TEXT,
                     msoa_code TEXT,
                     msoa_name TEXT
                 );
-                INSERT INTO postcodes (postcode, postcode_display, lsoa_code, lsoa_name, msoa_code, msoa_name)
-                VALUES ('AA11AA', 'AA1 1AA', 'LSOA001', 'LSOA One', 'MSOA001', 'MSOA One');
+                INSERT INTO postcodes (postcode, postcode_display, lat, lng, lsoa_code, lsoa_name, msoa_code, msoa_name)
+                VALUES ('AA11AA', 'AA1 1AA', 51.5074, -0.1278, 'LSOA001', 'LSOA One', 'MSOA001', 'MSOA One');
                 ",
             )
             .expect("seed postcodes");
@@ -908,6 +952,32 @@ mod tests {
                 ",
             )
             .expect("seed crime");
+    }
+
+    #[test]
+    fn lookup_postcode_coordinates_returns_lat_lng() {
+        let temp = build_test_sources();
+        let enricher = SourceEnricher::open(temp.path()).expect("open enricher");
+
+        let result = enricher
+            .lookup_postcode_coordinates("AA11AA")
+            .expect("query should succeed");
+
+        let coords = result.expect("should find coordinates");
+        assert!((coords.lat - 51.5074).abs() < 0.001);
+        assert!((coords.lng - (-0.1278)).abs() < 0.001);
+    }
+
+    #[test]
+    fn lookup_postcode_coordinates_returns_none_for_unknown() {
+        let temp = build_test_sources();
+        let enricher = SourceEnricher::open(temp.path()).expect("open enricher");
+
+        let result = enricher
+            .lookup_postcode_coordinates("ZZ99ZZ")
+            .expect("query should succeed");
+
+        assert!(result.is_none());
     }
 
     fn sample_listing(postcode: &str) -> Listing {

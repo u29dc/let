@@ -11,7 +11,8 @@ use let_sdk::pipeline::fetch::rightmove::{
     build_google_maps_street_view_url, build_google_maps_url, fetch_listing,
 };
 use let_sdk::pipeline::fetch::{carry_over_persistent_fields, is_newer_listing};
-use let_sdk::schema::listing::Listing;
+use let_sdk::pipeline::geocode::{GeocodeSource, GeocodedCoordinates, mapbox_forward_geocode};
+use let_sdk::schema::listing::{Listing, MapViews, PinType};
 use let_sdk::{
     DbMeta, EnrichmentMode, SourceEnricher, load_listings_file, recalc_assessed_scores,
     score_listings_with_config, upsert_listings,
@@ -37,6 +38,17 @@ pub struct FetchParams {
 struct FetchOverride {
     postcode: Option<String>,
     address: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoordinateResolution {
+    source: String,
+    coords_changed: bool,
+    lat: f64,
+    lng: f64,
+    original_lat: f64,
+    original_lng: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +115,8 @@ struct FetchOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     override_fields: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    coordinate_resolution: Option<CoordinateResolution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     save_error: Option<String>,
 }
 
@@ -150,9 +164,14 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
             )
         })?;
 
+    let mapbox_token = resolve_env_var("MAPBOX_ACCESS_TOKEN", &paths.derived.env_file)
+        .map(|(token, _)| token)
+        .filter(|token| !token.trim().is_empty());
+
     let mut fetched = Vec::new();
     let mut failed = Vec::new();
     let mut fetched_listings = Vec::new();
+    let mut coord_resolution: Option<CoordinateResolution> = None;
 
     for (index, portal_id) in input_ids.iter().enumerate() {
         match fetch_listing(
@@ -166,6 +185,66 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
             Ok(mut listing) => {
                 if let Some(override_input) = fetch_override.as_ref() {
                     apply_fetch_override(&mut listing, override_input);
+
+                    let original_lat = listing.location.lat;
+                    let original_lng = listing.location.lng;
+
+                    let resolved = resolve_override_coordinates(
+                        override_input,
+                        &source_enricher,
+                        &runtime,
+                        &client,
+                        mapbox_token.as_deref(),
+                    );
+
+                    match resolved {
+                        Some(coords) => {
+                            let changed = (coords.lat - original_lat).abs() > 1e-6
+                                || (coords.lng - original_lng).abs() > 1e-6;
+
+                            if changed {
+                                listing.location.lat = coords.lat;
+                                listing.location.lng = coords.lng;
+                                listing.location.pin_type = Some(PinType::ApproximatePoint);
+
+                                listing.google_maps_url = build_google_maps_url(
+                                    listing.location.lat,
+                                    listing.location.lng,
+                                    &listing.address,
+                                    &listing.postcode,
+                                );
+                                listing.google_maps_street_view_url =
+                                    build_google_maps_street_view_url(
+                                        listing.location.lat,
+                                        listing.location.lng,
+                                    );
+
+                                listing.map_views = MapViews::default();
+                            }
+
+                            coord_resolution = Some(CoordinateResolution {
+                                source: coords.source.as_str().to_owned(),
+                                coords_changed: changed,
+                                lat: coords.lat,
+                                lng: coords.lng,
+                                original_lat,
+                                original_lng,
+                            });
+                        }
+                        None => {
+                            eprintln!(
+                                "[fetch] coordinate resolution failed for override, keeping original coords"
+                            );
+                            coord_resolution = Some(CoordinateResolution {
+                                source: GeocodeSource::FallbackOriginal.as_str().to_owned(),
+                                coords_changed: false,
+                                lat: original_lat,
+                                lng: original_lng,
+                                original_lat,
+                                original_lng,
+                            });
+                        }
+                    }
                 }
 
                 let enrichment = source_enricher
@@ -277,10 +356,6 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
             .map(|(index, _)| index)
             .collect::<Vec<_>>()
     };
-
-    let mapbox_token = resolve_env_var("MAPBOX_ACCESS_TOKEN", &paths.derived.env_file)
-        .map(|(token, _)| token)
-        .filter(|token| !token.trim().is_empty());
 
     let mut media_stats_total = MediaStageStats::default();
     let mut media_portal_ids = HashSet::new();
@@ -396,6 +471,7 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
         },
         override_applied: fetch_override.as_ref().map(|_| true),
         override_fields: fetch_override_fields(fetch_override.as_ref()),
+        coordinate_resolution: coord_resolution,
         save_error,
     };
 
@@ -517,6 +593,51 @@ fn canonicalize_postcode(raw: &str) -> String {
     }
     let split = compact.len() - 3;
     format!("{} {}", &compact[..split], &compact[split..])
+}
+
+fn resolve_override_coordinates(
+    override_input: &FetchOverride,
+    source_enricher: &SourceEnricher,
+    runtime: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    mapbox_token: Option<&str>,
+) -> Option<GeocodedCoordinates> {
+    if let Some(postcode) = override_input.postcode.as_ref() {
+        let normalized = let_sdk::utils::text::normalize_postcode(postcode);
+        if !normalized.is_empty()
+            && let Ok(Some(coords)) = source_enricher.lookup_postcode_coordinates(&normalized)
+        {
+            return Some(GeocodedCoordinates {
+                lat: coords.lat,
+                lng: coords.lng,
+                source: GeocodeSource::PostcodesDb,
+            });
+        }
+    }
+
+    if let Some(token) = mapbox_token {
+        let query = match (
+            override_input.address.as_ref(),
+            override_input.postcode.as_ref(),
+        ) {
+            (Some(address), Some(postcode)) => format!("{address}, {postcode}"),
+            (Some(address), None) => address.clone(),
+            (None, Some(postcode)) => postcode.clone(),
+            (None, None) => return None,
+        };
+
+        match runtime.block_on(mapbox_forward_geocode(client, &query, token)) {
+            Ok(Some(coords)) => return Some(coords),
+            Ok(None) => {
+                eprintln!("[fetch] mapbox geocode returned no results for {query:?}");
+            }
+            Err(err) => {
+                eprintln!("[fetch] mapbox geocode error: {err}");
+            }
+        }
+    }
+
+    None
 }
 
 fn deduplicate_listings(listings: Vec<Listing>) -> Vec<Listing> {
