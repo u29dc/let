@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::Path;
+use std::{env, path::PathBuf};
 
 use csv::{ReaderBuilder, StringRecord};
 
@@ -12,8 +13,7 @@ const NAPTAN_CSV_URL: &str = "https://naptan.api.dft.gov.uk/v1/access-nodes?data
 
 pub fn build(db_path: &Path) -> Result<usize> {
     let temp = with_temp_dir()?;
-    let csv_path = temp.path().join("naptan.csv");
-    download_file(NAPTAN_CSV_URL, &csv_path)?;
+    let csv_path = resolve_input_csv_path(&temp)?;
 
     let mut reader = ReaderBuilder::new()
         .has_headers(true)
@@ -113,6 +113,17 @@ pub fn build(db_path: &Path) -> Result<usize> {
     connection.execute_batch("VACUUM; ANALYZE;")?;
 
     Ok(inserted)
+}
+
+fn resolve_input_csv_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
+    if let Ok(local_path) = env::var("NAPTAN_CSV_PATH") {
+        return Ok(PathBuf::from(local_path));
+    }
+
+    let csv_path = temp.path().join("naptan.csv");
+    let url = env::var("NAPTAN_CSV_URL").unwrap_or_else(|_| NAPTAN_CSV_URL.to_owned());
+    download_file(&url, &csv_path)?;
+    Ok(csv_path)
 }
 
 fn cell(row: &StringRecord, idx: usize) -> Option<&str> {

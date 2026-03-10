@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::Path;
+use std::{env, path::PathBuf};
 
 use csv::{ReaderBuilder, StringRecord};
 
@@ -16,10 +17,9 @@ const UPRN_ZIP_URL: &str =
 
 pub fn build(db_path: &Path) -> Result<usize> {
     let temp = with_temp_dir()?;
-    let zip_path = temp.path().join("uprn.zip");
+    let zip_path = resolve_input_zip_path(&temp)?;
     let extract_dir = temp.path().join("extract");
 
-    download_file(UPRN_ZIP_URL, &zip_path)?;
     extract_zip(&zip_path, &extract_dir)?;
 
     let csv_path = find_first_matching_file(&extract_dir, &|path| {
@@ -116,6 +116,17 @@ pub fn build(db_path: &Path) -> Result<usize> {
     connection.execute_batch("VACUUM; ANALYZE;")?;
 
     Ok(inserted)
+}
+
+fn resolve_input_zip_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
+    if let Ok(local_path) = env::var("UPRN_ZIP_PATH") {
+        return Ok(PathBuf::from(local_path));
+    }
+
+    let zip_path = temp.path().join("uprn.zip");
+    let download_url = env::var("UPRN_ZIP_URL").unwrap_or_else(|_| UPRN_ZIP_URL.to_owned());
+    download_file(&download_url, &zip_path)?;
+    Ok(zip_path)
 }
 
 fn cell(row: &StringRecord, idx: usize) -> Option<&str> {

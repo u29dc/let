@@ -1,14 +1,15 @@
 #![forbid(unsafe_code)]
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::time::Duration;
 
 use chrono::NaiveDate;
 use let_sdk::schema::listing::{CrimeBand, CrimeTrend, EpcBand, Listing, ListingStatus};
 use let_sdk::{
-    DbMeta, close_listings_db, load_listings_file, open_listings_db, recalc_assessed_scores,
-    score_listings_with_config, upsert_listings,
+    DbMeta, EnrichmentMode, SourceEnricher, close_listings_db, load_listings_file,
+    open_listings_db, recalc_assessed_scores, score_listings_with_config, upsert_listings,
 };
 use rusqlite::{params, params_from_iter};
 use serde_json::{Map, Value, json};
@@ -258,6 +259,8 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
             "id": listing_id,
             "applied": {},
             "reEnriched": [],
+            "reEnrichMissing": [],
+            "reEnrichUnavailableSources": [],
             "rescored": data.listings.len(),
             "previousScore": previous_score,
             "newScore": previous_score,
@@ -266,6 +269,35 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
             "skipImages": params.skip_images,
         }))
         .with_text("no changes needed"));
+    }
+
+    let mut re_enriched = Vec::new();
+    let mut re_enrich_missing = Vec::new();
+    let mut re_enrich_unavailable_sources = Vec::new();
+    if !params.skip_re_enrich {
+        let source_enricher = SourceEnricher::open(&paths.resolved.sources)?;
+        let applied_keys = applied.keys().cloned().collect::<HashSet<_>>();
+        let report = {
+            let listing = data
+                .listings
+                .get_mut(index)
+                .expect("listing index should be valid");
+            let report =
+                source_enricher.enrich_listing(listing, EnrichmentMode::ReplaceFromSources)?;
+            // Re-apply manual patch values so explicit user edits always win in this invocation.
+            let mut restored = serde_json::Map::new();
+            apply_update_to_listing(listing, &update, &mut restored);
+            report
+        };
+        re_enriched = report
+            .applied_fields
+            .into_iter()
+            .filter(|field| !applied_keys.contains(field))
+            .collect::<Vec<_>>();
+        re_enriched.sort();
+        re_enriched.dedup();
+        re_enrich_missing = report.missing_categories;
+        re_enrich_unavailable_sources = report.unavailable_sources;
     }
 
     let config = let_sdk::config::load_config(Some(&config_path))?;
@@ -294,7 +326,9 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
     Ok(CommandOutput::new(json!({
         "id": listing_id,
         "applied": serde_json::Value::Object(applied),
-        "reEnriched": [],
+        "reEnriched": re_enriched,
+        "reEnrichMissing": re_enrich_missing,
+        "reEnrichUnavailableSources": re_enrich_unavailable_sources,
         "rescored": rescored.len(),
         "previousScore": previous_score,
         "newScore": new_score,

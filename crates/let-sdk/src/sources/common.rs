@@ -1,18 +1,34 @@
 #![forbid(unsafe_code)]
 
+use std::env;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
+use chrono::Utc;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rusqlite::Connection;
 use tempfile::{TempDir, tempdir};
-use url::Url;
+use uuid::Uuid;
 use zip::ZipArchive;
 
 use crate::errors::{ErrorCode, LetError, Result};
+
+const DOWNLOAD_ATTEMPTS: usize = 3;
+const DOWNLOAD_RETRY_BASE_MS: u64 = 750;
+
+#[derive(Debug, Clone)]
+pub struct SourceInputDescriptor {
+    pub source_id: &'static str,
+    pub source_url: Option<&'static str>,
+    pub override_envs: &'static [&'static str],
+    pub declared_version: Option<&'static str>,
+    pub notes: Option<&'static str>,
+}
 
 pub fn ensure_parent_dir(path: &Path) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
@@ -49,6 +65,8 @@ pub fn recreate_file(path: &Path) -> Result<()> {
 pub fn http_client() -> Result<Client> {
     reqwest::blocking::Client::builder()
         .user_agent("let-source-builder/0.1")
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(900))
         .build()
         .map_err(|error| {
             LetError::new(
@@ -69,6 +87,33 @@ pub fn download_file_with_headers(
     headers: &[(&str, &str)],
 ) -> Result<()> {
     ensure_parent_dir(destination)?;
+    let mut last_error: Option<LetError> = None;
+
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        match download_file_once(url, destination, headers) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt == DOWNLOAD_ATTEMPTS {
+                    break;
+                }
+
+                let backoff_ms = DOWNLOAD_RETRY_BASE_MS * (1_u64 << (attempt - 1));
+                thread::sleep(Duration::from_millis(backoff_ms));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        LetError::new(
+            ErrorCode::Network,
+            format!("download failed for `{url}` with unknown error"),
+            "retry source build command",
+        )
+    }))
+}
+
+fn download_file_once(url: &str, destination: &Path, headers: &[(&str, &str)]) -> Result<()> {
     let client = http_client()?;
 
     let mut header_map = HeaderMap::new();
@@ -143,7 +188,9 @@ pub fn download_file_with_headers(
             ),
             "check disk health and retry",
         )
-    })
+    })?;
+
+    Ok(())
 }
 
 pub fn extract_zip(zip_path: &Path, destination: &Path) -> Result<()> {
@@ -267,6 +314,179 @@ pub fn open_source_db(path: &Path) -> Result<Connection> {
         })?;
 
     Ok(connection)
+}
+
+pub fn temp_db_path_for(source_name: &str, final_path: &Path) -> Result<PathBuf> {
+    ensure_parent_dir(final_path)?;
+    let parent = final_path.parent().ok_or_else(|| {
+        LetError::new(
+            ErrorCode::Internal,
+            format!(
+                "missing parent directory for path: {}",
+                final_path.display()
+            ),
+            "verify source database path configuration",
+        )
+    })?;
+
+    Ok(parent.join(format!(".{source_name}.{}.tmp.db", Uuid::new_v4())))
+}
+
+pub fn replace_file_atomically(temp_path: &Path, final_path: &Path) -> Result<()> {
+    ensure_parent_dir(final_path)?;
+    if final_path.exists() {
+        fs::remove_file(final_path).map_err(|error| {
+            LetError::new(
+                ErrorCode::Internal,
+                format!(
+                    "failed to remove existing file {}: {error}",
+                    final_path.display()
+                ),
+                "close active file handles and retry",
+            )
+        })?;
+    }
+
+    fs::rename(temp_path, final_path).map_err(|error| {
+        LetError::new(
+            ErrorCode::Internal,
+            format!(
+                "failed to replace {} with {}: {error}",
+                final_path.display(),
+                temp_path.display(),
+            ),
+            "ensure sources directory is writable and retry",
+        )
+    })
+}
+
+pub fn remove_file_if_exists(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(path).map_err(|error| {
+        LetError::new(
+            ErrorCode::Internal,
+            format!("failed to remove file {}: {error}", path.display()),
+            "close active file handles and retry",
+        )
+    })
+}
+
+pub fn write_source_metadata(
+    db_path: &Path,
+    source_name: &str,
+    rows: usize,
+    inputs: &[SourceInputDescriptor],
+) -> Result<()> {
+    let connection = Connection::open(db_path).map_err(|error| {
+        LetError::new(
+            ErrorCode::SchemaMismatch,
+            format!(
+                "failed to open source database {} for metadata write: {error}",
+                db_path.display()
+            ),
+            "verify sqlite setup and path permissions",
+        )
+    })?;
+
+    connection.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS source_runs (
+            run_id TEXT PRIMARY KEY,
+            source_name TEXT NOT NULL,
+            built_at TEXT NOT NULL,
+            rows_written INTEGER NOT NULL,
+            tool_version TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS source_inputs (
+            run_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_url TEXT,
+            local_path TEXT,
+            resolved_input TEXT,
+            declared_version TEXT,
+            downloaded_at TEXT NOT NULL,
+            notes TEXT,
+            PRIMARY KEY (run_id, source_id),
+            FOREIGN KEY (run_id) REFERENCES source_runs(run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_source_inputs_source_id ON source_inputs(source_id);
+        ",
+    )?;
+
+    let run_id = Uuid::new_v4().to_string();
+    let built_at = Utc::now().to_rfc3339();
+    connection.execute(
+        "
+        INSERT INTO source_runs (run_id, source_name, built_at, rows_written, tool_version)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        ",
+        rusqlite::params![
+            run_id,
+            source_name,
+            built_at,
+            rows as i64,
+            env!("CARGO_PKG_VERSION"),
+        ],
+    )?;
+
+    let mut insert_input = connection.prepare(
+        "
+        INSERT INTO source_inputs (
+            run_id, source_id, source_url, local_path, resolved_input,
+            declared_version, downloaded_at, notes
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        ",
+    )?;
+
+    for descriptor in inputs {
+        let (resolved_input, source_url, local_path) = resolve_source_input(descriptor);
+        insert_input.execute(rusqlite::params![
+            run_id,
+            descriptor.source_id,
+            source_url,
+            local_path,
+            resolved_input,
+            descriptor.declared_version,
+            built_at,
+            descriptor.notes,
+        ])?;
+    }
+
+    Ok(())
+}
+
+fn resolve_source_input(
+    descriptor: &SourceInputDescriptor,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let override_value = descriptor
+        .override_envs
+        .iter()
+        .find_map(|key| env::var(key).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    let resolved_input = override_value
+        .clone()
+        .or_else(|| descriptor.source_url.map(str::to_owned));
+    let source_url = resolved_input
+        .as_ref()
+        .filter(|value| is_http_url(value))
+        .cloned();
+    let local_path = resolved_input
+        .as_ref()
+        .filter(|value| !is_http_url(value))
+        .cloned();
+
+    (resolved_input, source_url, local_path)
+}
+
+fn is_http_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
 }
 
 pub fn find_first_matching_file<F>(root: &Path, predicate: &F) -> Result<Option<PathBuf>>
@@ -400,44 +620,4 @@ pub fn find_column_index(headers: &[String], patterns: &[&str]) -> Option<usize>
         }
     }
     None
-}
-
-pub fn check_sas_expiry(url: &str, source_name: &str) -> Result<()> {
-    let parsed = Url::parse(url).map_err(|error| {
-        LetError::new(
-            ErrorCode::InvalidInput,
-            format!("invalid URL for {source_name}: {error}"),
-            "verify source override URL format",
-        )
-    })?;
-
-    let Some(expiry_raw) = parsed
-        .query_pairs()
-        .find_map(|(k, v)| (k == "se").then_some(v))
-    else {
-        return Ok(());
-    };
-
-    let expiry_text = expiry_raw.to_string();
-    let expiry = chrono::DateTime::parse_from_rfc3339(&expiry_text).map_err(|_| {
-        LetError::new(
-            ErrorCode::Parse,
-            format!("invalid SAS expiry value `{expiry_text}` for {source_name}"),
-            "use a valid SAS URL override",
-        )
-    })?;
-
-    let now = chrono::Utc::now();
-    if expiry.with_timezone(&chrono::Utc) <= now {
-        return Err(LetError::new(
-            ErrorCode::Network,
-            format!(
-                "SAS URL for {source_name} has expired ({})",
-                expiry.to_rfc3339()
-            ),
-            "set a fresh source override URL or local source path and retry",
-        ));
-    }
-
-    Ok(())
 }

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::Path;
+use std::{env, path::PathBuf};
 
 use csv::{ReaderBuilder, StringRecord};
 
@@ -15,10 +16,9 @@ const TS001_URL: &str = "https://www.nomisweb.co.uk/output/census/2021/census202
 
 pub fn build(db_path: &Path) -> Result<usize> {
     let temp = with_temp_dir()?;
-    let zip_path = temp.path().join("population-ts001.zip");
+    let zip_path = resolve_input_zip_path(&temp)?;
     let extract_dir = temp.path().join("extract");
 
-    download_file(TS001_URL, &zip_path)?;
     extract_zip(&zip_path, &extract_dir)?;
 
     let csv_path = find_first_matching_file(&extract_dir, &|path| {
@@ -107,6 +107,17 @@ pub fn build(db_path: &Path) -> Result<usize> {
     connection.execute_batch("VACUUM; ANALYZE;")?;
 
     Ok(inserted)
+}
+
+fn resolve_input_zip_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
+    if let Ok(local_path) = env::var("POPULATION_TS001_ZIP_PATH") {
+        return Ok(PathBuf::from(local_path));
+    }
+
+    let zip_path = temp.path().join("population-ts001.zip");
+    let url = env::var("POPULATION_TS001_ZIP_URL").unwrap_or_else(|_| TS001_URL.to_owned());
+    download_file(&url, &zip_path)?;
+    Ok(zip_path)
 }
 
 fn cell(row: &StringRecord, idx: usize) -> Option<&str> {

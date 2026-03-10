@@ -3,8 +3,8 @@
 use serde_json::json;
 
 use let_sdk::{
-    DbMeta, find_listing_by_id_from_db, load_listings_file, recalc_assessed_scores,
-    score_listings_with_config, upsert_listings,
+    DbMeta, EnrichmentMode, SourceEnricher, find_listing_by_id_from_db, load_listings_file,
+    recalc_assessed_scores, score_listings_with_config, upsert_listings,
 };
 
 use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs};
@@ -15,7 +15,7 @@ pub fn compute(shared: &SharedArgs) -> CommandResult {
     let config_path = paths.derived.config_file;
 
     let config = let_sdk::config::load_config(Some(&config_path))?;
-    let data = load_listings_file(&db_path)?;
+    let mut data = load_listings_file(&db_path)?;
 
     if data.listings.is_empty() {
         return Ok(CommandOutput::new(json!({
@@ -23,9 +23,23 @@ pub fn compute(shared: &SharedArgs) -> CommandResult {
             "scored": 0,
             "avgScore": 0,
             "avgConfidence": 0,
+            "enriched": 0,
+            "stillMissingEnrichment": 0,
         }))
         .with_text("no listings to score"));
     }
+
+    let source_enricher = SourceEnricher::open(&paths.resolved.sources)?;
+    let enrichment_reports = source_enricher
+        .enrich_listings(&mut data.listings, EnrichmentMode::FillMissingFromSources)?;
+    let enriched = enrichment_reports
+        .iter()
+        .filter(|report| !report.applied_fields.is_empty())
+        .count();
+    let still_missing_enrichment = enrichment_reports
+        .iter()
+        .filter(|report| !report.missing_categories.is_empty())
+        .count();
 
     let mut scored = score_listings_with_config(&data.listings, &config);
     recalc_assessed_scores(&mut scored);
@@ -50,6 +64,8 @@ pub fn compute(shared: &SharedArgs) -> CommandResult {
         "scored": scored.iter().filter(|listing| listing.scores.is_some()).count(),
         "avgScore": round_to(total_score / total as f64, 1),
         "avgConfidence": round_to(total_confidence / total as f64, 2),
+        "enriched": enriched,
+        "stillMissingEnrichment": still_missing_enrichment,
     });
 
     upsert_listings(

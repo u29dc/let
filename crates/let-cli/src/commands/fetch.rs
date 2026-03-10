@@ -10,7 +10,8 @@ use let_sdk::schema::listing::{
     PinType, PortalIds, RemoteLocalAsset, StationDistance,
 };
 use let_sdk::{
-    DbMeta, load_listings_file, recalc_assessed_scores, score_listings_with_config, upsert_listings,
+    DbMeta, EnrichmentMode, SourceEnricher, load_listings_file, recalc_assessed_scores,
+    score_listings_with_config, upsert_listings,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -40,6 +41,12 @@ struct FetchedItem {
     id: String,
     address: String,
     score: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    enrichment_applied: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    enrichment_missing: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    enrichment_unavailable_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +87,7 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
     let config = load_config(Some(&paths.derived.config_file))?;
     let db_path = paths.derived.database;
     let existing = load_listings_file(&db_path)?;
+    let source_enricher = SourceEnricher::open(&paths.resolved.sources)?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
@@ -125,10 +133,15 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
                 if let Some(override_input) = fetch_override.as_ref() {
                     apply_fetch_override(&mut listing, override_input);
                 }
+                let enrichment = source_enricher
+                    .enrich_listing(&mut listing, EnrichmentMode::ReplaceFromSources)?;
                 fetched.push(FetchedItem {
                     id: id.clone(),
                     address: listing.address.clone(),
                     score: None,
+                    enrichment_applied: enrichment.applied_fields,
+                    enrichment_missing: enrichment.missing_categories,
+                    enrichment_unavailable_sources: enrichment.unavailable_sources,
                 });
                 new_listings.push(listing);
             }

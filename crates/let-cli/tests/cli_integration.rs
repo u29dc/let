@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -11,6 +12,7 @@ use let_sdk::schema::listing::{
     PortalIds, RemoteLocalAsset,
 };
 use let_sdk::{DbMeta, load_listings_file, upsert_listings};
+use rusqlite::Connection;
 use tempfile::TempDir;
 
 fn bin_path() -> PathBuf {
@@ -196,6 +198,141 @@ fn fetch_with_empty_ids_returns_validation_error() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
     assert_eq!(json["ok"], false);
     assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+}
+
+#[test]
+fn ops_patch_re_enriches_from_sources_by_default() {
+    let fixture = Fixture::new();
+    seed_minimal_sources(&fixture.sources_dir);
+    clear_listing_enrichment(&fixture);
+
+    let output = fixture
+        .cmd()
+        .args([
+            "--json",
+            "ops",
+            "patch",
+            "165432101",
+            "--address",
+            "10 Example Street, Manchester (updated)",
+        ])
+        .output()
+        .expect("run ops patch");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let re_enriched = json["data"]["reEnriched"]
+        .as_array()
+        .expect("re-enriched array");
+    assert!(
+        re_enriched.iter().any(|item| item == "gigabitAvailability"),
+        "expected gigabitAvailability in re-enriched fields, got: {re_enriched:?}"
+    );
+    assert!(
+        re_enriched.iter().any(|item| item == "lsoaCode"),
+        "expected lsoaCode in re-enriched fields, got: {re_enriched:?}"
+    );
+
+    let after = load_listings_file(&fixture.db_path).expect("reload listings");
+    let listing = after.listings.first().expect("listing exists");
+    assert_eq!(listing.gigabit_availability, Some(88.0));
+    assert_eq!(listing.area.lsoa.code.as_deref(), Some("E01005236"));
+    assert_eq!(listing.area.msoa.code.as_deref(), Some("E02001052"));
+}
+
+#[test]
+fn ops_patch_skip_re_enrich_keeps_source_fields_untouched() {
+    let fixture = Fixture::new();
+    seed_minimal_sources(&fixture.sources_dir);
+    clear_listing_enrichment(&fixture);
+
+    let output = fixture
+        .cmd()
+        .args([
+            "--json",
+            "ops",
+            "patch",
+            "165432101",
+            "--address",
+            "10 Example Street, Manchester (skip)",
+            "--skip-re-enrich",
+        ])
+        .output()
+        .expect("run ops patch");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let re_enriched = json["data"]["reEnriched"]
+        .as_array()
+        .expect("re-enriched array");
+    assert!(re_enriched.is_empty());
+
+    let after = load_listings_file(&fixture.db_path).expect("reload listings");
+    let listing = after.listings.first().expect("listing exists");
+    assert_eq!(listing.gigabit_availability, None);
+    assert_eq!(listing.area.lsoa.code, None);
+    assert_eq!(listing.area.msoa.code, None);
+}
+
+fn seed_minimal_sources(sources_dir: &Path) {
+    let postcodes_db = Connection::open(sources_dir.join("postcodes.db")).expect("postcodes db");
+    postcodes_db
+        .execute_batch(
+            "
+            CREATE TABLE postcodes (
+                postcode TEXT PRIMARY KEY,
+                postcode_display TEXT,
+                lsoa_code TEXT,
+                lsoa_name TEXT,
+                msoa_code TEXT,
+                msoa_name TEXT
+            );
+            INSERT INTO postcodes (postcode, postcode_display, lsoa_code, lsoa_name, msoa_code, msoa_name)
+            VALUES ('M11AA', 'M1 1AA', 'E01005236', 'Manchester 001A', 'E02001052', 'Manchester 001');
+            ",
+        )
+        .expect("seed postcodes");
+
+    let broadband_db = Connection::open(sources_dir.join("broadband.db")).expect("broadband db");
+    broadband_db
+        .execute_batch(
+            "
+            CREATE TABLE postcodes (
+                postcode TEXT PRIMARY KEY,
+                postcode_display TEXT,
+                gigabit_availability REAL
+            );
+            INSERT INTO postcodes (postcode, postcode_display, gigabit_availability)
+            VALUES ('M11AA', 'M1 1AA', 88.0);
+            ",
+        )
+        .expect("seed broadband");
+}
+
+fn clear_listing_enrichment(fixture: &Fixture) {
+    let mut data = load_listings_file(&fixture.db_path).expect("load listings");
+    for listing in &mut data.listings {
+        listing.gigabit_availability = None;
+        listing.area.lsoa.code = None;
+        listing.area.lsoa.name = None;
+        listing.area.msoa.code = None;
+        listing.area.msoa.name = None;
+    }
+
+    let meta = DbMeta {
+        updated_at: "2026-03-02T00:00:00.000Z".to_owned(),
+        last_search_total: data.last_search_total,
+    };
+    upsert_listings(
+        &fixture.db_path,
+        &[],
+        &data.listings,
+        &data.listings,
+        &meta,
+        &data.search_urls,
+        &data.locations,
+    )
+    .expect("persist listing reset");
 }
 
 fn sample_listing() -> Listing {

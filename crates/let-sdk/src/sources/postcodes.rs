@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::Path;
+use std::{env, path::PathBuf};
 
 use csv::{ReaderBuilder, StringRecord};
 
@@ -24,14 +25,16 @@ struct HeaderIndex {
     msoa_code: usize,
     msoa_name: Option<usize>,
     country_code: Option<usize>,
+    laua_code: Option<usize>,
+    ward_code: Option<usize>,
+    oa_code: Option<usize>,
 }
 
 pub fn build(db_path: &Path) -> Result<usize> {
     let temp = with_temp_dir()?;
-    let zip_path = temp.path().join("postcodes.zip");
+    let zip_path = resolve_input_zip_path(&temp)?;
     let extract_dir = temp.path().join("extract");
 
-    download_file(ONSPD_ZIP_URL, &zip_path)?;
     extract_zip(&zip_path, &extract_dir)?;
 
     let csv_path = find_first_matching_file(&extract_dir, &|path| {
@@ -87,16 +90,20 @@ pub fn build(db_path: &Path) -> Result<usize> {
             lsoa_name TEXT,
             msoa_code TEXT,
             msoa_name TEXT,
-            country_code TEXT
+            country_code TEXT,
+            laua_code TEXT,
+            ward_code TEXT,
+            oa_code TEXT
         );
         CREATE INDEX idx_postcodes_lsoa ON postcodes(lsoa_code);
         CREATE INDEX idx_postcodes_msoa ON postcodes(msoa_code);
+        CREATE INDEX idx_postcodes_laua ON postcodes(laua_code);
         ",
     )?;
 
     let tx = connection.transaction()?;
     let mut statement = tx.prepare(
-        "INSERT OR REPLACE INTO postcodes (postcode, postcode_display, lat, lng, lsoa_code, lsoa_name, msoa_code, msoa_name, country_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT OR REPLACE INTO postcodes (postcode, postcode_display, lat, lng, lsoa_code, lsoa_name, msoa_code, msoa_name, country_code, laua_code, ward_code, oa_code) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?;
 
     let mut inserted = 0usize;
@@ -121,6 +128,9 @@ pub fn build(db_path: &Path) -> Result<usize> {
             string_cell(&row, header_index.msoa_code),
             optional_cell(&row, header_index.msoa_name),
             optional_cell(&row, header_index.country_code),
+            optional_cell(&row, header_index.laua_code),
+            optional_cell(&row, header_index.ward_code),
+            optional_cell(&row, header_index.oa_code),
         ])?;
 
         inserted += 1;
@@ -131,6 +141,17 @@ pub fn build(db_path: &Path) -> Result<usize> {
     connection.execute_batch("VACUUM; ANALYZE;")?;
 
     Ok(inserted)
+}
+
+fn resolve_input_zip_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
+    if let Ok(local_path) = env::var("POSTCODES_ZIP_PATH") {
+        return Ok(PathBuf::from(local_path));
+    }
+
+    let zip_path = temp.path().join("postcodes.zip");
+    let download_url = env::var("POSTCODES_ZIP_URL").unwrap_or_else(|_| ONSPD_ZIP_URL.to_owned());
+    download_file(&download_url, &zip_path)?;
+    Ok(zip_path)
 }
 
 fn resolve_header_indexes(headers: &[String]) -> Result<HeaderIndex> {
@@ -191,6 +212,23 @@ fn resolve_header_indexes(headers: &[String]) -> Result<HeaderIndex> {
 
     let country_code = pick_exact(headers, &["ctry", "ctry21cd", "ctry11cd"])
         .or_else(|| pick_contains(headers, &["country code"]));
+    let laua_code = pick_exact(
+        headers,
+        &["laua", "ladcd", "lad23cd", "lad22cd", "oslaua", "laua23cd"],
+    )
+    .or_else(|| {
+        pick_contains(
+            headers,
+            &["local authority district code", "local authority code"],
+        )
+    });
+    let ward_code = pick_exact(headers, &["ward", "wd23cd", "wd22cd", "osward"])
+        .or_else(|| pick_contains(headers, &["ward code"]));
+    let oa_code = pick_exact(
+        headers,
+        &["oa21cd", "oa11cd", "oa01cd", "oa21", "oa11", "oa01"],
+    )
+    .or_else(|| pick_contains(headers, &["output area code"]));
 
     if postcode.is_none() {
         return Err(required_column_err("postcode"));
@@ -220,6 +258,9 @@ fn resolve_header_indexes(headers: &[String]) -> Result<HeaderIndex> {
         msoa_code,
         msoa_name,
         country_code,
+        laua_code,
+        ward_code,
+        oa_code,
     })
 }
 
