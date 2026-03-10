@@ -64,6 +64,7 @@ impl Fixture {
                 delay_ms: 1,
                 max_listings: 100,
                 max_retries: 2,
+                ..FetchConfig::default()
             },
             scoring: default_scoring_config(),
         };

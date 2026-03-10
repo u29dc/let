@@ -107,9 +107,15 @@ enum Command {
         /// Skip image and map downloads.
         #[arg(long, default_value_t = false)]
         skip_images: bool,
-        /// Skip EPC enrichment.
+        /// Skip EPC asset download during media stage.
         #[arg(long, default_value_t = false)]
         skip_epc: bool,
+        /// Override min-score threshold used before heavy media stage.
+        #[arg(long)]
+        min_score: Option<f64>,
+        /// Keep new below-threshold listings instead of dropping them.
+        #[arg(long, default_value_t = false)]
+        keep_below_min: bool,
     },
     /// Capture unknown top-level commands.
     #[command(external_subcommand)]
@@ -781,6 +787,8 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
             override_address,
             skip_images,
             skip_epc,
+            min_score,
+            keep_below_min,
         } => DispatchOutcome::Local {
             tool: "fetch",
             result: commands::fetch::run(
@@ -792,6 +800,8 @@ fn dispatch(command: &Command, shared: &SharedArgs, json_mode: bool) -> Dispatch
                     override_address: override_address.clone(),
                     skip_images: *skip_images,
                     skip_epc: *skip_epc,
+                    min_score: *min_score,
+                    keep_below_min: *keep_below_min,
                 },
             ),
         },

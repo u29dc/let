@@ -272,13 +272,27 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             name: "--skip-images",
                             param_type: "bool",
                             required: false,
-                            description: "Skip image extraction output.",
+                            description: "Skip media download stage (images/floorplans/maps).",
                         },
                         ToolParameter {
                             name: "--skip-epc",
                             param_type: "bool",
                             required: false,
-                            description: "Accepted for parity with legacy fetch options.",
+                            description: "Skip EPC asset download during media stage.",
+                        },
+                        ToolParameter {
+                            name: "--min-score",
+                            param_type: "number",
+                            required: false,
+                            description:
+                                "Override score threshold for media stage and low-score gating.",
+                        },
+                        ToolParameter {
+                            name: "--keep-below-min",
+                            param_type: "bool",
+                            required: false,
+                            description:
+                                "Keep low-scoring new listings instead of dropping them.",
                         },
                     ],
                     vec![
@@ -287,6 +301,12 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                         "total",
                         "skipImages",
                         "skipEpc",
+                        "minScoreApplied",
+                        "keepBelowMin",
+                        "belowMinCount",
+                        "droppedBelowMinCount",
+                        "mediaCandidates",
+                        "mediaSummary",
                         "overrideApplied",
                         "overrideFields",
                         "saveError",

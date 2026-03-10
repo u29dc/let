@@ -43,6 +43,149 @@ pub struct FetchConfig {
     pub delay_ms: u64,
     pub max_listings: usize,
     pub max_retries: usize,
+    #[serde(default = "default_fetch_min_score")]
+    pub min_score: u8,
+    #[serde(default = "default_drop_new_below_min_score")]
+    pub drop_new_below_min_score: bool,
+    #[serde(default = "default_download_maps")]
+    pub download_maps: bool,
+    #[serde(default = "default_download_floorplan")]
+    pub download_floorplan: bool,
+    #[serde(default = "default_download_epc_asset")]
+    pub download_epc_asset: bool,
+    #[serde(default = "default_media_download_concurrency")]
+    pub media_download_concurrency: usize,
+    #[serde(default = "default_media_process_concurrency")]
+    pub media_process_concurrency: usize,
+    #[serde(default = "default_media_photo_landscape_width")]
+    pub media_photo_landscape_width: u32,
+    #[serde(default = "default_media_photo_landscape_height")]
+    pub media_photo_landscape_height: u32,
+    #[serde(default = "default_media_photo_portrait_width")]
+    pub media_photo_portrait_width: u32,
+    #[serde(default = "default_media_photo_portrait_height")]
+    pub media_photo_portrait_height: u32,
+    #[serde(default = "default_media_aux_width")]
+    pub media_aux_width: u32,
+    #[serde(default = "default_media_aux_height")]
+    pub media_aux_height: u32,
+    #[serde(default = "default_media_map_width")]
+    pub media_map_width: u32,
+    #[serde(default = "default_media_map_height")]
+    pub media_map_height: u32,
+    #[serde(default = "default_media_quality_photo")]
+    pub media_quality_photo: u8,
+    #[serde(default = "default_media_quality_aux")]
+    pub media_quality_aux: u8,
+    #[serde(default = "default_media_quality_map")]
+    pub media_quality_map: u8,
+    #[serde(default = "default_media_timeout_ms")]
+    pub media_timeout_ms: u64,
+}
+
+impl Default for FetchConfig {
+    fn default() -> Self {
+        Self {
+            delay_ms: 250,
+            max_listings: 100,
+            max_retries: 3,
+            min_score: default_fetch_min_score(),
+            drop_new_below_min_score: default_drop_new_below_min_score(),
+            download_maps: default_download_maps(),
+            download_floorplan: default_download_floorplan(),
+            download_epc_asset: default_download_epc_asset(),
+            media_download_concurrency: default_media_download_concurrency(),
+            media_process_concurrency: default_media_process_concurrency(),
+            media_photo_landscape_width: default_media_photo_landscape_width(),
+            media_photo_landscape_height: default_media_photo_landscape_height(),
+            media_photo_portrait_width: default_media_photo_portrait_width(),
+            media_photo_portrait_height: default_media_photo_portrait_height(),
+            media_aux_width: default_media_aux_width(),
+            media_aux_height: default_media_aux_height(),
+            media_map_width: default_media_map_width(),
+            media_map_height: default_media_map_height(),
+            media_quality_photo: default_media_quality_photo(),
+            media_quality_aux: default_media_quality_aux(),
+            media_quality_map: default_media_quality_map(),
+            media_timeout_ms: default_media_timeout_ms(),
+        }
+    }
+}
+
+const fn default_fetch_min_score() -> u8 {
+    70
+}
+
+const fn default_drop_new_below_min_score() -> bool {
+    true
+}
+
+const fn default_download_maps() -> bool {
+    true
+}
+
+const fn default_download_floorplan() -> bool {
+    true
+}
+
+const fn default_download_epc_asset() -> bool {
+    true
+}
+
+const fn default_media_download_concurrency() -> usize {
+    4
+}
+
+const fn default_media_process_concurrency() -> usize {
+    2
+}
+
+const fn default_media_photo_landscape_width() -> u32 {
+    1200
+}
+
+const fn default_media_photo_landscape_height() -> u32 {
+    900
+}
+
+const fn default_media_photo_portrait_width() -> u32 {
+    900
+}
+
+const fn default_media_photo_portrait_height() -> u32 {
+    1200
+}
+
+const fn default_media_aux_width() -> u32 {
+    1200
+}
+
+const fn default_media_aux_height() -> u32 {
+    900
+}
+
+const fn default_media_map_width() -> u32 {
+    1200
+}
+
+const fn default_media_map_height() -> u32 {
+    1200
+}
+
+const fn default_media_quality_photo() -> u8 {
+    82
+}
+
+const fn default_media_quality_aux() -> u8 {
+    85
+}
+
+const fn default_media_quality_map() -> u8 {
+    85
+}
+
+const fn default_media_timeout_ms() -> u64 {
+    20_000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -190,6 +333,55 @@ impl AppConfig {
                 ErrorCode::InvalidInput,
                 "fetch config values must be positive",
                 "set delayMs, maxListings, maxRetries to positive values",
+            ));
+        }
+        if self.fetch.min_score > 100 {
+            return Err(LetError::new(
+                ErrorCode::InvalidInput,
+                format!(
+                    "fetch.minScore must be in range 0-100 (got {})",
+                    self.fetch.min_score
+                ),
+                "set fetch.minScore between 0 and 100",
+            ));
+        }
+        if self.fetch.media_download_concurrency == 0 || self.fetch.media_process_concurrency == 0 {
+            return Err(LetError::new(
+                ErrorCode::InvalidInput,
+                "fetch media concurrency must be positive",
+                "set fetch.mediaDownloadConcurrency and fetch.mediaProcessConcurrency to positive values",
+            ));
+        }
+        if self.fetch.media_photo_landscape_width == 0
+            || self.fetch.media_photo_landscape_height == 0
+            || self.fetch.media_photo_portrait_width == 0
+            || self.fetch.media_photo_portrait_height == 0
+            || self.fetch.media_aux_width == 0
+            || self.fetch.media_aux_height == 0
+            || self.fetch.media_map_width == 0
+            || self.fetch.media_map_height == 0
+        {
+            return Err(LetError::new(
+                ErrorCode::InvalidInput,
+                "fetch media dimensions must be positive",
+                "set fetch media dimension fields to values greater than zero",
+            ));
+        }
+        if !(40..=95).contains(&self.fetch.media_quality_photo)
+            || !(40..=95).contains(&self.fetch.media_quality_aux)
+            || !(40..=95).contains(&self.fetch.media_quality_map)
+        {
+            return Err(LetError::new(
+                ErrorCode::InvalidInput,
+                "fetch media JPEG quality must be between 40 and 95",
+                "set fetch.mediaQualityPhoto/mediaQualityAux/mediaQualityMap to 40-95",
+            ));
+        }
+        if self.fetch.media_timeout_ms == 0 {
+            return Err(LetError::new(
+                ErrorCode::InvalidInput,
+                "fetch.mediaTimeoutMs must be positive",
+                "set fetch.mediaTimeoutMs to a value greater than zero",
             ));
         }
 
@@ -481,6 +673,7 @@ mod tests {
                 delay_ms: 250,
                 max_listings: 100,
                 max_retries: 3,
+                ..super::FetchConfig::default()
             },
             scoring: default_scoring_config(),
         };

@@ -1,16 +1,16 @@
 ---
 name: let
 description: >-
-  Autonomous UK rental property search workflow powered by the `let` CLI toolbelt.
-  Use this skill to discover Rightmove listings, enrich and score them, assess top
-  candidates (photos/maps + neighborhood research), and produce shortlists and
-  region comparisons for a family's preferences.
+    Autonomous UK rental property search workflow powered by the `let` CLI toolbelt.
+    Use this skill to discover Rightmove listings, enrich and score them, assess top
+    candidates (photos/maps + neighborhood research), and produce shortlists and
+    region comparisons for a family's preferences.
 argument-hint: [search request or location]
 compatibility: >-
-  Designed for Claude Code with Bash access. Requires an already-installed
-  CLI binary at `${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let`. Network
-  access for Rightmove; optional EPC/Mapbox/Notion keys enable richer
-  enrichment and exports.
+    Designed for Claude Code with Bash access. Requires an already-installed
+    CLI binary at `${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let`. Network
+    access for Rightmove; optional EPC/Mapbox/Notion keys enable richer
+    enrichment and exports.
 allowed-tools: Bash Read Write WebSearch WebFetch
 ---
 
@@ -172,12 +172,12 @@ Use CLI overrides instead of editing config. Always report:
 Override flags for `search discover`:
 
 | Flag | Example | Effect |
-| --- | --- | --- |
+| --- | --- | --- | --- |
 | `--location <ID>` | `--location REGION^904` | Search a non-config location |
 | `--location-name <name>` | `--location-name Manchester` | Display name for ad-hoc location |
 | `--property-types <list>` | `--property-types flat,apartment` | Override property types |
-| `--must-have <list\|none>` | `--must-have garden` | Override must-have filters |
-| `--dont-show <list\|none>` | `--dont-show houseShare,student` | Override excluded listing types |
+| `--must-have <list\ | none>` | `--must-have garden` | Override must-have filters |
+| `--dont-show <list\ | none>` | `--dont-show houseShare,student` | Override excluded listing types |
 | `--limit <n>` | `--limit 50` | Max results per location |
 
 Rules:
@@ -226,6 +226,7 @@ Example region-batched fetch:
 ```bash
 "$LET_BIN" fetch <new-ids> --json
 "$LET_BIN" fetch <single-id> --override-postcode "SY2 5WP" --override-address "Flat 2, Example House, SY2 5WP" --json
+"$LET_BIN" fetch <new-ids> --min-score 70 --json
 ```
 
 Rules:
@@ -234,10 +235,14 @@ Rules:
 - Increase to 10-15 only once the run is stable.
 - If rate limited, increase delay and retry once. Do not spam.
 - Treat removed listings as normal; skip after one clear failure.
-- If media is missing, mark confidence lower or re-fetch only the top 1-2 candidates.
 - `--override-postcode` and `--override-address` are optional and only for known-bad source data.
 - Use fetch overrides with exactly one listing ID.
 - Fetch overrides are early-stage corrections: downstream enrichment and scoring use the overridden values.
+- `fetch` runs in stages: light fetch/enrich/score first, then media download for listings above the min-score threshold.
+- Default threshold comes from config `fetch.minScore` (default 70); use `--min-score` to override for one run.
+- Single-ID fetch runs full media stage by default unless `--skip-images` is set.
+- Low-scoring new listings are dropped by default when thresholding is active; use `--keep-below-min` to keep them.
+- `--skip-images` skips heavy media stage (images/floorplans/maps), not core fetch/enrichment/scoring.
 
 ### Phase 3: Triage
 

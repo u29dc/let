@@ -1135,6 +1135,7 @@ mod tests {
                 delay_ms: 3000,
                 max_listings: 100,
                 max_retries: 3,
+                ..crate::config::FetchConfig::default()
             },
             scoring: default_scoring_config(),
         };
