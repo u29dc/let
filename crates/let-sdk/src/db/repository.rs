@@ -18,7 +18,7 @@ use crate::schema::listing::{
     Agent, AreaCodeName, AreaMetrics, CrimeMetrics, ExtractionStatus, FloodRisk, GeoLocation,
     ImdMetrics, IncomeMetrics, Lettings, Listing, ListingAssessment, ListingImage, ListingStatus,
     ListingsFile, MapViews, PortalIds, RemoteLocalAsset, ScoreContext, ScoreFactors,
-    ScorePenalties, ScorePercentiles, Scores, StationDistance, StatsSummary,
+    ScorePenalties, Scores, StationDistance,
 };
 
 const DEFAULT_UPDATED_AT: &str = "1970-01-01T00:00:00.000Z";
@@ -232,14 +232,14 @@ fn load_string_column(connection: &Connection, sql: &str) -> Result<Vec<String>>
 }
 
 fn load_all_listings(connection: &Connection) -> Result<Vec<Listing>> {
-    let has_score_contexts = table_exists(connection, "score_contexts")?;
+    require_score_contexts_table(connection)?;
     let mut statement = connection.prepare("SELECT * FROM listings ORDER BY id")?;
     let rows = statement.query_map([], ListingRow::from_row)?;
     let listing_rows = rows.collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
 
     listing_rows
         .into_iter()
-        .map(|row| hydrate_listing(connection, row, has_score_contexts))
+        .map(|row| hydrate_listing(connection, row))
         .collect()
 }
 
@@ -247,7 +247,7 @@ fn find_listing_by_id_with_connection(
     connection: &Connection,
     id: &str,
 ) -> Result<Option<Listing>> {
-    let has_score_contexts = table_exists(connection, "score_contexts")?;
+    require_score_contexts_table(connection)?;
     let sql = if Uuid::parse_str(id).is_ok() {
         "SELECT * FROM listings WHERE id = ?1"
     } else {
@@ -258,20 +258,16 @@ fn find_listing_by_id_with_connection(
         .query_row(sql, params![id], ListingRow::from_row)
         .optional()?;
 
-    row.map(|item| hydrate_listing(connection, item, has_score_contexts))
+    row.map(|item| hydrate_listing(connection, item))
         .transpose()
 }
 
-fn hydrate_listing(
-    connection: &Connection,
-    row: ListingRow,
-    has_score_contexts: bool,
-) -> Result<Listing> {
+fn hydrate_listing(connection: &Connection, row: ListingRow) -> Result<Listing> {
     let listing_id = row.id.clone();
     let notes = load_notes(connection, &listing_id)?;
     let images = load_images(connection, &listing_id)?;
     let stations = load_stations(connection, &listing_id)?;
-    let scores = load_scores(connection, &listing_id, has_score_contexts)?;
+    let scores = load_scores(connection, &listing_id)?;
     let assessment = load_assessment(connection, &listing_id)?;
 
     let extraction_status: ExtractionStatus =
@@ -423,11 +419,7 @@ fn load_stations(connection: &Connection, listing_id: &str) -> Result<Vec<Statio
     Ok(values)
 }
 
-fn load_scores(
-    connection: &Connection,
-    listing_id: &str,
-    has_score_contexts: bool,
-) -> Result<Option<Scores>> {
+fn load_scores(connection: &Connection, listing_id: &str) -> Result<Option<Scores>> {
     let row = connection
         .query_row(
             "SELECT * FROM scores WHERE listing_id = ?1",
@@ -440,7 +432,7 @@ fn load_scores(
         return Ok(None);
     };
 
-    let context = load_score_context(connection, listing_id, has_score_contexts)?;
+    let context = load_score_context(connection, listing_id)?;
     decode_scores(row, context).map(Some)
 }
 
@@ -456,7 +448,7 @@ fn load_assessment(connection: &Connection, listing_id: &str) -> Result<Option<L
     row.map(decode_assessment).transpose()
 }
 
-fn decode_scores(row: ScoreRow, context: Option<ScoreContext>) -> Result<Scores> {
+fn decode_scores(row: ScoreRow, context: ScoreContext) -> Result<Scores> {
     Ok(Scores {
         overall: row.overall,
         confidence: row.confidence,
@@ -495,7 +487,7 @@ fn decode_scores(row: ScoreRow, context: Option<ScoreContext>) -> Result<Scores>
             pets: row.penalty_pets,
             combined: row.penalty_combined,
         },
-        context: context.unwrap_or_else(legacy_score_context),
+        context,
     })
 }
 
@@ -516,15 +508,7 @@ fn decode_assessment(row: AssessmentRow) -> Result<ListingAssessment> {
     })
 }
 
-fn load_score_context(
-    connection: &Connection,
-    listing_id: &str,
-    has_score_contexts: bool,
-) -> Result<Option<ScoreContext>> {
-    if !has_score_contexts {
-        return Ok(None);
-    }
-
+fn load_score_context(connection: &Connection, listing_id: &str) -> Result<ScoreContext> {
     let raw = connection
         .query_row(
             "SELECT context_json FROM score_contexts WHERE listing_id = ?1",
@@ -533,7 +517,15 @@ fn load_score_context(
         )
         .optional()?;
 
-    raw.map(|value| decode_score_context(&value)).transpose()
+    let raw = raw.ok_or_else(|| {
+        LetError::new(
+            ErrorCode::SchemaMismatch,
+            format!("missing score context row for listing `{listing_id}`"),
+            "rebuild the listings database to include score context rows",
+        )
+    })?;
+
+    decode_score_context(&raw)
 }
 
 fn decode_score_context(raw: &str) -> Result<ScoreContext> {
@@ -541,32 +533,9 @@ fn decode_score_context(raw: &str) -> Result<ScoreContext> {
         LetError::new(
             ErrorCode::SchemaMismatch,
             format!("invalid score context JSON: {error}"),
-            "rebuild or migrate the listings database to match current schema",
+            "rebuild the listings database with the latest schema",
         )
     })
-}
-
-fn legacy_score_context() -> ScoreContext {
-    ScoreContext {
-        config_hash: "legacy".to_owned(),
-        percentiles: ScorePercentiles {
-            prices: zero_stats(),
-            true_costs: zero_stats(),
-            floor_areas: zero_stats(),
-            station_distances: zero_stats(),
-            crime_rates: zero_stats(),
-        },
-    }
-}
-
-fn zero_stats() -> StatsSummary {
-    StatsSummary {
-        min: 0.0,
-        max: 0.0,
-        mean: 0.0,
-        median: 0.0,
-        std_dev: 0.0,
-    }
 }
 
 fn insert_listing_graph(tx: &Transaction<'_>, listing: &Listing) -> Result<()> {
@@ -878,7 +847,7 @@ where
         LetError::new(
             ErrorCode::SchemaMismatch,
             format!("invalid enum value `{raw}` for {field}"),
-            "rebuild or migrate the listings database to match current schema",
+            "rebuild the listings database with the latest schema",
         )
     })
 }
@@ -893,7 +862,7 @@ where
             LetError::new(
                 ErrorCode::SchemaMismatch,
                 format!("invalid enum value `{value}` for {field}"),
-                "rebuild or migrate the listings database to match current schema",
+                "rebuild the listings database with the latest schema",
             )
         }),
     }
@@ -944,7 +913,7 @@ fn parse_deposit(raw: Option<f64>) -> Result<Option<i64>> {
         return Err(LetError::new(
             ErrorCode::SchemaMismatch,
             format!("invalid deposit value `{value}` in listings.deposit"),
-            "rebuild or migrate the listings database to match current schema",
+            "rebuild the listings database with the latest schema",
         ));
     }
 
@@ -955,7 +924,7 @@ fn parse_deposit(raw: Option<f64>) -> Result<Option<i64>> {
             format!(
                 "non-integer deposit value `{value}` in listings.deposit; expected whole-number amount"
             ),
-            "rebuild or migrate the listings database to match current schema",
+            "rebuild the listings database with the latest schema",
         ));
     }
 
@@ -963,7 +932,7 @@ fn parse_deposit(raw: Option<f64>) -> Result<Option<i64>> {
         return Err(LetError::new(
             ErrorCode::SchemaMismatch,
             format!("deposit value `{value}` is out of supported range"),
-            "rebuild or migrate the listings database to match current schema",
+            "rebuild the listings database with the latest schema",
         ));
     }
 
@@ -978,6 +947,18 @@ fn table_exists(connection: &Connection, table_name: &str) -> Result<bool> {
     )?;
 
     Ok(count > 0)
+}
+
+fn require_score_contexts_table(connection: &Connection) -> Result<()> {
+    if table_exists(connection, "score_contexts")? {
+        return Ok(());
+    }
+
+    Err(LetError::new(
+        ErrorCode::SchemaMismatch,
+        "missing required table `score_contexts` in listings database".to_owned(),
+        "rebuild the listings database with the latest schema",
+    ))
 }
 
 #[derive(Debug)]

@@ -157,6 +157,61 @@ fn search_diff_marks_known_and_new_ids() {
 }
 
 #[test]
+fn search_diff_preserves_schema_mismatch_error_contract() {
+    let fixture = Fixture::new();
+    drop_score_contexts_table(&fixture.db_path);
+
+    let output = fixture
+        .cmd()
+        .args(["search", "diff", "165432101,999999999"])
+        .output()
+        .expect("run search diff with mismatched schema");
+    assert_eq!(output.status.code(), Some(2));
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"]["code"], "SCHEMA_MISMATCH");
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("score_contexts")),
+        "expected score_contexts schema mismatch message, got: {json:?}"
+    );
+}
+
+#[test]
+fn health_marks_schema_mismatch_as_blocking() {
+    let fixture = Fixture::new();
+    drop_score_contexts_table(&fixture.db_path);
+
+    let output = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["status"], "blocked");
+
+    let checks = json["data"]["checks"].as_array().expect("checks array");
+    let database = checks
+        .iter()
+        .find(|check| check["id"] == "database")
+        .expect("database check");
+    assert_eq!(database["status"], "error");
+    assert_eq!(database["severity"], "blocking");
+
+    let fix = database["fix"]
+        .as_array()
+        .expect("database fix instructions");
+    assert!(
+        fix.iter().any(|item| {
+            item.as_str()
+                .is_some_and(|text| text.contains("run `let fetch <id>`"))
+        }),
+        "expected fetch recreation hint, got: {fix:?}"
+    );
+}
+
+#[test]
 fn prune_dry_run_does_not_mutate_database() {
     let fixture = Fixture::new();
     let output = fixture
@@ -312,6 +367,13 @@ fn prune_requires_force_in_non_interactive_mode() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
     assert_eq!(json["ok"], false);
     assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+}
+
+fn drop_score_contexts_table(db_path: &Path) {
+    let connection = Connection::open(db_path).expect("open listings db");
+    connection
+        .execute_batch("DROP TABLE IF EXISTS score_contexts;")
+        .expect("drop score_contexts table");
 }
 
 fn seed_minimal_sources(sources_dir: &Path) {

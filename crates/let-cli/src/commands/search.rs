@@ -37,13 +37,7 @@ pub fn diff(shared: &SharedArgs, ids_raw: &str) -> CommandResult {
     let (known_ids, database_present) = match load_listings_file(&db_path) {
         Ok(data) => (known_portal_ids(&data.listings), true),
         Err(error) if error.code == ErrorCode::NotFound => (HashSet::new(), false),
-        Err(error) => {
-            return Err(CommandError::runtime(
-                "DB_ERROR",
-                format!("failed to load listings database: {error}"),
-                "run `let health` and repair database issues before diffing IDs",
-            ));
-        }
+        Err(error) => return Err(error.into()),
     };
 
     let mut known = Vec::new();

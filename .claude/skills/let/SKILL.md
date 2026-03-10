@@ -482,13 +482,13 @@ Error codes appear in `error.code` when `ok: false`.
 | --- | --- | --- |
 | `NO_CONFIG` | Config missing | Create from `templates/let.config.toml`, then re-run health |
 | `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$LET_BIN" build sources all --jobs 3` |
-| `NO_DATABASE` | Listings DB missing | Normal on first run; fetch creates it |
-| `SCHEMA_MISMATCH` | DB schema incompatible | Delete the DB and re-fetch |
-| `RATE_LIMITED` | Portal rate limiting | Wait 10-30s, increase delay, retry once |
+| `SCHEMA_MISMATCH` | DB schema incompatible | Restore `let.db.bak` or delete `let.db`, then run `"$LET_BIN" fetch <id>` |
 | `NOT_FOUND` | Listing removed | Skip and continue |
 | `VALIDATION_ERROR` | Invalid assessment or input data | Fix according to schema and `error.hint` |
+| `DB_ERROR` | Database read/write failed | Run `"$LET_BIN" health`; if schema mismatch, restore/delete DB and fetch again |
+| `NETWORK_ERROR` | Network request failed | Check connectivity/TLS, then retry once |
+| `PARSE_ERROR` | Upstream payload parse failed | Retry once; if persistent, treat as upstream drift and continue degraded |
 | `PATCH_JSON_PARSE_ERROR` / `PATCH_JSON_SCHEMA_ERROR` / `PATCH_JSON_VALIDATION_ERROR` | Invalid `ops patch --patch-json` payload | Fix JSON shape/values using `error.details`, then retry |
-| `API_ERROR` | External API failed | Log it, skip affected enrichment, continue |
 | `NO_CREDENTIALS` | API credentials missing | Set keys in `$LET_HOME/data/.env` and re-run health |
 | `INVALID_DB` | Notion database inaccessible | Check Notion credentials and DB ID |
 

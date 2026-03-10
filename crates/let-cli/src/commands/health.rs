@@ -4,8 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
-use let_sdk::load_listings_file;
 use let_sdk::paths::resolve_paths;
+use let_sdk::{ErrorCode, load_listings_file};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -158,6 +158,23 @@ fn check_database(path: &Path) -> HealthCheck {
             detail: format!("{} ({} listings)", path.display(), data.listings.len()),
             fix: Value::Null,
         },
+        Err(error) if error.code == ErrorCode::SchemaMismatch => {
+            let backup = format!("{}.bak", path.display());
+            HealthCheck {
+                id: "database".to_owned(),
+                label: "Listings Database".to_owned(),
+                status: "error".to_owned(),
+                severity: "blocking".to_owned(),
+                detail: format!("{} ({})", path.display(), error.message),
+                fix: json!([
+                    format!(
+                        "restore backup database from {backup} or delete {}",
+                        path.display()
+                    ),
+                    "run `let fetch <id>` to recreate the listings database"
+                ]),
+            }
+        }
         Err(error) => HealthCheck {
             id: "database".to_owned(),
             label: "Listings Database".to_owned(),

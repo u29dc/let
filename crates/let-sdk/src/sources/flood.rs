@@ -122,6 +122,8 @@ fn resolve_primary_csv_path(temp: &tempfile::TempDir) -> Result<PathBuf> {
 }
 
 fn resolve_rofrs_csv_path(temp: &tempfile::TempDir) -> Result<Option<PathBuf>> {
+    let csv_checksum_required = checksum_env_is_set("FLOOD_ROFRS_CSV_SHA256");
+
     if let Ok(local_csv) = env::var("FLOOD_ROFRS_CSV_PATH") {
         let path = PathBuf::from(local_csv);
         verify_file_checksum_from_env(&path, &["FLOOD_ROFRS_CSV_SHA256"], "flood RoFRS CSV")?;
@@ -136,7 +138,7 @@ fn resolve_rofrs_csv_path(temp: &tempfile::TempDir) -> Result<Option<PathBuf>> {
         )?;
         let extract_dir = temp.path().join("rofrs-local");
         extract_zip(Path::new(&local_zip), &extract_dir)?;
-        return discover_rofrs_csv(&extract_dir);
+        return discover_rofrs_csv(&extract_dir, csv_checksum_required);
     }
 
     let zip_path = temp.path().join("flood_rofrs.zip");
@@ -149,11 +151,9 @@ fn resolve_rofrs_csv_path(temp: &tempfile::TempDir) -> Result<Option<PathBuf>> {
         &["FLOOD_ROFRS_ZIP_SHA256"],
         "flood RoFRS ZIP",
     ) {
-        let checksum_enforced = env::var("FLOOD_ROFRS_ZIP_SHA256")
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
+        let checksum_enforced = checksum_env_is_set("FLOOD_ROFRS_ZIP_SHA256");
 
-        if checksum_enforced {
+        if checksum_enforced || csv_checksum_required {
             return Err(error);
         }
 
@@ -161,10 +161,10 @@ fn resolve_rofrs_csv_path(temp: &tempfile::TempDir) -> Result<Option<PathBuf>> {
     }
 
     extract_zip(&zip_path, &extract_dir)?;
-    discover_rofrs_csv(&extract_dir)
+    discover_rofrs_csv(&extract_dir, csv_checksum_required)
 }
 
-fn discover_rofrs_csv(root: &Path) -> Result<Option<PathBuf>> {
+fn discover_rofrs_csv(root: &Path, checksum_required: bool) -> Result<Option<PathBuf>> {
     let discovered = find_first_matching_file(root, &|path| {
         path.extension()
             .and_then(|value| value.to_str())
@@ -177,9 +177,21 @@ fn discover_rofrs_csv(root: &Path) -> Result<Option<PathBuf>> {
 
     if let Some(path) = discovered.as_ref() {
         verify_file_checksum_from_env(path, &["FLOOD_ROFRS_CSV_SHA256"], "flood RoFRS CSV")?;
+    } else if checksum_required {
+        return Err(LetError::new(
+            ErrorCode::NotFound,
+            "flood RoFRS CSV checksum was configured but no RoFRS CSV was discovered".to_owned(),
+            "verify the RoFRS archive contents or provide FLOOD_ROFRS_CSV_PATH",
+        ));
     }
 
     Ok(discovered)
+}
+
+fn checksum_env_is_set(key: &str) -> bool {
+    env::var(key)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn load_primary_records(path: &Path, by_postcode: &mut HashMap<String, FloodRecord>) -> Result<()> {
@@ -392,7 +404,10 @@ fn csv_err(error: csv::Error) -> LetError {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_risk_from_counts, derive_risk_from_very_low, normalize_risk_text};
+    use super::{
+        derive_risk_from_counts, derive_risk_from_very_low, discover_rofrs_csv, normalize_risk_text,
+    };
+    use tempfile::TempDir;
 
     #[test]
     fn derive_risk_prefers_more_severe_band() {
@@ -423,5 +438,12 @@ mod tests {
     #[test]
     fn risk_text_is_normalized() {
         assert_eq!(normalize_risk_text(" Unlikely "), "unlikely");
+    }
+
+    #[test]
+    fn rofrs_checksum_requirement_fails_when_csv_missing() {
+        let temp = TempDir::new().expect("create tempdir");
+        let error = discover_rofrs_csv(temp.path(), true).expect_err("expected missing csv error");
+        assert_eq!(error.code, crate::errors::ErrorCode::NotFound);
     }
 }

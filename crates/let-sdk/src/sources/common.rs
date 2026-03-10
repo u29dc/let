@@ -776,3 +776,51 @@ pub fn find_column_index(headers: &[String], patterns: &[&str]) -> Option<usize>
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::{normalize_sha256_value, verify_file_checksum};
+    use crate::errors::ErrorCode;
+
+    #[test]
+    fn verify_file_checksum_accepts_matching_hash() {
+        let temp = TempDir::new().expect("create tempdir");
+        let file_path = temp.path().join("sample.bin");
+        fs::write(&file_path, b"abc").expect("write sample file");
+
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        verify_file_checksum(&file_path, expected, "sample").expect("checksum should match");
+    }
+
+    #[test]
+    fn verify_file_checksum_rejects_mismatch() {
+        let temp = TempDir::new().expect("create tempdir");
+        let file_path = temp.path().join("sample.bin");
+        fs::write(&file_path, b"abc").expect("write sample file");
+
+        let error = verify_file_checksum(
+            &file_path,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sample",
+        )
+        .expect_err("checksum mismatch should fail");
+
+        assert_eq!(error.code, ErrorCode::Parse);
+        assert!(
+            error.message.contains("checksum verification failed"),
+            "unexpected error message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn normalize_sha256_value_rejects_invalid_value() {
+        let error =
+            normalize_sha256_value("TEST_SHA256", "invalid").expect_err("invalid hash should fail");
+        assert_eq!(error.code, ErrorCode::InvalidInput);
+    }
+}

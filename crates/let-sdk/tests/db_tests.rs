@@ -161,6 +161,65 @@ fn upsert_and_roundtrip_listing_data() {
     );
 }
 
+#[test]
+fn load_listings_fails_when_score_contexts_table_is_missing() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let db_path = temp_dir.path().join("let.db");
+
+    let connection = open_listings_db(&db_path).expect("open sqlite db");
+    connection
+        .execute_batch("DROP TABLE IF EXISTS score_contexts;")
+        .expect("drop score_contexts table");
+    close_listings_db(connection).expect("close sqlite db");
+
+    let error = load_listings_file(&db_path).expect_err("expected schema mismatch");
+    assert_eq!(error.code, let_sdk::ErrorCode::SchemaMismatch);
+    assert!(
+        error.message.contains("score_contexts"),
+        "expected missing score_contexts table message, got: {}",
+        error.message
+    );
+}
+
+#[test]
+fn load_listings_fails_when_score_context_row_is_missing_for_scored_listing() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let db_path = temp_dir.path().join("let.db");
+
+    let listing = sample_listing();
+    let meta = DbMeta {
+        updated_at: "2026-03-01T12:30:00.000Z".to_owned(),
+        last_search_total: 1,
+    };
+    upsert_listings(
+        &db_path,
+        std::slice::from_ref(&listing),
+        &[],
+        std::slice::from_ref(&listing),
+        &meta,
+        &[],
+        &[],
+    )
+    .expect("upsert listings");
+
+    let connection = open_listings_db(&db_path).expect("open sqlite db");
+    connection
+        .execute(
+            "DELETE FROM score_contexts WHERE listing_id = ?1",
+            [&listing.id],
+        )
+        .expect("delete score context row");
+    close_listings_db(connection).expect("close sqlite db");
+
+    let error = load_listings_file(&db_path).expect_err("expected schema mismatch");
+    assert_eq!(error.code, let_sdk::ErrorCode::SchemaMismatch);
+    assert!(
+        error.message.contains("missing score context row"),
+        "expected missing score context row message, got: {}",
+        error.message
+    );
+}
+
 fn sample_listing() -> Listing {
     Listing {
         id: "2d8ab4a6-7de1-4e3f-a4aa-9408f2112377".to_owned(),
