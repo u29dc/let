@@ -34,6 +34,10 @@ struct Cli {
     #[arg(long, value_name = "DIR", global = true)]
     sources_dir: Option<PathBuf>,
 
+    /// Emit human-readable output instead of the default JSON envelope.
+    #[arg(long, global = true, default_value_t = false)]
+    text: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -464,7 +468,7 @@ fn main() {
     match outcome {
         DispatchOutcome::Local { tool, result } => {
             let elapsed = started.elapsed().as_millis() as u64;
-            let exit_code = emit(&result, tool, elapsed, output_mode_for_tool(tool));
+            let exit_code = emit(&result, tool, elapsed, output_mode(cli.text));
             process::exit(exit_code);
         }
     }
@@ -847,8 +851,8 @@ fn unsupported_external(group: &str, args: &[String]) -> DispatchOutcome {
     }
 }
 
-fn output_mode_for_tool(tool: &str) -> OutputMode {
-    if tool == "build.sources" {
+fn output_mode(text_requested: bool) -> OutputMode {
+    if text_requested {
         OutputMode::Text
     } else {
         OutputMode::EnvelopeJson

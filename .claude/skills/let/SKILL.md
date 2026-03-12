@@ -41,8 +41,9 @@ Then call:
 Hard rules:
 
 - If `$LET_BIN` is missing or not executable, return a blocked prerequisite and stop.
-- All commands except `build sources` emit JSON envelopes on stdout by default. Treat `build sources` as text/progress output.
+- All non-interactive commands emit JSON envelopes on stdout by default. Treat stderr as logs/progress only unless `--text` is requested.
 - Read stdout as the contract. Treat stderr as logs only.
+- Bare `"$LET_BIN"` prints clap help; it does not emit JSON.
 - Do not run repo build commands from this skill.
 
 ## Operating Rules

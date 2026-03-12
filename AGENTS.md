@@ -6,7 +6,7 @@
     - `:let tools`
     - `:let health`
     - `:let config show`
-- JSON contract: all commands except `build sources` emit exactly one envelope object to stdout; logs go to stderr only.
+- JSON contract: all non-interactive commands emit exactly one envelope object to stdout by default; logs go to stderr only.
 - Skill entrypoint: `.claude/skills/let/SKILL.md`.
 - External APIs:
     - EPC: `https://epc.opendatacommunities.org/docs/api`

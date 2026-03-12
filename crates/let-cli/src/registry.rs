@@ -860,7 +860,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                         required: false,
                         description: "Tool name for detail mode.",
                     }],
-                    vec!["tools", "globalFlags"],
+                    vec!["version", "tools", "globalFlags"],
                     true,
                     "let tools",
                 ),
@@ -896,7 +896,7 @@ pub fn find_tool(name: &str) -> Option<&'static ToolMetadata> {
 }
 
 pub fn global_flags() -> &'static [GlobalFlag] {
-    static FLAGS: [GlobalFlag; 4] = [
+    static FLAGS: [GlobalFlag; 5] = [
         GlobalFlag {
             name: "--data-dir",
             flag_type: "path",
@@ -916,6 +916,11 @@ pub fn global_flags() -> &'static [GlobalFlag] {
             name: "--sources-dir",
             flag_type: "path",
             description: "Override sources directory.",
+        },
+        GlobalFlag {
+            name: "--text",
+            flag_type: "bool",
+            description: "Emit human-readable output instead of JSON envelopes.",
         },
     ];
     &FLAGS

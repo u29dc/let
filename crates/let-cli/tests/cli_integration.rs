@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Output;
 
 use let_sdk::config::{
     AppConfig, FetchConfig, Location, SearchConfig, SearchFilters, default_scoring_config,
@@ -118,10 +119,17 @@ fn tools_json_returns_catalog() {
     let fixture = Fixture::new();
     let output = fixture.cmd().args(["tools"]).output().expect("run tools");
     assert_eq!(output.status.code(), Some(0));
+    assert!(
+        output.stderr.is_empty(),
+        "tools should not write to stderr in default JSON mode"
+    );
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], true);
+    assert_eq!(json["meta"]["tool"], "tools");
+    assert_eq!(json["data"]["version"], env!("CARGO_PKG_VERSION"));
     assert!(json["data"]["tools"].as_array().is_some());
+    assert!(json["data"]["globalFlags"].as_array().is_some());
 }
 
 #[test]
@@ -134,7 +142,7 @@ fn view_list_json_reads_seeded_listing() {
         .expect("run view list");
     assert_eq!(output.status.code(), Some(0));
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     let listings = json["data"]["listings"].as_array().expect("listings array");
     assert_eq!(listings.len(), 1);
 }
@@ -149,7 +157,7 @@ fn search_diff_marks_known_and_new_ids() {
         .expect("run search diff");
     assert_eq!(output.status.code(), Some(0));
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     let known = json["data"]["known"].as_array().expect("known array");
     let new_ids = json["data"]["new"].as_array().expect("new array");
     assert_eq!(known.len(), 1);
@@ -168,7 +176,7 @@ fn search_diff_preserves_schema_mismatch_error_contract() {
         .expect("run search diff with mismatched schema");
     assert_eq!(output.status.code(), Some(2));
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
     assert_eq!(json["error"]["code"], "SCHEMA_MISMATCH");
     assert!(
@@ -187,7 +195,7 @@ fn health_marks_schema_mismatch_as_blocking() {
     let output = fixture.cmd().args(["health"]).output().expect("run health");
     assert_eq!(output.status.code(), Some(0));
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], true);
     assert_eq!(json["data"]["status"], "blocked");
 
@@ -221,7 +229,7 @@ fn prune_dry_run_does_not_mutate_database() {
         .expect("run prune dry-run");
     assert_eq!(output.status.code(), Some(0));
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     assert_eq!(json["data"]["dryRun"], true);
     assert_eq!(json["data"]["removed"], 1);
 
@@ -239,7 +247,7 @@ fn fetch_with_empty_ids_returns_validation_error() {
         .expect("run fetch");
     assert_eq!(output.status.code(), Some(1));
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
     assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
 }
@@ -263,7 +271,7 @@ fn ops_patch_re_enriches_from_sources_by_default() {
         .expect("run ops patch");
     assert_eq!(output.status.code(), Some(0));
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     let re_enriched = json["data"]["reEnriched"]
         .as_array()
         .expect("re-enriched array");
@@ -303,7 +311,7 @@ fn ops_patch_skip_re_enrich_keeps_source_fields_untouched() {
         .expect("run ops patch");
     assert_eq!(output.status.code(), Some(0));
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     let re_enriched = json["data"]["reEnriched"]
         .as_array()
         .expect("re-enriched array");
@@ -334,7 +342,7 @@ fn global_json_flag_is_rejected() {
 }
 
 #[test]
-fn build_sources_list_uses_text_output_mode() {
+fn build_sources_list_returns_single_line_json_envelope_by_default() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
@@ -344,13 +352,45 @@ fn build_sources_list_uses_text_output_mode() {
 
     assert_eq!(output.status.code(), Some(0));
     assert!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).is_err(),
-        "build sources list should use text/progress output mode"
+        output.stderr.is_empty(),
+        "build sources list should not write to stderr in default JSON mode"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["meta"]["tool"], "build.sources");
+    assert!(json["data"]["sources"].as_array().is_some());
+    assert_eq!(json["data"]["defaultJobs"], 3);
+}
+
+#[test]
+fn explicit_text_flag_switches_to_human_readable_output() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["--text", "build", "sources", "list"])
+        .output()
+        .expect("run build sources list with text mode");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).is_err(),
+        "text mode should not emit a raw JSON envelope"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
     assert!(
         stdout.contains("available sources listed"),
-        "expected text summary output, got: {stdout}"
+        "expected human-readable summary output, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("\"sources\""),
+        "text mode should choose one representation, got: {stdout}"
+    );
+    assert_eq!(
+        stdout.trim_end_matches('\n').lines().count(),
+        1,
+        "text mode should emit a single summary line"
     );
 }
 
@@ -364,9 +404,23 @@ fn prune_requires_force_in_non_interactive_mode() {
         .expect("run prune without force");
 
     assert_eq!(output.status.code(), Some(1));
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse envelope");
+    let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
     assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+}
+
+fn assert_single_json_envelope(output: &Output) -> serde_json::Value {
+    let stdout = String::from_utf8(output.stdout.clone()).expect("stdout utf-8");
+    let trimmed = stdout.trim_end_matches('\n');
+    let line_count = trimmed.lines().count();
+
+    assert!(!trimmed.is_empty(), "expected JSON envelope on stdout");
+    assert_eq!(
+        line_count, 1,
+        "expected exactly one stdout line in JSON mode, got {line_count}: {stdout}"
+    );
+
+    serde_json::from_str(trimmed).expect("parse envelope")
 }
 
 fn drop_score_contexts_table(db_path: &Path) {

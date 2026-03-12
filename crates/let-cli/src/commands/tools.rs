@@ -9,6 +9,7 @@ use crate::registry::{GlobalFlag, ToolMetadata, find_tool, global_flags, tool_re
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolsCatalog<'a> {
+    pub version: &'static str,
     pub global_flags: &'a [GlobalFlag],
     pub tools: &'a [ToolMetadata],
 }
@@ -22,6 +23,7 @@ pub fn run(name: Option<&str>) -> CommandResult {
 
 fn catalog() -> CommandResult {
     let payload = ToolsCatalog {
+        version: env!("CARGO_PKG_VERSION"),
         global_flags: global_flags(),
         tools: tool_registry(),
     };
@@ -57,8 +59,21 @@ mod tests {
         let output = run(None).expect("catalog should succeed");
         let data = output.data;
 
+        assert!(data.get("version").is_some());
         assert!(data.get("globalFlags").is_some());
         assert!(data.get("tools").is_some());
+        assert_eq!(
+            data["version"],
+            serde_json::Value::String(env!("CARGO_PKG_VERSION").to_owned())
+        );
+
+        let global_flags = data["globalFlags"].as_array().expect("global flags array");
+        assert!(
+            global_flags
+                .iter()
+                .any(|flag| flag["name"] == serde_json::Value::String("--text".to_owned())),
+            "expected --text global flag in catalog"
+        );
 
         let tools = data["tools"].as_array().expect("tools array");
         assert!(!tools.is_empty(), "tools catalog should not be empty");
