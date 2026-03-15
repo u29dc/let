@@ -361,14 +361,7 @@ fn discover_location_with_base_urls(
         );
     }
 
-    discover_location_via_html(
-        runtime,
-        client,
-        location,
-        filters,
-        config,
-        (first_response.status == 200).then_some(first_response),
-    )
+    discover_location_via_html(runtime, client, location, filters, config, None)
 }
 
 fn discover_location_via_api(
@@ -900,6 +893,8 @@ mod tests {
         include_str!("../../tests/fixtures/rightmove/search-api-page-1.json");
     const SEARCH_API_PAGE_TWO: &str =
         include_str!("../../tests/fixtures/rightmove/search-api-page-2.json");
+    const SEARCH_API_NON_JSON_ERROR: &str =
+        include_str!("../../tests/fixtures/rightmove/search-api-non-json-error.html");
     const SEARCH_HTML_PAGE_ONE: &str =
         include_str!("../../tests/fixtures/rightmove/search-html-page-1.html");
     const SEARCH_HTML_PAGE_TWO: &str =
@@ -982,6 +977,13 @@ mod tests {
             &mock_runtime,
             &server,
             "/api/_search",
+            0,
+            SEARCH_API_NON_JSON_ERROR,
+        );
+        mount_html_fixture(
+            &mock_runtime,
+            &server,
+            "/property-to-rent/find.html",
             0,
             SEARCH_HTML_PAGE_ONE,
         );
