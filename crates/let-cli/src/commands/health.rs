@@ -169,23 +169,17 @@ fn check_database(path: &Path) -> HealthCheck {
             detail: format!("{} ({} listings)", path.display(), overview.listing_count),
             fix: Value::Null,
         },
-        Err(error) if error.code == ErrorCode::SchemaMismatch => {
-            let backup = format!("{}.bak", path.display());
-            HealthCheck {
-                id: "database".to_owned(),
-                label: "Listings Database".to_owned(),
-                status: "error".to_owned(),
-                severity: "blocking".to_owned(),
-                detail: format!("{} ({})", path.display(), error.message),
-                fix: json!([
-                    format!(
-                        "restore backup database from {backup} or delete {}",
-                        path.display()
-                    ),
-                    "run `let fetch <id>` to recreate the listings database"
-                ]),
-            }
-        }
+        Err(error) if error.code == ErrorCode::SchemaMismatch => HealthCheck {
+            id: "database".to_owned(),
+            label: "Listings Database".to_owned(),
+            status: "error".to_owned(),
+            severity: "blocking".to_owned(),
+            detail: format!("{} ({})", path.display(), error.message),
+            fix: json!([format!(
+                "delete {} and run `let fetch <id>` to recreate the listings database",
+                path.display()
+            )]),
+        },
         Err(error) if error.code == ErrorCode::Conflict => HealthCheck {
             id: "database".to_owned(),
             label: "Listings Database".to_owned(),

@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
 use let_sdk::db::{
-    DbMeta, close_listings_db, find_listing_by_id_from_db, list_known_portal_ids,
-    load_listing_summaries, load_listings_file, load_listings_overview, open_listings_db,
-    replace_listing_scores, replace_listings, update_listing_assessment,
+    DbMeta, LISTINGS_SCHEMA_VERSION, close_listings_db, find_listing_by_id_from_db,
+    list_known_portal_ids, load_listing_summaries, load_listings_file, load_listings_overview,
+    open_listings_db, replace_listing_scores, replace_listings, update_listing_assessment,
     update_listing_notion_page_ids, upsert_listings,
 };
 use let_sdk::schema::listing::{
@@ -49,6 +49,11 @@ fn open_listings_db_initializes_schema_and_pragmas() {
         )
         .expect("check score_contexts table");
     assert_eq!(score_contexts_table, 1);
+
+    let user_version: i32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("read pragma user_version");
+    assert_eq!(user_version, LISTINGS_SCHEMA_VERSION);
 
     close_listings_db(connection).expect("close sqlite db");
 }
@@ -235,6 +240,26 @@ fn load_listings_fails_when_score_context_row_is_missing_for_scored_listing() {
     assert!(
         error.message.contains("missing score context row"),
         "expected missing score context row message, got: {}",
+        error.message
+    );
+}
+
+#[test]
+fn load_listings_fails_when_schema_version_mismatches() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let db_path = temp_dir.path().join("let.db");
+
+    let connection = open_listings_db(&db_path).expect("open sqlite db");
+    connection
+        .pragma_update(None, "user_version", 999)
+        .expect("set mismatched user_version");
+    close_listings_db(connection).expect("close sqlite db");
+
+    let error = load_listings_file(&db_path).expect_err("expected schema mismatch");
+    assert_eq!(error.code, let_sdk::ErrorCode::SchemaMismatch);
+    assert!(
+        error.message.contains("schema version mismatch"),
+        "expected version mismatch message, got: {}",
         error.message
     );
 }

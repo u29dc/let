@@ -1,6 +1,6 @@
 -- let.db Schema
--- Version: 1.0.0
--- Last updated: 2025-01-28
+-- Schema version: 2
+-- Last updated: 2026-03-15
 --
 -- Complete DDL for the listings database.
 -- Tables ordered by dependency (parent tables first).

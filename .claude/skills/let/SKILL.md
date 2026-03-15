@@ -483,7 +483,7 @@ Error codes appear in `error.code` when `ok: false`.
 | --- | --- | --- |
 | `NO_CONFIG` | Config missing | Create from `templates/let.config.toml`, then re-run health |
 | `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$HOME/.tools/let/let" build sources all --jobs 3` |
-| `SCHEMA_MISMATCH` | DB schema incompatible | Restore `let.db.bak` or delete `let.db`, then run `"$HOME/.tools/let/let" fetch <id>` |
+| `SCHEMA_MISMATCH` | DB schema incompatible | Delete `let.db`, then run `"$HOME/.tools/let/let" fetch <id>` to recreate it |
 | `CONFLICT` | Database lock contention | Close competing DB users, then retry the command |
 | `NOT_FOUND` | Listing removed | Skip and continue |
 | `VALIDATION_ERROR` | Invalid assessment or input data | Fix according to schema and `error.hint` |

@@ -129,4 +129,4 @@ bun run build
 - Risks to surface in outputs:
     - upstream source URL expiry or schema drift
     - Rightmove throttling / partial fetches
-    - SQLite schema drift requiring rebuild or restore
+    - SQLite schema version mismatch requiring DB recreation

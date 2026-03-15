@@ -248,6 +248,34 @@ fn health_marks_unopenable_database_as_degraded() {
 }
 
 #[test]
+fn health_marks_schema_version_mismatch_as_blocking() {
+    let fixture = Fixture::new();
+    let connection = Connection::open(&fixture.db_path).expect("open listings db");
+    connection
+        .pragma_update(None, "user_version", 999)
+        .expect("set mismatched user_version");
+    drop(connection);
+
+    let output = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    let checks = json["data"]["checks"].as_array().expect("checks array");
+    let database = checks
+        .iter()
+        .find(|check| check["id"] == "database")
+        .expect("database check");
+
+    assert_eq!(database["severity"], "blocking");
+    assert!(
+        database["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("schema version mismatch")),
+        "expected version mismatch detail, got: {database:?}"
+    );
+}
+
+#[test]
 fn health_checks_epc_email_and_key_separately() {
     let fixture = Fixture::new();
     fs::write(

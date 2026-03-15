@@ -18,9 +18,14 @@ pub use repository::{
 
 const LISTINGS_SCHEMA_SQL: &str = include_str!("schema.sql");
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
+pub const LISTINGS_SCHEMA_VERSION: i32 = 2;
 
 pub fn open_listings_db(path: impl AsRef<Path>) -> Result<Connection> {
     let path = path.as_ref();
+    let existing_database = path.exists()
+        && fs::metadata(path)
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false);
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -30,7 +35,11 @@ pub fn open_listings_db(path: impl AsRef<Path>) -> Result<Connection> {
     let connection = Connection::open(path)?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+    if existing_database {
+        ensure_schema_version(&connection)?;
+    }
     init_schema(&connection)?;
+    set_schema_version(&connection)?;
 
     Ok(connection)
 }
@@ -48,6 +57,7 @@ pub fn open_listings_db_readonly(path: impl AsRef<Path>) -> Result<Connection> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
+    ensure_schema_version(&connection)?;
 
     Ok(connection)
 }
@@ -62,4 +72,24 @@ pub fn close_listings_db(connection: Connection) -> Result<()> {
 pub fn init_schema(connection: &Connection) -> Result<()> {
     connection.execute_batch(LISTINGS_SCHEMA_SQL)?;
     Ok(())
+}
+
+fn set_schema_version(connection: &Connection) -> Result<()> {
+    connection.pragma_update(None, "user_version", LISTINGS_SCHEMA_VERSION)?;
+    Ok(())
+}
+
+fn ensure_schema_version(connection: &Connection) -> Result<()> {
+    let version: i32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == LISTINGS_SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    Err(LetError::new(
+        ErrorCode::SchemaMismatch,
+        format!(
+            "listings database schema version mismatch: expected {LISTINGS_SCHEMA_VERSION}, found {version}"
+        ),
+        "delete the listings database and rerun `let fetch <id>` to recreate it",
+    ))
 }
