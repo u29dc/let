@@ -48,28 +48,39 @@ pub fn run(shared: &SharedArgs) -> CommandResult {
         ));
     }
     checks.push(check_env_key(
+        "EPC_API_EMAIL",
+        "env.epc_api_email",
+        "EPC API Email",
+        &bundle.derived.env_file,
+        "your-email@example.com",
+    ));
+    checks.push(check_env_key(
         "EPC_API_KEY",
         "env.epc_api_key",
         "EPC API Key",
         &bundle.derived.env_file,
+        "your-api-key",
     ));
     checks.push(check_env_key(
         "NOTION_API_KEY",
         "env.notion_api_key",
         "Notion API Key",
         &bundle.derived.env_file,
+        "your-key",
     ));
     checks.push(check_env_key(
         "NOTION_DATABASE_ID",
         "env.notion_database_id",
         "Notion Database ID",
         &bundle.derived.env_file,
+        "your-database-id",
     ));
     checks.push(check_env_key(
         "MAPBOX_ACCESS_TOKEN",
         "env.mapbox_access_token",
         "Mapbox Token",
         &bundle.derived.env_file,
+        "your-token",
     ));
     checks.push(check_writable_dir(
         "dir.data",
@@ -222,7 +233,7 @@ fn check_source_db(name: &str, path: &Path) -> HealthCheck {
     }
 }
 
-fn check_env_key(key: &str, id: &str, label: &str, env_file: &Path) -> HealthCheck {
+fn check_env_key(key: &str, id: &str, label: &str, env_file: &Path, example: &str) -> HealthCheck {
     if let Some((_, source)) = resolve_env_var(key, env_file) {
         let source_text = match source {
             EnvValueSource::Process => "process env",
@@ -244,7 +255,7 @@ fn check_env_key(key: &str, id: &str, label: &str, env_file: &Path) -> HealthChe
         status: "missing".to_owned(),
         severity: "degraded".to_owned(),
         detail: format!("{key} not set"),
-        fix: json!([format!("echo '{key}=your-key' >> {}", env_file.display())]),
+        fix: json!([format!("echo '{key}={example}' >> {}", env_file.display())]),
     }
 }
 

@@ -49,7 +49,7 @@
 | HTTP     | reqwest (rustls)            | Scraping + source downloads     |
 | Quality  | cargo fmt/clippy/test/build | Required completion gates       |
 
-- Optional environment keys: `EPC_API_KEY`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `MAPBOX_ACCESS_TOKEN`.
+- Optional environment keys: `EPC_API_EMAIL`, `EPC_API_KEY`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `MAPBOX_ACCESS_TOKEN`.
 - Optional source integrity keys: `<SOURCE_INPUT>_SHA256` (for example `POSTCODES_ZIP_SHA256`) to enforce SHA-256 verification for local or downloaded source files.
 - Storage root: `$LET_HOME` (default `~/.tools/let`).
 

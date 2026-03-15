@@ -116,7 +116,7 @@ Config notes:
 
 ### API Keys
 
-- `EPC_API_KEY` in `$HOME/.tools/let/data/.env`: recommended for EPC rating, floor area, and UPRN enrichment.
+- `EPC_API_EMAIL` and `EPC_API_KEY` in `$HOME/.tools/let/data/.env`: recommended for live EPC rating, floor area, and EPC-derived UPRN enrichment.
 - `MAPBOX_ACCESS_TOKEN`: optional, enables cached satellite and street map views.
 - `NOTION_API_KEY` and `NOTION_DATABASE_ID`: optional, only required for Notion export.
 - If credentials are missing, continue unless the requested task specifically depends on them.

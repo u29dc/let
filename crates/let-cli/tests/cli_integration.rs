@@ -248,6 +248,34 @@ fn health_marks_unopenable_database_as_degraded() {
 }
 
 #[test]
+fn health_checks_epc_email_and_key_separately() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.config_dir.join(".env"),
+        "EPC_API_KEY=secret-key\nNOTION_API_KEY=secret_xxx\n",
+    )
+    .expect("write env file");
+
+    let output = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    let checks = json["data"]["checks"].as_array().expect("checks array");
+    let epc_email = checks
+        .iter()
+        .find(|check| check["id"] == "env.epc_api_email")
+        .expect("epc email check");
+    let epc_key = checks
+        .iter()
+        .find(|check| check["id"] == "env.epc_api_key")
+        .expect("epc key check");
+
+    assert_eq!(epc_email["status"], "missing");
+    assert_eq!(epc_email["severity"], "degraded");
+    assert_eq!(epc_key["status"], "ok");
+}
+
+#[test]
 fn prune_dry_run_does_not_mutate_database() {
     let fixture = Fixture::new();
     let output = fixture

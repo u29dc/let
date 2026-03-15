@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::Duration;
 
 use let_sdk::config::load_config;
+use let_sdk::pipeline::epc::{EpcCredentials, EpcLookup, lookup_domestic_epc};
 use let_sdk::pipeline::fetch::media::{
     MediaNormalizationConfig, MediaStageStats, populate_listing_media,
 };
@@ -12,7 +14,9 @@ use let_sdk::pipeline::fetch::rightmove::{
 };
 use let_sdk::pipeline::fetch::{carry_over_persistent_fields, is_newer_listing};
 use let_sdk::pipeline::geocode::{GeocodeSource, GeocodedCoordinates, mapbox_forward_geocode};
-use let_sdk::schema::listing::{Listing, ListingsFile, MapViews, PinType};
+use let_sdk::schema::listing::{
+    Listing, ListingsFile, MapViews, PinType, UprnConfidence, UprnSource,
+};
 use let_sdk::{
     DbMeta, EnrichmentMode, ErrorCode, SourceEnricher, load_listings_file, recalc_assessed_scores,
     score_listings_with_config, upsert_listings,
@@ -175,6 +179,11 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
     let mapbox_token = resolve_env_var("MAPBOX_ACCESS_TOKEN", &paths.derived.env_file)
         .map(|(token, _)| token)
         .filter(|token| !token.trim().is_empty());
+    let epc_credentials = if params.skip_epc {
+        None
+    } else {
+        resolve_epc_credentials(&paths.derived.env_file)
+    };
 
     let mut fetched = Vec::new();
     let mut failed = Vec::new();
@@ -257,14 +266,46 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
 
                 let enrichment = source_enricher
                     .enrich_listing(&mut listing, EnrichmentMode::ReplaceFromSources)?;
+                let mut enrichment_applied = enrichment.applied_fields;
+                let mut enrichment_missing = enrichment.missing_categories;
+                let mut enrichment_unavailable_sources = enrichment.unavailable_sources;
+
+                if let Some(credentials) = epc_credentials.as_ref() {
+                    match runtime.block_on(lookup_domestic_epc(
+                        &client,
+                        credentials,
+                        &listing.address,
+                        &listing.postcode,
+                    )) {
+                        Ok(Some(epc_lookup)) => {
+                            for field in apply_epc_lookup(&mut listing, &epc_lookup) {
+                                push_unique(&mut enrichment_applied, field);
+                            }
+                        }
+                        Ok(None) => push_unique(&mut enrichment_missing, "epc".to_owned()),
+                        Err(error) => {
+                            eprintln!(
+                                "[fetch] epc lookup failed for {portal_id}: {}",
+                                error.message
+                            );
+                            push_unique(&mut enrichment_unavailable_sources, "epc".to_owned());
+                        }
+                    }
+                } else if !params.skip_epc {
+                    push_unique(&mut enrichment_unavailable_sources, "epc".to_owned());
+                }
+
+                enrichment_applied.sort();
+                enrichment_missing.sort();
+                enrichment_unavailable_sources.sort();
 
                 fetched.push(FetchedItem {
                     id: portal_id.clone(),
                     address: listing.address.clone(),
                     score: None,
-                    enrichment_applied: enrichment.applied_fields,
-                    enrichment_missing: enrichment.missing_categories,
-                    enrichment_unavailable_sources: enrichment.unavailable_sources,
+                    enrichment_applied,
+                    enrichment_missing,
+                    enrichment_unavailable_sources,
                     below_min_score: false,
                     dropped_by_min_score: false,
                     media_processed: false,
@@ -512,6 +553,62 @@ fn effective_min_score(
         .or_else(|| Some(f64::from(config.fetch.min_score)))
 }
 
+fn resolve_epc_credentials(env_file: &Path) -> Option<EpcCredentials> {
+    let email = resolve_env_var("EPC_API_EMAIL", env_file)
+        .map(|(value, _)| value)
+        .filter(|value| !value.trim().is_empty())?;
+    let api_key = resolve_env_var("EPC_API_KEY", env_file)
+        .map(|(value, _)| value)
+        .filter(|value| !value.trim().is_empty())?;
+    Some(EpcCredentials { email, api_key })
+}
+
+fn apply_epc_lookup(listing: &mut Listing, lookup: &EpcLookup) -> Vec<String> {
+    let mut applied = Vec::new();
+
+    if listing.epc_rating != lookup.epc_rating {
+        listing.epc_rating = lookup.epc_rating.clone();
+        push_unique(&mut applied, "epcRating".to_owned());
+    }
+    if listing.floor_area_sqm != lookup.floor_area_sqm {
+        listing.floor_area_sqm = lookup.floor_area_sqm;
+        push_unique(&mut applied, "floorAreaSqm".to_owned());
+    }
+    if listing.epc_lodgement_date != lookup.lodgement_date {
+        listing.epc_lodgement_date = lookup.lodgement_date.clone();
+        push_unique(&mut applied, "epcLodgementDate".to_owned());
+    }
+
+    let address_match = Some(lookup.address_match);
+    if listing.epc_address_match != address_match {
+        listing.epc_address_match = address_match;
+        push_unique(&mut applied, "epcAddressMatch".to_owned());
+    }
+
+    if let Some(uprn) = lookup.uprn.as_ref() {
+        if listing.uprn.as_deref() != Some(uprn.as_str()) {
+            listing.uprn = Some(uprn.clone());
+            push_unique(&mut applied, "uprn".to_owned());
+        }
+        if listing.uprn_source != Some(UprnSource::Epc) {
+            listing.uprn_source = Some(UprnSource::Epc);
+            push_unique(&mut applied, "uprnSource".to_owned());
+        }
+        if listing.uprn_confidence != Some(UprnConfidence::Exact) {
+            listing.uprn_confidence = Some(UprnConfidence::Exact);
+            push_unique(&mut applied, "uprnConfidence".to_owned());
+        }
+    }
+
+    applied
+}
+
+fn push_unique(items: &mut Vec<String>, value: String) {
+    if !items.iter().any(|item| item == &value) {
+        items.push(value);
+    }
+}
+
 fn parse_ids(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
@@ -718,11 +815,21 @@ fn update_fetched_items(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use let_sdk::config::{
         AppConfig, FetchConfig, Location, SearchConfig, SearchFilters, default_scoring_config,
     };
+    use let_sdk::schema::listing::{
+        Agent, AreaMetrics, EpcBand, ExtractionStatus, GeoLocation, Lettings, Listing,
+        ListingStatus, MapViews, PortalIds, RemoteLocalAsset, UprnConfidence, UprnSource,
+    };
+    use tempfile::TempDir;
 
-    use super::{FetchParams, effective_min_score, parse_ids};
+    use super::{
+        EpcLookup, FetchParams, apply_epc_lookup, effective_min_score, parse_ids,
+        resolve_epc_credentials,
+    };
 
     #[test]
     fn parse_ids_ignores_empty_segments() {
@@ -781,6 +888,52 @@ mod tests {
         assert_eq!(effective_min_score(&params, &config, 2), Some(62.5));
     }
 
+    #[test]
+    fn resolve_epc_credentials_requires_email_and_key() {
+        let temp = TempDir::new().expect("temp dir");
+        let env_file = temp.path().join(".env");
+
+        fs::write(&env_file, "EPC_API_KEY=secret\n").expect("write env file");
+        assert!(resolve_epc_credentials(&env_file).is_none());
+
+        fs::write(
+            &env_file,
+            "EPC_API_EMAIL=user@example.com\nEPC_API_KEY=secret\n",
+        )
+        .expect("write full env file");
+        let credentials = resolve_epc_credentials(&env_file).expect("credentials");
+        assert_eq!(credentials.email, "user@example.com");
+        assert_eq!(credentials.api_key, "secret");
+    }
+
+    #[test]
+    fn apply_epc_lookup_updates_listing_and_uprn_fields() {
+        let mut listing = sample_listing();
+        let applied = apply_epc_lookup(
+            &mut listing,
+            &EpcLookup {
+                lmk_key: "cert-1".to_owned(),
+                epc_rating: Some(EpcBand::B),
+                floor_area_sqm: Some(78.4),
+                lodgement_date: Some("2025-01-10".to_owned()),
+                address_match: true,
+                matched_address: "10 Example Street, M1 1AA".to_owned(),
+                uprn: Some("100021234567".to_owned()),
+                uprn_source: Some("Address Matched".to_owned()),
+            },
+        );
+
+        assert_eq!(listing.epc_rating, Some(EpcBand::B));
+        assert_eq!(listing.floor_area_sqm, Some(78.4));
+        assert_eq!(listing.epc_lodgement_date.as_deref(), Some("2025-01-10"));
+        assert_eq!(listing.epc_address_match, Some(true));
+        assert_eq!(listing.uprn.as_deref(), Some("100021234567"));
+        assert_eq!(listing.uprn_source, Some(UprnSource::Epc));
+        assert_eq!(listing.uprn_confidence, Some(UprnConfidence::Exact));
+        assert!(applied.iter().any(|field| field == "epcRating"));
+        assert!(applied.iter().any(|field| field == "uprnConfidence"));
+    }
+
     fn sample_config() -> AppConfig {
         AppConfig {
             search: SearchConfig {
@@ -805,6 +958,61 @@ mod tests {
                 ..FetchConfig::default()
             },
             scoring: default_scoring_config(),
+        }
+    }
+
+    fn sample_listing() -> Listing {
+        Listing {
+            id: "uuid-1".to_owned(),
+            portal_ids: PortalIds {
+                rightmove: Some("170448131".to_owned()),
+                zoopla: None,
+                onthemarket: None,
+            },
+            uprn: None,
+            uprn_source: None,
+            uprn_confidence: None,
+            url: "https://www.rightmove.co.uk/properties/170448131".to_owned(),
+            location: GeoLocation {
+                lat: 53.0,
+                lng: -2.0,
+                pin_type: None,
+            },
+            postcode: "M1 1AA".to_owned(),
+            address: "10 Example Street".to_owned(),
+            region: Some("Manchester".to_owned()),
+            google_maps_url: "https://maps.example.com".to_owned(),
+            google_maps_street_view_url: "https://maps.example.com/street".to_owned(),
+            area: AreaMetrics::default(),
+            price: 1200,
+            price_display: "£1,200 pcm".to_owned(),
+            bedrooms: 2,
+            bathrooms: 1,
+            property_type: "Flat".to_owned(),
+            description: "desc".to_owned(),
+            notes: vec![],
+            images: vec![],
+            floorplan: RemoteLocalAsset::default(),
+            epc: RemoteLocalAsset::default(),
+            map_views: MapViews::default(),
+            epc_rating: None,
+            floor_area_sqm: None,
+            epc_lodgement_date: None,
+            epc_address_match: None,
+            epc_search_url: None,
+            nearest_stations: vec![],
+            gigabit_availability: None,
+            listed_date: None,
+            lettings: Lettings::default(),
+            agent: Agent::default(),
+            assessment: None,
+            assessed_at: None,
+            assessed_score: None,
+            scores: None,
+            fetched_at: "2026-01-01T00:00:00.000Z".to_owned(),
+            extraction_status: ExtractionStatus::Partial,
+            status: ListingStatus::Active,
+            notion_page_id: None,
         }
     }
 }
