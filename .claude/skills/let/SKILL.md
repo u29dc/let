@@ -179,6 +179,7 @@ Rules:
 - When `--location` is used, `mustHave`, `dontShow`, and `propertyTypes` are cleared unless explicitly re-passed.
 - Ad-hoc location searches start from a blank slate. Carry forward desired filters explicitly.
 - When fetching an ad-hoc location batch, use `--region <name>` to stamp the display region.
+- Read `requestedLimit`, `effectivePageSize`, `pagesFetched`, `truncated`, and per-location `locations[]` stats before assuming discovery is complete.
 
 ## Workflow
 
@@ -205,6 +206,7 @@ Rules:
 
 - Treat new listings as portal IDs not yet present in the SQLite DB.
 - Use `idsByLocation` from `search discover` to batch `fetch` calls by region.
+- If `truncated` is true or a location reports a `truncationReason`, treat that region as partial coverage and say so.
 - If the DB is empty, `diff.new` may be almost everything. Start with a small calibration batch.
 - Prefer repeated small loops over one giant run.
 
