@@ -29,6 +29,33 @@ pub struct DbMeta {
     pub last_search_total: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingsOverview {
+    pub meta: DbMeta,
+    pub listing_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListingSummary {
+    pub id: String,
+    pub portal_rightmove: Option<String>,
+    pub address: String,
+    pub price: i64,
+    pub price_display: String,
+    pub bedrooms: i64,
+    pub region: Option<String>,
+    pub property_type: String,
+    pub listed_date: Option<String>,
+    pub url: String,
+    pub assessed_score: Option<f64>,
+    pub score: Option<f64>,
+    pub status: ListingStatus,
+    pub has_assessment: bool,
+    pub notion_page_id: Option<String>,
+    pub first_station_name: Option<String>,
+    pub first_station_distance: Option<f64>,
+}
+
 pub fn load_listings_file(path: impl AsRef<Path>) -> Result<ListingsFile> {
     let connection = open_listings_db_readonly(path)?;
     let result = (|| {
@@ -50,6 +77,56 @@ pub fn load_listings_file(path: impl AsRef<Path>) -> Result<ListingsFile> {
         })
     })();
 
+    finalize_connection(connection, result)
+}
+
+pub fn load_listings_overview(path: impl AsRef<Path>) -> Result<ListingsOverview> {
+    let connection = open_listings_db_readonly(path)?;
+    let result = (|| {
+        require_score_contexts_table(&connection)?;
+        let meta = load_meta(&connection)?;
+        let listing_count: i64 =
+            connection.query_row("SELECT COUNT(1) FROM listings", [], |row| row.get(0))?;
+
+        Ok(ListingsOverview {
+            meta,
+            listing_count: listing_count.max(0) as usize,
+        })
+    })();
+
+    finalize_connection(connection, result)
+}
+
+pub fn list_known_portal_ids(path: impl AsRef<Path>) -> Result<Vec<String>> {
+    let connection = open_listings_db_readonly(path)?;
+    let result = (|| {
+        require_score_contexts_table(&connection)?;
+        load_string_column(
+            &connection,
+            "SELECT portal_id
+             FROM (
+                 SELECT portal_rightmove AS portal_id
+                 FROM listings
+                 WHERE portal_rightmove IS NOT NULL
+                 UNION
+                 SELECT portal_zoopla AS portal_id
+                 FROM listings
+                 WHERE portal_zoopla IS NOT NULL
+                 UNION
+                 SELECT portal_onthemarket AS portal_id
+                 FROM listings
+                 WHERE portal_onthemarket IS NOT NULL
+             )
+             ORDER BY portal_id",
+        )
+    })();
+
+    finalize_connection(connection, result)
+}
+
+pub fn load_listing_summaries(path: impl AsRef<Path>) -> Result<Vec<ListingSummary>> {
+    let connection = open_listings_db_readonly(path)?;
+    let result = load_listing_summaries_with_connection(&connection);
     finalize_connection(connection, result)
 }
 
@@ -260,6 +337,74 @@ fn find_listing_by_id_with_connection(
 
     row.map(|item| hydrate_listing(connection, item))
         .transpose()
+}
+
+fn load_listing_summaries_with_connection(connection: &Connection) -> Result<Vec<ListingSummary>> {
+    require_score_contexts_table(connection)?;
+    let mut statement = connection.prepare(
+        "SELECT
+            l.id,
+            l.portal_rightmove,
+            l.address,
+            l.price,
+            l.price_display,
+            l.bedrooms,
+            l.region,
+            l.property_type,
+            l.listed_date,
+            l.url,
+            l.assessed_score,
+            l.status,
+            l.notion_page_id,
+            s.overall AS score_overall,
+            EXISTS(SELECT 1 FROM assessments a WHERE a.listing_id = l.id) AS has_assessment,
+            (
+                SELECT st.name
+                FROM stations st
+                WHERE st.listing_id = l.id
+                ORDER BY st.position
+                LIMIT 1
+            ) AS station_name,
+            (
+                SELECT st.distance
+                FROM stations st
+                WHERE st.listing_id = l.id
+                ORDER BY st.position
+                LIMIT 1
+            ) AS station_distance
+         FROM listings l
+         LEFT JOIN scores s ON s.listing_id = l.id
+         ORDER BY l.id",
+    )?;
+    let rows = statement.query_map([], ListingSummaryRow::from_row)?;
+    let summary_rows = rows.collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
+
+    summary_rows
+        .into_iter()
+        .map(decode_listing_summary)
+        .collect()
+}
+
+fn decode_listing_summary(row: ListingSummaryRow) -> Result<ListingSummary> {
+    Ok(ListingSummary {
+        id: row.id,
+        portal_rightmove: row.portal_rightmove,
+        address: row.address,
+        price: row.price,
+        price_display: row.price_display,
+        bedrooms: row.bedrooms,
+        region: row.region,
+        property_type: row.property_type,
+        listed_date: row.listed_date,
+        url: row.url,
+        assessed_score: row.assessed_score,
+        score: row.score,
+        status: parse_required_enum(&row.status, "listings.status")?,
+        has_assessment: row.has_assessment != 0,
+        notion_page_id: row.notion_page_id,
+        first_station_name: row.first_station_name,
+        first_station_distance: row.first_station_distance,
+    })
 }
 
 fn hydrate_listing(connection: &Connection, row: ListingRow) -> Result<Listing> {
@@ -1033,6 +1178,27 @@ struct ListingRow {
     assessed_score: Option<f64>,
 }
 
+#[derive(Debug)]
+struct ListingSummaryRow {
+    id: String,
+    portal_rightmove: Option<String>,
+    address: String,
+    price: i64,
+    price_display: String,
+    bedrooms: i64,
+    region: Option<String>,
+    property_type: String,
+    listed_date: Option<String>,
+    url: String,
+    assessed_score: Option<f64>,
+    status: String,
+    notion_page_id: Option<String>,
+    score: Option<f64>,
+    has_assessment: i64,
+    first_station_name: Option<String>,
+    first_station_distance: Option<f64>,
+}
+
 impl ListingRow {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
@@ -1104,6 +1270,30 @@ impl ListingRow {
             notion_page_id: row.get("notion_page_id")?,
             assessed_at: row.get("assessed_at")?,
             assessed_score: row.get("assessed_score")?,
+        })
+    }
+}
+
+impl ListingSummaryRow {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            portal_rightmove: row.get("portal_rightmove")?,
+            address: row.get("address")?,
+            price: row.get("price")?,
+            price_display: row.get("price_display")?,
+            bedrooms: row.get("bedrooms")?,
+            region: row.get("region")?,
+            property_type: row.get("property_type")?,
+            listed_date: row.get("listed_date")?,
+            url: row.get("url")?,
+            assessed_score: row.get("assessed_score")?,
+            status: row.get("status")?,
+            notion_page_id: row.get("notion_page_id")?,
+            score: row.get("score_overall")?,
+            has_assessment: row.get("has_assessment")?,
+            first_station_name: row.get("station_name")?,
+            first_station_distance: row.get("station_distance")?,
         })
     }
 }

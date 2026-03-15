@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use let_sdk::config::{RIGHTMOVE_SEARCH_TYPES, SearchFilters, load_config};
-use let_sdk::{ErrorCode, load_listings_file};
+use let_sdk::{ErrorCode, list_known_portal_ids};
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::json;
@@ -103,8 +103,8 @@ pub fn diff(shared: &SharedArgs, ids_raw: &str) -> CommandResult {
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let db_path = paths.derived.database;
 
-    let (known_ids, database_present) = match load_listings_file(&db_path) {
-        Ok(data) => (known_portal_ids(&data.listings), true),
+    let (known_ids, database_present) = match list_known_portal_ids(&db_path) {
+        Ok(ids) => (ids.into_iter().collect::<HashSet<_>>(), true),
         Err(error) if error.code == ErrorCode::NotFound => (HashSet::new(), false),
         Err(error) => return Err(error.into()),
     };
@@ -702,22 +702,6 @@ fn tokenize_location(name: &str) -> String {
         .map(|chunk| chunk.iter().collect::<String>())
         .collect::<Vec<_>>()
         .join("/")
-}
-
-fn known_portal_ids(listings: &[let_sdk::schema::listing::Listing]) -> HashSet<String> {
-    let mut ids = HashSet::new();
-    for listing in listings {
-        if let Some(id) = listing.portal_ids.rightmove.as_ref() {
-            ids.insert(id.clone());
-        }
-        if let Some(id) = listing.portal_ids.zoopla.as_ref() {
-            ids.insert(id.clone());
-        }
-        if let Some(id) = listing.portal_ids.onthemarket.as_ref() {
-            ids.insert(id.clone());
-        }
-    }
-    ids
 }
 
 fn apply_filter_overrides(

@@ -342,6 +342,25 @@ fn assess_submit_invalid_payload_returns_error_envelope() {
 }
 
 #[test]
+fn assess_candidates_returns_unassessed_active_listing() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["assess", "candidates", "--top", "5"])
+        .output()
+        .expect("run assess candidates");
+
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    let candidates = json["data"]["candidates"]
+        .as_array()
+        .expect("candidates array");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["portalId"], "165432101");
+}
+
+#[test]
 fn ops_patch_re_enriches_from_sources_by_default() {
     let fixture = Fixture::new();
     seed_minimal_sources(&fixture.sources_dir);

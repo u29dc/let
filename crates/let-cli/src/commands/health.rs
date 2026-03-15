@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::Path;
 
 use let_sdk::paths::resolve_paths;
-use let_sdk::{ErrorCode, load_listings_file};
+use let_sdk::{ErrorCode, load_listings_overview};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -160,13 +160,13 @@ fn check_database(path: &Path) -> HealthCheck {
         };
     }
 
-    match load_listings_file(path) {
-        Ok(data) => HealthCheck {
+    match load_listings_overview(path) {
+        Ok(overview) => HealthCheck {
             id: "database".to_owned(),
             label: "Listings Database".to_owned(),
             status: "ok".to_owned(),
             severity: "info".to_owned(),
-            detail: format!("{} ({} listings)", path.display(), data.listings.len()),
+            detail: format!("{} ({} listings)", path.display(), overview.listing_count),
             fix: Value::Null,
         },
         Err(error) if error.code == ErrorCode::SchemaMismatch => {

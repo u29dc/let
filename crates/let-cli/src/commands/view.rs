@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use let_sdk::{find_listing_by_id_from_db, load_listings_file};
+use let_sdk::{ListingSummary, find_listing_by_id_from_db, load_listing_summaries};
 use serde_json::json;
 
 use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs, to_camel_json};
@@ -40,8 +40,7 @@ pub fn list(shared: &SharedArgs, params: &ViewListParams) -> CommandResult {
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let db_path = paths.derived.database;
 
-    let data = load_listings_file(&db_path)?;
-    let mut listings = data.listings;
+    let mut listings = load_listing_summaries(&db_path)?;
     let total = listings.len();
 
     if let Some(region) = &params.region {
@@ -70,12 +69,7 @@ pub fn list(shared: &SharedArgs, params: &ViewListParams) -> CommandResult {
     }
 
     if let Some(min_score) = params.min_score {
-        listings.retain(|listing| {
-            listing
-                .scores
-                .as_ref()
-                .is_some_and(|scores| scores.overall >= min_score)
-        });
+        listings.retain(|listing| listing.score.is_some_and(|score| score >= min_score));
     }
 
     listings.sort_by(|a, b| compare_listings(a, b, params.sort, params.asc));
@@ -87,23 +81,25 @@ pub fn list(shared: &SharedArgs, params: &ViewListParams) -> CommandResult {
     let projection = listings
         .iter()
         .map(|listing| {
-            let score = listing.scores.as_ref().map(|scores| scores.overall);
-            let score_change = listing.assessed_score.zip(score).map(|(assessed, algo)| {
-                let delta = assessed - algo;
-                (delta * 10.0).round() / 10.0
-            });
+            let score_change = listing
+                .assessed_score
+                .zip(listing.score)
+                .map(|(assessed, algo)| {
+                    let delta = assessed - algo;
+                    (delta * 10.0).round() / 10.0
+                });
             json!({
-                "id": listing.portal_ids.rightmove.clone().unwrap_or_else(|| listing.id.clone()),
-                "portalId": listing.portal_ids.rightmove,
+                "id": listing.portal_rightmove.clone().unwrap_or_else(|| listing.id.clone()),
+                "portalId": listing.portal_rightmove,
                 "address": listing.address,
                 "price": listing.price,
                 "priceDisplay": listing.price_display,
                 "bedrooms": listing.bedrooms,
-                "score": score,
+                "score": listing.score,
                 "assessedScore": listing.assessed_score,
                 "scoreChange": score_change,
                 "region": listing.region,
-                "station": listing.nearest_stations.first().map(format_station),
+                "station": format_station(listing),
                 "url": listing.url,
             })
         })
@@ -142,21 +138,15 @@ pub fn detail(shared: &SharedArgs, id: &str) -> CommandResult {
 }
 
 fn compare_listings(
-    a: &let_sdk::schema::listing::Listing,
-    b: &let_sdk::schema::listing::Listing,
+    a: &ListingSummary,
+    b: &ListingSummary,
     sort: SortField,
     asc: bool,
 ) -> Ordering {
     let ordering = match sort {
         SortField::Score => {
-            let a_score = a
-                .assessed_score
-                .or_else(|| a.scores.as_ref().map(|scores| scores.overall))
-                .unwrap_or(0.0);
-            let b_score = b
-                .assessed_score
-                .or_else(|| b.scores.as_ref().map(|scores| scores.overall))
-                .unwrap_or(0.0);
+            let a_score = a.assessed_score.or(a.score).unwrap_or(0.0);
+            let b_score = b.assessed_score.or(b.score).unwrap_or(0.0);
             a_score.partial_cmp(&b_score).unwrap_or(Ordering::Equal)
         }
         SortField::Price => a.price.cmp(&b.price),
@@ -167,9 +157,11 @@ fn compare_listings(
     if asc { ordering } else { ordering.reverse() }
 }
 
-fn format_station(station: &let_sdk::schema::listing::StationDistance) -> String {
-    let name = truncate(&station.name, 25);
-    format!("{:<25} ({:.1}mi)", name, station.distance)
+fn format_station(listing: &ListingSummary) -> Option<String> {
+    let name = listing.first_station_name.as_deref()?;
+    let distance = listing.first_station_distance?;
+    let name = truncate(name, 25);
+    Some(format!("{:<25} ({:.1}mi)", name, distance))
 }
 
 fn truncate(value: &str, max_len: usize) -> String {

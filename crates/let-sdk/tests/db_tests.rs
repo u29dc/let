@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
 use let_sdk::db::{
-    DbMeta, close_listings_db, find_listing_by_id_from_db, load_listings_file, open_listings_db,
+    DbMeta, close_listings_db, find_listing_by_id_from_db, list_known_portal_ids,
+    load_listing_summaries, load_listings_file, load_listings_overview, open_listings_db,
     update_listing_assessment, upsert_listings,
 };
 use let_sdk::schema::listing::{
@@ -107,6 +108,23 @@ fn upsert_and_roundtrip_listing_data() {
             .config_hash,
         "score-config-v1"
     );
+
+    let overview = load_listings_overview(&db_path).expect("load overview");
+    assert_eq!(overview.listing_count, 1);
+    assert_eq!(overview.meta.updated_at, meta.updated_at);
+
+    let summaries = load_listing_summaries(&db_path).expect("load summaries");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].portal_rightmove.as_deref(), Some("165432101"));
+    assert_eq!(summaries[0].score, Some(76.4));
+    assert!(summaries[0].has_assessment);
+    assert_eq!(
+        summaries[0].first_station_name.as_deref(),
+        Some("St James's Park")
+    );
+
+    let known_ids = list_known_portal_ids(&db_path).expect("load portal ids");
+    assert_eq!(known_ids, vec!["165432101".to_owned()]);
 
     let by_uuid = find_listing_by_id_from_db(&db_path, listing.id.as_str())
         .expect("find by uuid")

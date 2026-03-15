@@ -4,7 +4,7 @@ use let_sdk::schema::listing::{
     FamilySuitability, Listing, ListingAssessment, ListingStatus, MaintenanceRating, Recommendation,
 };
 use let_sdk::{
-    calculate_assessed_score, find_listing_by_id_from_db, load_listings_file,
+    calculate_assessed_score, find_listing_by_id_from_db, load_listing_summaries,
     update_listing_assessment,
 };
 use serde_json::{Value, json};
@@ -25,19 +25,17 @@ pub fn candidates(shared: &SharedArgs, params: &CandidatesParams) -> CommandResu
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let db_path = paths.derived.database;
 
-    let data = load_listings_file(&db_path)?;
-    let total = data.listings.len();
-    let assessed = data
-        .listings
+    let summaries = load_listing_summaries(&db_path)?;
+    let total = summaries.len();
+    let assessed = summaries
         .iter()
-        .filter(|listing| listing.assessment.is_some())
+        .filter(|listing| listing.has_assessment)
         .count();
 
-    let mut shortlist = data
-        .listings
+    let mut shortlist = summaries
         .into_iter()
         .filter(|listing| {
-            listing.assessment.is_none() && matches!(listing.status, ListingStatus::Active)
+            !listing.has_assessment && matches!(listing.status, ListingStatus::Active)
         })
         .collect::<Vec<_>>();
 
@@ -52,17 +50,12 @@ pub fn candidates(shared: &SharedArgs, params: &CandidatesParams) -> CommandResu
     }
 
     if let Some(min_score) = params.min_score {
-        shortlist.retain(|listing| {
-            listing
-                .scores
-                .as_ref()
-                .is_some_and(|scores| scores.overall >= min_score)
-        });
+        shortlist.retain(|listing| listing.score.is_some_and(|score| score >= min_score));
     }
 
     shortlist.sort_by(|a, b| {
-        let left = a.scores.as_ref().map_or(0.0, |scores| scores.overall);
-        let right = b.scores.as_ref().map_or(0.0, |scores| scores.overall);
+        let left = a.score.unwrap_or(0.0);
+        let right = b.score.unwrap_or(0.0);
         right.partial_cmp(&left).unwrap_or(Ordering::Equal)
     });
 
@@ -75,9 +68,9 @@ pub fn candidates(shared: &SharedArgs, params: &CandidatesParams) -> CommandResu
         .map(|listing| {
             json!({
                 "id": listing.id,
-                "portalId": listing.portal_ids.rightmove,
+                "portalId": listing.portal_rightmove,
                 "address": listing.address,
-                "score": listing.scores.as_ref().map(|scores| scores.overall),
+                "score": listing.score,
                 "region": listing.region,
                 "url": listing.url,
             })

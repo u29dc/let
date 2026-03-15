@@ -11,7 +11,8 @@ use crate::{ErrorCode, LetError, Result};
 mod repository;
 
 pub use repository::{
-    DbMeta, find_listing_by_id_from_db, load_listings_file, update_listing_assessment,
+    DbMeta, ListingSummary, ListingsOverview, find_listing_by_id_from_db, list_known_portal_ids,
+    load_listing_summaries, load_listings_file, load_listings_overview, update_listing_assessment,
     upsert_listings,
 };
 

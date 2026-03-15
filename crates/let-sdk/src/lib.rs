@@ -12,8 +12,9 @@ pub mod sources;
 pub mod utils;
 
 pub use db::{
-    DbMeta, close_listings_db, find_listing_by_id_from_db, load_listings_file, open_listings_db,
-    open_listings_db_readonly, update_listing_assessment, upsert_listings,
+    DbMeta, ListingSummary, ListingsOverview, close_listings_db, find_listing_by_id_from_db,
+    list_known_portal_ids, load_listing_summaries, load_listings_file, load_listings_overview,
+    open_listings_db, open_listings_db_readonly, update_listing_assessment, upsert_listings,
 };
 pub use errors::{ErrorCode, LetError, Result};
 pub use pipeline::enrich::{
