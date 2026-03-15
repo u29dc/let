@@ -4,11 +4,12 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+use let_sdk::paths::resolve_paths;
 use serde_json::json;
 
-use crate::commands::{CommandError, CommandOutput, CommandResult};
+use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs};
 
-pub fn run() -> CommandResult {
+pub fn run(shared: &SharedArgs) -> CommandResult {
     let binary = resolve_tui_binary().ok_or_else(|| {
         CommandError::runtime(
             "TUI_NOT_FOUND",
@@ -16,14 +17,21 @@ pub fn run() -> CommandResult {
             "build with `cargo build --workspace --release` or set LET_TUI_BIN",
         )
     })?;
+    let paths = resolve_paths(Some(shared.overrides.clone()));
 
-    let status = Command::new(&binary).status().map_err(|error| {
-        CommandError::runtime(
-            "START_ERROR",
-            format!("failed to start tui at {}: {error}", binary.display()),
-            "ensure terminal supports crossterm and binary is executable",
-        )
-    })?;
+    let status = Command::new(&binary)
+        .env("LET_DATA_DIR", &paths.resolved.data)
+        .env("LET_CONFIG_DIR", &paths.resolved.config)
+        .env("LET_CACHE_DIR", &paths.resolved.cache)
+        .env("LET_SOURCES_DIR", &paths.resolved.sources)
+        .status()
+        .map_err(|error| {
+            CommandError::runtime(
+                "START_ERROR",
+                format!("failed to start tui at {}: {error}", binary.display()),
+                "ensure terminal supports crossterm and binary is executable",
+            )
+        })?;
 
     if status.success() {
         Ok(CommandOutput::new(json!({

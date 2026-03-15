@@ -498,7 +498,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
         },
         Command::Start => DispatchOutcome::Local {
             tool: "start",
-            result: commands::start::run(),
+            result: commands::start::run(shared),
         },
         Command::Score {
             command: ScoreCommand::Compute,

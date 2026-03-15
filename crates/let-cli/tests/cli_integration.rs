@@ -455,6 +455,68 @@ fn explicit_text_flag_switches_to_human_readable_output() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn start_passes_resolved_paths_to_child_tui() {
+    let fixture = Fixture::new();
+    let script_dir = TempDir::new().expect("script tempdir");
+    let script_path = script_dir.path().join("let-tui-mock.sh");
+    let capture_path = script_dir.path().join("captured-env.txt");
+
+    fs::write(
+        &script_path,
+        r#"#!/bin/sh
+{
+  printf 'LET_DATA_DIR=%s\n' "$LET_DATA_DIR"
+  printf 'LET_CONFIG_DIR=%s\n' "$LET_CONFIG_DIR"
+  printf 'LET_CACHE_DIR=%s\n' "$LET_CACHE_DIR"
+  printf 'LET_SOURCES_DIR=%s\n' "$LET_SOURCES_DIR"
+} > "$LET_TUI_CAPTURE_PATH"
+"#,
+    )
+    .expect("write mock tui script");
+
+    let chmod = Command::new("chmod")
+        .args(["+x", script_path.to_str().expect("script path str")])
+        .status()
+        .expect("chmod script");
+    assert!(chmod.success(), "chmod should succeed");
+
+    let output = fixture
+        .cmd()
+        .env("LET_TUI_BIN", &script_path)
+        .env("LET_TUI_CAPTURE_PATH", &capture_path)
+        .args(["start"])
+        .output()
+        .expect("run start");
+
+    assert_eq!(output.status.code(), Some(0));
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["meta"]["tool"], "start");
+
+    let captured = fs::read_to_string(&capture_path).expect("read captured env");
+    assert!(
+        captured.contains(&format!("LET_DATA_DIR={}", fixture.data_dir.display())),
+        "expected data dir in child env, got: {captured}"
+    );
+    assert!(
+        captured.contains(&format!("LET_CONFIG_DIR={}", fixture.config_dir.display())),
+        "expected config dir in child env, got: {captured}"
+    );
+    assert!(
+        captured.contains(&format!("LET_CACHE_DIR={}", fixture.cache_dir.display())),
+        "expected cache dir in child env, got: {captured}"
+    );
+    assert!(
+        captured.contains(&format!(
+            "LET_SOURCES_DIR={}",
+            fixture.sources_dir.display()
+        )),
+        "expected sources dir in child env, got: {captured}"
+    );
+}
+
 #[test]
 fn prune_requires_force_in_non_interactive_mode() {
     let fixture = Fixture::new();
