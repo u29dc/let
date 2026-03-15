@@ -896,6 +896,15 @@ mod tests {
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    const SEARCH_API_PAGE_ONE: &str =
+        include_str!("../../tests/fixtures/rightmove/search-api-page-1.json");
+    const SEARCH_API_PAGE_TWO: &str =
+        include_str!("../../tests/fixtures/rightmove/search-api-page-2.json");
+    const SEARCH_HTML_PAGE_ONE: &str =
+        include_str!("../../tests/fixtures/rightmove/search-html-page-1.html");
+    const SEARCH_HTML_PAGE_TWO: &str =
+        include_str!("../../tests/fixtures/rightmove/search-html-page-2.html");
+
     use super::{
         DiscoverRuntimeConfig, SEARCH_API_BASE_URL, build_client, build_runtime,
         build_search_api_url_from_base, discover_location_with_base_urls, parse_csv,
@@ -941,11 +950,8 @@ mod tests {
     #[test]
     fn api_discovery_paginates_across_multiple_pages() {
         let (mock_runtime, server) = start_mock_server();
-        let page_one_ids = (1..=24).collect::<Vec<_>>();
-        let page_two_ids = (25..=30).collect::<Vec<_>>();
-
-        mount_json_page(&mock_runtime, &server, 0, &page_one_ids);
-        mount_json_page(&mock_runtime, &server, 24, &page_two_ids);
+        mount_json_fixture(&mock_runtime, &server, 0, SEARCH_API_PAGE_ONE);
+        mount_json_fixture(&mock_runtime, &server, 24, SEARCH_API_PAGE_TWO);
 
         let runtime = build_runtime().expect("runtime");
         let client = build_client(&runtime, 5).expect("client");
@@ -972,16 +978,19 @@ mod tests {
     #[test]
     fn discovery_falls_back_to_html_and_paginates() {
         let (mock_runtime, server) = start_mock_server();
-        let page_one_ids = (170001101..=170001124).collect::<Vec<_>>();
-        let page_two_ids = (170001125..=170001127).collect::<Vec<_>>();
-
-        mount_html_page(&mock_runtime, &server, "/api/_search", 0, &page_one_ids);
-        mount_html_page(
+        mount_html_fixture(
+            &mock_runtime,
+            &server,
+            "/api/_search",
+            0,
+            SEARCH_HTML_PAGE_ONE,
+        );
+        mount_html_fixture(
             &mock_runtime,
             &server,
             "/property-to-rent/find.html",
             24,
-            &page_two_ids,
+            SEARCH_HTML_PAGE_TWO,
         );
 
         let runtime = build_runtime().expect("runtime");
@@ -1034,15 +1043,13 @@ mod tests {
         (runtime, server)
     }
 
-    fn mount_json_page(
+    fn mount_json_fixture(
         runtime: &tokio::runtime::Runtime,
         server: &MockServer,
         index: usize,
-        ids: &[i64],
+        fixture: &str,
     ) {
-        let body = json!({
-            "properties": ids.iter().map(|id| json!({ "id": id })).collect::<Vec<_>>()
-        });
+        let body: serde_json::Value = serde_json::from_str(fixture).expect("fixture JSON");
         runtime.block_on(async {
             Mock::given(method("GET"))
                 .and(path("/api/_search"))
@@ -1057,17 +1064,13 @@ mod tests {
         });
     }
 
-    fn mount_html_page(
+    fn mount_html_fixture(
         runtime: &tokio::runtime::Runtime,
         server: &MockServer,
         route: &str,
         index: usize,
-        ids: &[i64],
+        fixture: &str,
     ) {
-        let body = ids
-            .iter()
-            .map(|id| format!(r#"<a href="/properties/{id}">Listing</a>"#))
-            .collect::<String>();
         runtime.block_on(async {
             Mock::given(method("GET"))
                 .and(path(route))
@@ -1075,7 +1078,7 @@ mod tests {
                 .respond_with(
                     ResponseTemplate::new(200)
                         .insert_header("content-type", "text/html")
-                        .set_body_string(body),
+                        .set_body_string(fixture.to_owned()),
                 )
                 .mount(server)
                 .await;

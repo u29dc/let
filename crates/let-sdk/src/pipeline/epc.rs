@@ -497,6 +497,15 @@ mod tests {
 
     use crate::schema::listing::EpcBand;
 
+    const EPC_SEARCH_ADDRESS_FIXTURE: &str =
+        include_str!("../../tests/fixtures/epc/domestic-search-address.json");
+    const EPC_SEARCH_EMPTY_FIXTURE: &str =
+        include_str!("../../tests/fixtures/epc/domestic-search-empty.json");
+    const EPC_SEARCH_POSTCODE_FIXTURE: &str =
+        include_str!("../../tests/fixtures/epc/domestic-search-postcode.json");
+    const EPC_CERTIFICATE_FIXTURE: &str =
+        include_str!("../../tests/fixtures/epc/domestic-certificate.json");
+
     use super::{
         EpcCredentials, lookup_domestic_epc_with_base_url, normalize_address, parse_candidate,
     };
@@ -550,29 +559,24 @@ mod tests {
                 .and(query_param("address", "Flat 2 Example House"))
                 .and(query_param("size", "25"))
                 .and(header("authorization", auth_header))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                    {
-                        "lmk-key": "cert-123",
-                        "address": "Flat 2 Example House, SW1A 1AA",
-                        "postcode": "SW1A 1AA"
-                    }
-                ])))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(
+                        serde_json::from_str::<serde_json::Value>(EPC_SEARCH_ADDRESS_FIXTURE)
+                            .expect("address search fixture"),
+                    ),
+                )
                 .mount(&server)
                 .await;
 
             Mock::given(method("GET"))
                 .and(path("/api/v1/domestic/certificate/cert-123"))
                 .and(header("authorization", auth_header))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "lmk-key": "cert-123",
-                    "address1": "Flat 2 Example House",
-                    "postcode": "SW1A 1AA",
-                    "current-energy-rating": "B",
-                    "total-floor-area": 81.2,
-                    "lodgement-date": "2024-01-10",
-                    "uprn": "100021345678",
-                    "uprn-source": "Address Matched"
-                })))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(
+                        serde_json::from_str::<serde_json::Value>(EPC_CERTIFICATE_FIXTURE)
+                            .expect("certificate fixture"),
+                    ),
+                )
                 .mount(&server)
                 .await;
 
@@ -608,7 +612,12 @@ mod tests {
                 .and(path("/api/v1/domestic/search"))
                 .and(query_param("postcode", "SW1A1AA"))
                 .and(query_param("address", "Flat 2 Example House"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(
+                        serde_json::from_str::<serde_json::Value>(EPC_SEARCH_EMPTY_FIXTURE)
+                            .expect("empty search fixture"),
+                    ),
+                )
                 .mount(&server)
                 .await;
 
@@ -616,14 +625,12 @@ mod tests {
                 .and(path("/api/v1/domestic/search"))
                 .and(query_param("postcode", "SW1A1AA"))
                 .and(query_param("size", "100"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                    {
-                        "LMK_KEY": "cert-456",
-                        "ADDRESS1": "Flat 2 Example House",
-                        "POSTCODE": "SW1A 1AA",
-                        "CURRENT_ENERGY_RATING": "C"
-                    }
-                ])))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(
+                        serde_json::from_str::<serde_json::Value>(EPC_SEARCH_POSTCODE_FIXTURE)
+                            .expect("postcode search fixture"),
+                    ),
+                )
                 .mount(&server)
                 .await;
 
