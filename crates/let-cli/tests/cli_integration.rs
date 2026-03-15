@@ -220,6 +220,34 @@ fn health_marks_schema_mismatch_as_blocking() {
 }
 
 #[test]
+fn health_marks_unopenable_database_as_degraded() {
+    let fixture = Fixture::new();
+    fs::remove_file(&fixture.db_path).expect("remove seeded database file");
+    fs::create_dir(&fixture.db_path).expect("replace database with directory");
+
+    let output = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["status"], "degraded");
+
+    let checks = json["data"]["checks"].as_array().expect("checks array");
+    let database = checks
+        .iter()
+        .find(|check| check["id"] == "database")
+        .expect("database check");
+    assert_eq!(database["status"], "error");
+    assert_eq!(database["severity"], "degraded");
+    assert!(
+        database["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("sqlite error")),
+        "expected sqlite error detail, got: {database:?}"
+    );
+}
+
+#[test]
 fn prune_dry_run_does_not_mutate_database() {
     let fixture = Fixture::new();
     let output = fixture

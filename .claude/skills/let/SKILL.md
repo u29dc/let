@@ -482,9 +482,10 @@ Error codes appear in `error.code` when `ok: false`.
 | `NO_CONFIG` | Config missing | Create from `templates/let.config.toml`, then re-run health |
 | `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$HOME/.tools/let/let" build sources all --jobs 3` |
 | `SCHEMA_MISMATCH` | DB schema incompatible | Restore `let.db.bak` or delete `let.db`, then run `"$HOME/.tools/let/let" fetch <id>` |
+| `CONFLICT` | Database lock contention | Close competing DB users, then retry the command |
 | `NOT_FOUND` | Listing removed | Skip and continue |
 | `VALIDATION_ERROR` | Invalid assessment or input data | Fix according to schema and `error.hint` |
-| `DB_ERROR` | Database read/write failed | Run `"$HOME/.tools/let/let" health`; if schema mismatch, restore/delete DB and fetch again |
+| `DB_ERROR` / `INTERNAL_ERROR` | Database read/write or path failure | Run `"$HOME/.tools/let/let" health"`; check permissions, locks, and disk state before restoring or recreating anything |
 | `NETWORK_ERROR` | Network request failed | Check connectivity/TLS, then retry once |
 | `PARSE_ERROR` | Upstream payload parse failed | Retry once; if persistent, treat as upstream drift and continue degraded |
 | `PATCH_JSON_PARSE_ERROR` / `PATCH_JSON_SCHEMA_ERROR` / `PATCH_JSON_VALIDATION_ERROR` | Invalid `ops patch --patch-json` payload | Fix JSON shape/values using `error.details`, then retry |

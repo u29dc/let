@@ -175,13 +175,27 @@ fn check_database(path: &Path) -> HealthCheck {
                 ]),
             }
         }
+        Err(error) if error.code == ErrorCode::Conflict => HealthCheck {
+            id: "database".to_owned(),
+            label: "Listings Database".to_owned(),
+            status: "error".to_owned(),
+            severity: "degraded".to_owned(),
+            detail: format!("{} ({})", path.display(), error.message),
+            fix: json!([
+                "close other processes using the database and retry",
+                "rerun `let health` once the lock clears"
+            ]),
+        },
         Err(error) => HealthCheck {
             id: "database".to_owned(),
             label: "Listings Database".to_owned(),
             status: "error".to_owned(),
             severity: "degraded".to_owned(),
             detail: format!("{} ({})", path.display(), error.message),
-            fix: json!(["restore from backup or recreate database with `let fetch <id>`"]),
+            fix: json!([
+                "check database path, permissions, and disk state",
+                "restore from backup only if the database file is damaged"
+            ]),
         },
     }
 }

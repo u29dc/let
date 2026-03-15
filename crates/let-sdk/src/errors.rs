@@ -74,11 +74,36 @@ impl From<std::io::Error> for LetError {
 
 impl From<rusqlite::Error> for LetError {
     fn from(err: rusqlite::Error) -> Self {
-        Self::new(
-            ErrorCode::SchemaMismatch,
-            format!("sqlite error: {err}"),
-            "verify database schema and rebuild if needed",
-        )
+        use rusqlite::ffi::ErrorCode as SqliteErrorCode;
+
+        let (code, hint) = match err.sqlite_error_code() {
+            Some(SqliteErrorCode::SchemaChanged) => (
+                ErrorCode::SchemaMismatch,
+                "verify the listings database schema and recreate it if needed",
+            ),
+            Some(SqliteErrorCode::DatabaseBusy | SqliteErrorCode::DatabaseLocked) => (
+                ErrorCode::Conflict,
+                "close competing database users and retry once the lock clears",
+            ),
+            Some(
+                SqliteErrorCode::PermissionDenied
+                | SqliteErrorCode::ReadOnly
+                | SqliteErrorCode::CannotOpen
+                | SqliteErrorCode::SystemIoFailure
+                | SqliteErrorCode::DatabaseCorrupt
+                | SqliteErrorCode::DiskFull
+                | SqliteErrorCode::NotADatabase,
+            ) => (
+                ErrorCode::Internal,
+                "check the database path, permissions, locks, and disk state",
+            ),
+            _ => (
+                ErrorCode::Internal,
+                "inspect the database file and retry the operation",
+            ),
+        };
+
+        Self::new(code, format!("sqlite error: {err}"), hint)
     }
 }
 
@@ -92,6 +117,8 @@ pub type Result<T> = std::result::Result<T, LetError>;
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::Error;
+
     use super::{ErrorCode, LetError};
 
     #[test]
@@ -105,5 +132,25 @@ mod tests {
     fn runtime_code_maps_to_exit_1() {
         let err = LetError::new(ErrorCode::Internal, "boom", "retry");
         assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn sqlite_busy_maps_to_conflict() {
+        let err = LetError::from(Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            None,
+        ));
+        assert_eq!(err.code, ErrorCode::Conflict);
+        assert_eq!(err.exit_code(), 1);
+    }
+
+    #[test]
+    fn sqlite_schema_change_maps_to_schema_mismatch() {
+        let err = LetError::from(Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_SCHEMA),
+            None,
+        ));
+        assert_eq!(err.code, ErrorCode::SchemaMismatch);
+        assert_eq!(err.exit_code(), 2);
     }
 }
