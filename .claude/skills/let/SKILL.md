@@ -326,6 +326,11 @@ Use these to verify and prune the working set:
 "$HOME/.tools/let/let" score compute
 ```
 
+Verification notes:
+
+- Treat `ops verify` rows with `status: "error"` as unresolved checks, not active listings.
+- Only `status: "inactive"` rows are safe prune/deactivate candidates without another fetch.
+
 Prune selector rules:
 
 - No selector defaults to `score < 50`.

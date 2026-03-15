@@ -120,6 +120,13 @@ struct VerifyResult {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct VerifySummary {
+    active: usize,
+    inactive: usize,
+    errors: usize,
+}
+
 pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let db_path = paths.derived.database;
@@ -1946,15 +1953,11 @@ pub fn verify(shared: &SharedArgs, params: &VerifyParams) -> CommandResult {
 
     let mut results = Vec::with_capacity(targets.len());
     let mut inactive_ids = Vec::new();
-    let mut errors = 0usize;
 
     for (idx, listing) in targets.iter().enumerate() {
         let result = verify_one_listing(&runtime, &client, listing);
         if result.status == "inactive" && result.error.is_none() {
             inactive_ids.push(result.id.clone());
-        }
-        if result.error.is_some() {
-            errors += 1;
         }
         results.push(result);
 
@@ -1967,15 +1970,14 @@ pub fn verify(shared: &SharedArgs, params: &VerifyParams) -> CommandResult {
         persist_inactive_status(&db_path, &inactive_ids)?;
     }
 
-    let inactive = inactive_ids.len();
+    let summary = summarize_verify_results(&results);
     let checked = results.len();
-    let active = checked.saturating_sub(inactive + errors);
 
     Ok(CommandOutput::new(json!({
         "checked": checked,
-        "active": active,
-        "inactive": inactive,
-        "errors": errors,
+        "active": summary.active,
+        "inactive": summary.inactive,
+        "errors": summary.errors,
         "dryRun": params.dry_run,
         "results": results,
     }))
@@ -1983,8 +1985,21 @@ pub fn verify(shared: &SharedArgs, params: &VerifyParams) -> CommandResult {
     .with_total(checked)
     .with_has_more(false)
     .with_text(format!(
-        "verified {checked} listing(s): {inactive} inactive, {errors} errors"
+        "verified {checked} listing(s): {} inactive, {} errors",
+        summary.inactive, summary.errors
     )))
+}
+
+fn summarize_verify_results(results: &[VerifyResult]) -> VerifySummary {
+    let mut summary = VerifySummary::default();
+    for result in results {
+        match result.status.as_str() {
+            "inactive" => summary.inactive += 1,
+            "error" => summary.errors += 1,
+            _ => summary.active += 1,
+        }
+    }
+    summary
 }
 
 fn select_prune_ids(
@@ -2179,7 +2194,7 @@ fn verify_one_listing(
         return VerifyResult {
             id: listing.id.clone(),
             rightmove_id,
-            status: "active".to_owned(),
+            status: "error".to_owned(),
             error: Some("missing rightmove id".to_owned()),
         };
     };
@@ -2202,7 +2217,7 @@ fn verify_one_listing(
                 return VerifyResult {
                     id: listing.id.clone(),
                     rightmove_id,
-                    status: "active".to_owned(),
+                    status: "error".to_owned(),
                     error: Some(format!("http {}", status.as_u16())),
                 };
             }
@@ -2213,7 +2228,7 @@ fn verify_one_listing(
                     return VerifyResult {
                         id: listing.id.clone(),
                         rightmove_id,
-                        status: "active".to_owned(),
+                        status: "error".to_owned(),
                         error: Some(format!("failed to read response body: {error}")),
                     };
                 }
@@ -2234,7 +2249,7 @@ fn verify_one_listing(
         Err(error) => VerifyResult {
             id: listing.id.clone(),
             rightmove_id,
-            status: "active".to_owned(),
+            status: "error".to_owned(),
             error: Some(error.to_string()),
         },
     }
@@ -2405,7 +2420,10 @@ fn delete_listing_ids(
 mod tests {
     use let_sdk::schema::listing::{ListingStatus, PortalIds};
 
-    use super::{PruneParams, detect_inactive_html, matches_region, select_prune_ids};
+    use super::{
+        PruneParams, VerifyResult, detect_inactive_html, matches_region, select_prune_ids,
+        summarize_verify_results,
+    };
 
     #[test]
     fn region_pattern_matches_city_prefix() {
@@ -2582,5 +2600,33 @@ mod tests {
         ));
         assert!(detect_inactive_html("LET AGREED"));
         assert!(!detect_inactive_html("Beautiful apartment available now."));
+    }
+
+    #[test]
+    fn verify_summary_counts_error_rows_separately() {
+        let summary = summarize_verify_results(&[
+            VerifyResult {
+                id: "id-1".to_owned(),
+                rightmove_id: Some("1".to_owned()),
+                status: "active".to_owned(),
+                error: None,
+            },
+            VerifyResult {
+                id: "id-2".to_owned(),
+                rightmove_id: Some("2".to_owned()),
+                status: "inactive".to_owned(),
+                error: None,
+            },
+            VerifyResult {
+                id: "id-3".to_owned(),
+                rightmove_id: Some("3".to_owned()),
+                status: "error".to_owned(),
+                error: Some("http 500".to_owned()),
+            },
+        ]);
+
+        assert_eq!(summary.active, 1);
+        assert_eq!(summary.inactive, 1);
+        assert_eq!(summary.errors, 1);
     }
 }
