@@ -5,3 +5,4 @@ pub mod epc;
 pub mod fetch;
 pub mod geocode;
 pub mod score;
+pub mod uprn;

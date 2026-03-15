@@ -14,6 +14,7 @@ use let_sdk::pipeline::fetch::rightmove::{
 };
 use let_sdk::pipeline::fetch::{carry_over_persistent_fields, is_newer_listing};
 use let_sdk::pipeline::geocode::{GeocodeSource, GeocodedCoordinates, mapbox_forward_geocode};
+use let_sdk::pipeline::uprn::{UprnResolution, resolve_listing_uprn};
 use let_sdk::schema::listing::{
     Listing, ListingsFile, MapViews, PinType, UprnConfidence, UprnSource,
 };
@@ -293,6 +294,28 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
                     }
                 } else if !params.skip_epc {
                     push_unique(&mut enrichment_unavailable_sources, "epc".to_owned());
+                }
+
+                if listing.uprn.is_none()
+                    && !enrichment_unavailable_sources
+                        .iter()
+                        .any(|source| source == "uprn")
+                {
+                    match resolve_listing_uprn(&source_enricher, &listing) {
+                        Ok(Some(uprn_resolution)) => {
+                            for field in apply_uprn_resolution(&mut listing, &uprn_resolution) {
+                                push_unique(&mut enrichment_applied, field);
+                            }
+                        }
+                        Ok(None) => push_unique(&mut enrichment_missing, "uprn".to_owned()),
+                        Err(error) => {
+                            eprintln!(
+                                "[fetch] uprn lookup failed for {portal_id}: {}",
+                                error.message
+                            );
+                            push_unique(&mut enrichment_unavailable_sources, "uprn".to_owned());
+                        }
+                    }
                 }
 
                 enrichment_applied.sort();
@@ -586,18 +609,42 @@ fn apply_epc_lookup(listing: &mut Listing, lookup: &EpcLookup) -> Vec<String> {
     }
 
     if let Some(uprn) = lookup.uprn.as_ref() {
-        if listing.uprn.as_deref() != Some(uprn.as_str()) {
-            listing.uprn = Some(uprn.clone());
-            push_unique(&mut applied, "uprn".to_owned());
+        for field in apply_uprn_fields(listing, uprn, UprnSource::Epc, UprnConfidence::Exact) {
+            push_unique(&mut applied, field);
         }
-        if listing.uprn_source != Some(UprnSource::Epc) {
-            listing.uprn_source = Some(UprnSource::Epc);
-            push_unique(&mut applied, "uprnSource".to_owned());
-        }
-        if listing.uprn_confidence != Some(UprnConfidence::Exact) {
-            listing.uprn_confidence = Some(UprnConfidence::Exact);
-            push_unique(&mut applied, "uprnConfidence".to_owned());
-        }
+    }
+
+    applied
+}
+
+fn apply_uprn_resolution(listing: &mut Listing, resolution: &UprnResolution) -> Vec<String> {
+    apply_uprn_fields(
+        listing,
+        &resolution.uprn,
+        resolution.source.clone(),
+        resolution.confidence.clone(),
+    )
+}
+
+fn apply_uprn_fields(
+    listing: &mut Listing,
+    uprn: &str,
+    source: UprnSource,
+    confidence: UprnConfidence,
+) -> Vec<String> {
+    let mut applied = Vec::new();
+
+    if listing.uprn.as_deref() != Some(uprn) {
+        listing.uprn = Some(uprn.to_owned());
+        push_unique(&mut applied, "uprn".to_owned());
+    }
+    if listing.uprn_source != Some(source.clone()) {
+        listing.uprn_source = Some(source);
+        push_unique(&mut applied, "uprnSource".to_owned());
+    }
+    if listing.uprn_confidence != Some(confidence.clone()) {
+        listing.uprn_confidence = Some(confidence);
+        push_unique(&mut applied, "uprnConfidence".to_owned());
     }
 
     applied

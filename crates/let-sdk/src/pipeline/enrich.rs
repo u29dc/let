@@ -6,6 +6,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::errors::{ErrorCode, LetError, Result};
+use crate::pipeline::uprn::UprnDistanceCandidate;
 use crate::schema::listing::Listing;
 use crate::utils::text::normalize_postcode;
 
@@ -17,6 +18,7 @@ const SOURCE_POPULATION: &str = "population";
 const SOURCE_INCOME: &str = "income";
 const SOURCE_FLOOD: &str = "flood";
 const SOURCE_CRIME: &str = "crime";
+const SOURCE_UPRN: &str = "uprn";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnrichmentMode {
@@ -51,6 +53,7 @@ pub struct SourceEnricher {
     income: Option<Connection>,
     flood: Option<Connection>,
     crime: Option<Connection>,
+    uprn: Option<Connection>,
     unavailable_sources: Vec<String>,
 }
 
@@ -105,6 +108,7 @@ impl SourceEnricher {
         let income = open_optional_source_db(sources_dir, SOURCE_INCOME, &mut unavailable_sources)?;
         let flood = open_optional_source_db(sources_dir, SOURCE_FLOOD, &mut unavailable_sources)?;
         let crime = open_optional_source_db(sources_dir, SOURCE_CRIME, &mut unavailable_sources)?;
+        let uprn = open_optional_source_db(sources_dir, SOURCE_UPRN, &mut unavailable_sources)?;
         unavailable_sources.sort();
 
         Ok(Self {
@@ -116,6 +120,7 @@ impl SourceEnricher {
             income,
             flood,
             crime,
+            uprn,
             unavailable_sources,
         })
     }
@@ -392,6 +397,19 @@ impl SourceEnricher {
         };
         query_postcode_coordinates(connection, postcode)
     }
+
+    pub fn lookup_uprn_candidates(
+        &self,
+        lat: f64,
+        lng: f64,
+        max_distance_m: f64,
+        limit: usize,
+    ) -> Result<Vec<UprnDistanceCandidate>> {
+        let Some(connection) = self.uprn.as_ref() else {
+            return Ok(Vec::new());
+        };
+        query_uprn_candidates(connection, lat, lng, max_distance_m, limit)
+    }
 }
 
 fn open_optional_source_db(
@@ -577,6 +595,76 @@ fn query_crime_lookup(connection: &Connection, lsoa_code: &str) -> Result<Option
         .map_err(Into::into)
 }
 
+fn query_uprn_candidates(
+    connection: &Connection,
+    lat: f64,
+    lng: f64,
+    max_distance_m: f64,
+    limit: usize,
+) -> Result<Vec<UprnDistanceCandidate>> {
+    let lat_delta = max_distance_m / 111_320.0;
+    let cos_lat = lat.to_radians().cos().abs().max(0.1);
+    let lng_delta = max_distance_m / (111_320.0 * cos_lat);
+
+    let mut statement = connection.prepare(
+        "SELECT uprn, lat, lng
+         FROM uprn
+         WHERE lat IS NOT NULL
+           AND lng IS NOT NULL
+           AND lat BETWEEN ?1 AND ?2
+           AND lng BETWEEN ?3 AND ?4
+         ORDER BY ABS(lat - ?5) + ABS(lng - ?6)
+         LIMIT ?7",
+    )?;
+
+    let rows = statement.query_map(
+        params![
+            lat - lat_delta,
+            lat + lat_delta,
+            lng - lng_delta,
+            lng + lng_delta,
+            lat,
+            lng,
+            limit as i64
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        },
+    )?;
+
+    let mut candidates = Vec::new();
+    for row in rows {
+        let (uprn, candidate_lat, candidate_lng) = row?;
+        let distance_m = haversine_distance_m(lat, lng, candidate_lat, candidate_lng);
+        if distance_m <= max_distance_m {
+            candidates.push(UprnDistanceCandidate { uprn, distance_m });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.distance_m
+            .partial_cmp(&right.distance_m)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(candidates)
+}
+
+fn haversine_distance_m(left_lat: f64, left_lng: f64, right_lat: f64, right_lng: f64) -> f64 {
+    let earth_radius_m = 6_371_000.0;
+    let d_lat = (right_lat - left_lat).to_radians();
+    let d_lng = (right_lng - left_lng).to_radians();
+    let left_lat = left_lat.to_radians();
+    let right_lat = right_lat.to_radians();
+
+    let a = (d_lat / 2.0).sin().powi(2)
+        + left_lat.cos() * right_lat.cos() * (d_lng / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    earth_radius_m * c
+}
+
 fn normalize_non_empty_postcode(value: &str) -> Option<String> {
     let normalized = normalize_postcode(value);
     (!normalized.is_empty()).then_some(normalized)
@@ -686,7 +774,7 @@ mod tests {
 
     use super::{
         EnrichmentMode, SOURCE_BROADBAND, SOURCE_CENSUS, SOURCE_CRIME, SOURCE_DEPRIVATION,
-        SOURCE_FLOOD, SOURCE_INCOME, SOURCE_POPULATION, SourceEnricher,
+        SOURCE_FLOOD, SOURCE_INCOME, SOURCE_POPULATION, SOURCE_UPRN, SourceEnricher,
     };
 
     #[test]
@@ -788,6 +876,7 @@ mod tests {
                 .unavailable_sources
                 .contains(&SOURCE_CRIME.to_owned())
         );
+        assert!(report.unavailable_sources.contains(&SOURCE_UPRN.to_owned()));
     }
 
     fn build_test_sources() -> TempDir {
@@ -954,6 +1043,28 @@ mod tests {
             .expect("seed crime");
     }
 
+    fn seed_uprn_db(root: &Path) {
+        let path = root.join("uprn.db");
+        let connection = Connection::open(path).expect("open db");
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE uprn (
+                    uprn TEXT PRIMARY KEY,
+                    lat REAL,
+                    lng REAL,
+                    x REAL,
+                    y REAL
+                );
+                INSERT INTO uprn (uprn, lat, lng, x, y)
+                VALUES
+                    ('100021234567', 51.50741, -0.12779, NULL, NULL),
+                    ('100021234568', 51.50760, -0.12760, NULL, NULL);
+                ",
+            )
+            .expect("seed uprn");
+    }
+
     #[test]
     fn lookup_postcode_coordinates_returns_lat_lng() {
         let temp = build_test_sources();
@@ -978,6 +1089,21 @@ mod tests {
             .expect("query should succeed");
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn lookup_uprn_candidates_returns_nearest_sorted_matches() {
+        let temp = build_test_sources();
+        seed_uprn_db(temp.path());
+        let enricher = SourceEnricher::open(temp.path()).expect("open enricher");
+
+        let result = enricher
+            .lookup_uprn_candidates(51.5074, -0.1278, 30.0, 5)
+            .expect("query should succeed");
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].uprn, "100021234567");
+        assert!(result[0].distance_m < result[1].distance_m);
     }
 
     fn sample_listing(postcode: &str) -> Listing {
