@@ -711,9 +711,24 @@ fn calculate_percentile(value: f64, sorted: &[f64], invert: bool) -> f64 {
         return 50.0;
     }
 
+    let lower = lower_bound(sorted, value);
+    let upper = upper_bound(sorted, value);
+    let percentile = if lower == upper {
+        (lower as f64 / sorted.len() as f64) * 100.0
+    } else {
+        ((lower as f64 + upper as f64) / 2.0 / sorted.len() as f64) * 100.0
+    };
+
+    if invert {
+        100.0 - percentile
+    } else {
+        percentile
+    }
+}
+
+fn lower_bound(sorted: &[f64], value: f64) -> usize {
     let mut low = 0usize;
     let mut high = sorted.len();
-
     while low < high {
         let mid = (low + high) / 2;
         if sorted[mid] < value {
@@ -722,13 +737,21 @@ fn calculate_percentile(value: f64, sorted: &[f64], invert: bool) -> f64 {
             high = mid;
         }
     }
+    low
+}
 
-    let percentile = (low as f64 / sorted.len() as f64) * 100.0;
-    if invert {
-        100.0 - percentile
-    } else {
-        percentile
+fn upper_bound(sorted: &[f64], value: f64) -> usize {
+    let mut low = 0usize;
+    let mut high = sorted.len();
+    while low < high {
+        let mid = (low + high) / 2;
+        if sorted[mid] <= value {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
     }
+    low
 }
 
 fn calculate_stats(values: &[f64]) -> StatsSummary {
@@ -1109,7 +1132,7 @@ mod tests {
         MapViews, PortalIds, RemoteLocalAsset,
     };
 
-    use super::{detect_garden_type, score_listings_with_config};
+    use super::{calculate_percentile, detect_garden_type, score_listings_with_config};
 
     #[test]
     fn scores_listing_batch() {
@@ -1156,6 +1179,29 @@ mod tests {
 
         listing.description = "bright lounge and private garden".to_owned();
         assert_eq!(detect_garden_type(&listing), GardenType::Private);
+    }
+
+    #[test]
+    fn percentile_handles_uniform_values_neutrally() {
+        let sorted = vec![100.0, 100.0, 100.0];
+        assert_eq!(calculate_percentile(100.0, &sorted, false), 50.0);
+        assert_eq!(calculate_percentile(100.0, &sorted, true), 50.0);
+    }
+
+    #[test]
+    fn percentile_gives_duplicate_values_the_same_midpoint_rank() {
+        let sorted = vec![900.0, 900.0, 1200.0, 1500.0];
+        let percentile = calculate_percentile(900.0, &sorted, false);
+        assert!(
+            (percentile - 25.0).abs() < 0.001,
+            "unexpected percentile: {percentile}"
+        );
+
+        let inverted = calculate_percentile(900.0, &sorted, true);
+        assert!(
+            (inverted - 75.0).abs() < 0.001,
+            "unexpected inverted percentile: {inverted}"
+        );
     }
 
     fn sample_listing(id: &str, price: i64) -> Listing {
