@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use let_sdk::config::{RIGHTMOVE_SEARCH_TYPES, SearchFilters, load_config, reset_config_cache};
+use let_sdk::config::{RIGHTMOVE_SEARCH_TYPES, SearchFilters, load_config};
 use let_sdk::{ErrorCode, load_listings_file};
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, HeaderMap, HeaderValue};
 use serde::Serialize;
@@ -214,7 +214,6 @@ pub fn discover(shared: &SharedArgs, params: &DiscoverParams) -> CommandResult {
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
     let config_path = paths.derived.config_file;
 
-    reset_config_cache();
     let config = load_config(Some(&config_path))?;
 
     let is_adhoc = params.location.is_some();

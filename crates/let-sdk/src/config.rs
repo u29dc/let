@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -296,12 +295,6 @@ pub struct AppConfig {
     pub scoring: ScoringConfig,
 }
 
-static CONFIG_CACHE: OnceLock<Mutex<Option<AppConfig>>> = OnceLock::new();
-
-fn config_cache() -> &'static Mutex<Option<AppConfig>> {
-    CONFIG_CACHE.get_or_init(|| Mutex::new(None))
-}
-
 fn approx_eq(a: f64, b: f64) -> bool {
     (a - b).abs() < 0.01
 }
@@ -576,17 +569,7 @@ pub fn parse_scoring_config(raw: &toml::Value) -> ScoringConfig {
     }
 }
 
-pub fn reset_config_cache() {
-    let mut guard = config_cache().lock().expect("config cache lock poisoned");
-    *guard = None;
-}
-
 pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
-    let mut guard = config_cache().lock().expect("config cache lock poisoned");
-    if let Some(cfg) = guard.clone() {
-        return Ok(cfg);
-    }
-
     let path: PathBuf = config_path
         .map(Path::to_path_buf)
         .unwrap_or_else(|| paths().derived.config_file);
@@ -609,8 +592,6 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
 
     let parsed = apply_search_scoring(parsed);
     parsed.validate()?;
-
-    *guard = Some(parsed.clone());
     Ok(parsed)
 }
 
@@ -630,7 +611,14 @@ pub fn load_scoring_config(config_path: Option<&Path>) -> ScoringConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, default_scoring_config, load_scoring_config, parse_scoring_config};
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::{
+        AppConfig, FetchConfig, Location, SearchConfig, SearchFilters, default_scoring_config,
+        load_config, load_scoring_config, parse_scoring_config,
+    };
 
     #[test]
     fn default_weights_sum_to_one() {
@@ -684,5 +672,53 @@ mod tests {
             name: "Manchester".to_string(),
         });
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn load_config_reads_requested_path_each_time() {
+        let temp = TempDir::new().expect("tempdir");
+        let path_a = temp.path().join("a.toml");
+        let path_b = temp.path().join("b.toml");
+
+        fs::write(
+            &path_a,
+            toml::to_string(&sample_config("Alpha")).expect("serialize config"),
+        )
+        .expect("write config a");
+        fs::write(
+            &path_b,
+            toml::to_string(&sample_config("Beta")).expect("serialize config"),
+        )
+        .expect("write config b");
+
+        let config_a = load_config(Some(&path_a)).expect("load config a");
+        let config_b = load_config(Some(&path_b)).expect("load config b");
+
+        assert_eq!(config_a.search.locations[0].name, "Alpha");
+        assert_eq!(config_b.search.locations[0].name, "Beta");
+    }
+
+    fn sample_config(name: &str) -> AppConfig {
+        AppConfig {
+            search: SearchConfig {
+                locations: vec![Location {
+                    id: format!("REGION^{name}"),
+                    name: name.to_owned(),
+                }],
+                filters: SearchFilters {
+                    min_bedrooms: 1,
+                    max_bedrooms: 2,
+                    min_price: 700,
+                    max_price: 1400,
+                    property_types: vec!["flat".to_owned()],
+                    include_let_agreed: false,
+                    radius: 1.0,
+                    dont_show: Vec::new(),
+                    must_have: Vec::new(),
+                },
+            },
+            fetch: FetchConfig::default(),
+            scoring: default_scoring_config(),
+        }
     }
 }

@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Default)]
 pub struct PathOverrides {
@@ -49,12 +48,6 @@ pub struct PathBundle {
     pub derived: DerivedPaths,
 }
 
-static CACHE: OnceLock<Mutex<Option<PathBundle>>> = OnceLock::new();
-
-fn cache() -> &'static Mutex<Option<PathBundle>> {
-    CACHE.get_or_init(|| Mutex::new(None))
-}
-
 fn make_absolute(path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         path
@@ -99,13 +92,6 @@ fn build_derived(resolved: &ResolvedPaths) -> DerivedPaths {
 }
 
 pub fn resolve_paths(overrides: Option<PathOverrides>) -> PathBundle {
-    if overrides.is_none() {
-        let guard = cache().lock().expect("path cache lock poisoned");
-        if let Some(bundle) = guard.clone() {
-            return bundle;
-        }
-    }
-
     let root = default_home();
     let defaults = ResolvedPaths {
         config: root.join("data"),
@@ -136,33 +122,23 @@ pub fn resolve_paths(overrides: Option<PathOverrides>) -> PathBundle {
         }
     }
 
-    let bundle = PathBundle {
+    PathBundle {
         derived: build_derived(&resolved),
         resolved,
-    };
-
-    let mut guard = cache().lock().expect("path cache lock poisoned");
-    *guard = Some(bundle.clone());
-    bundle
+    }
 }
 
 pub fn paths() -> PathBundle {
     resolve_paths(None)
 }
 
-pub fn reset_paths() {
-    let mut guard = cache().lock().expect("path cache lock poisoned");
-    *guard = None;
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{PathOverrides, reset_paths, resolve_paths};
+    use super::{PathOverrides, resolve_paths};
     use std::path::PathBuf;
 
     #[test]
     fn cli_override_wins() {
-        reset_paths();
         let bundle = resolve_paths(Some(PathOverrides {
             data_dir: Some(PathBuf::from("/tmp/let-data")),
             ..PathOverrides::default()
@@ -172,7 +148,6 @@ mod tests {
 
     #[test]
     fn derived_paths_are_consistent() {
-        reset_paths();
         let bundle = resolve_paths(Some(PathOverrides {
             data_dir: Some(PathBuf::from("/tmp/let-data")),
             config_dir: Some(PathBuf::from("/tmp/let-config")),
@@ -187,5 +162,20 @@ mod tests {
             bundle.derived.config_file,
             PathBuf::from("/tmp/let-config/let.config.toml")
         );
+    }
+
+    #[test]
+    fn consecutive_override_calls_do_not_reuse_previous_values() {
+        let first = resolve_paths(Some(PathOverrides {
+            data_dir: Some(PathBuf::from("/tmp/let-data-a")),
+            ..PathOverrides::default()
+        }));
+        let second = resolve_paths(Some(PathOverrides {
+            data_dir: Some(PathBuf::from("/tmp/let-data-b")),
+            ..PathOverrides::default()
+        }));
+
+        assert_eq!(first.resolved.data, PathBuf::from("/tmp/let-data-a"));
+        assert_eq!(second.resolved.data, PathBuf::from("/tmp/let-data-b"));
     }
 }
