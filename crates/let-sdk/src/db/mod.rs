@@ -12,8 +12,8 @@ mod repository;
 
 pub use repository::{
     DbMeta, ListingSummary, ListingsOverview, find_listing_by_id_from_db, list_known_portal_ids,
-    load_listing_summaries, load_listings_file, load_listings_overview, update_listing_assessment,
-    upsert_listings,
+    load_listing_summaries, load_listings_file, load_listings_overview, replace_listing_scores,
+    replace_listings, update_listing_assessment, update_listing_notion_page_ids, upsert_listings,
 };
 
 const LISTINGS_SCHEMA_SQL: &str = include_str!("schema.sql");

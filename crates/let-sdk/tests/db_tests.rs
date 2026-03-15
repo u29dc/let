@@ -3,7 +3,8 @@
 use let_sdk::db::{
     DbMeta, close_listings_db, find_listing_by_id_from_db, list_known_portal_ids,
     load_listing_summaries, load_listings_file, load_listings_overview, open_listings_db,
-    update_listing_assessment, upsert_listings,
+    replace_listing_scores, replace_listings, update_listing_assessment,
+    update_listing_notion_page_ids, upsert_listings,
 };
 use let_sdk::schema::listing::{
     Agent, AreaCodeName, AreaMetrics, CrimeBand, CrimeMetrics, CrimeTrend, EpcBand,
@@ -236,6 +237,74 @@ fn load_listings_fails_when_score_context_row_is_missing_for_scored_listing() {
         "expected missing score context row message, got: {}",
         error.message
     );
+}
+
+#[test]
+fn targeted_listing_writes_update_graph_scores_and_notion_id() {
+    let temp_dir = TempDir::new().expect("create tempdir");
+    let db_path = temp_dir.path().join("let.db");
+
+    let listing = sample_listing();
+    let meta = DbMeta {
+        updated_at: "2026-03-01T12:30:00.000Z".to_owned(),
+        last_search_total: 1,
+    };
+    upsert_listings(
+        &db_path,
+        std::slice::from_ref(&listing),
+        &[],
+        std::slice::from_ref(&listing),
+        &meta,
+        &[],
+        &[],
+    )
+    .expect("upsert listings");
+
+    let mut patched_listing = listing.clone();
+    patched_listing.address = "11 Updated Street, London".to_owned();
+    patched_listing.notes = vec!["updated note".to_owned()];
+    replace_listings(
+        &db_path,
+        std::slice::from_ref(&patched_listing),
+        "2026-03-01T13:00:00.000Z",
+    )
+    .expect("replace listing graph");
+
+    let mut rescored_listing = patched_listing.clone();
+    let mut scores = rescored_listing.scores.clone().expect("scores");
+    scores.overall = 81.0;
+    scores.context.config_hash = "score-config-v2".to_owned();
+    rescored_listing.scores = Some(scores);
+    rescored_listing.assessed_score = Some(82.5);
+    replace_listing_scores(
+        &db_path,
+        std::slice::from_ref(&rescored_listing),
+        "2026-03-01T13:05:00.000Z",
+    )
+    .expect("replace listing scores");
+
+    update_listing_notion_page_ids(
+        &db_path,
+        &[(rescored_listing.id.clone(), "notion-page-1".to_owned())],
+        "2026-03-01T13:10:00.000Z",
+    )
+    .expect("update notion page id");
+
+    let refreshed = find_listing_by_id_from_db(&db_path, rescored_listing.id.as_str())
+        .expect("reload listing")
+        .expect("listing exists");
+    assert_eq!(refreshed.address, "11 Updated Street, London");
+    assert_eq!(refreshed.notes, vec!["updated note".to_owned()]);
+    assert_eq!(
+        refreshed
+            .scores
+            .as_ref()
+            .expect("scores are present")
+            .overall,
+        81.0
+    );
+    assert_eq!(refreshed.assessed_score, Some(82.5));
+    assert_eq!(refreshed.notion_page_id.as_deref(), Some("notion-page-1"));
 }
 
 fn sample_listing() -> Listing {

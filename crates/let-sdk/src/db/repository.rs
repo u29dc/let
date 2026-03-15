@@ -234,6 +234,106 @@ pub fn update_listing_assessment(
     finalize_connection(connection, result)
 }
 
+pub fn replace_listings(
+    path: impl AsRef<Path>,
+    listings: &[Listing],
+    updated_at: &str,
+) -> Result<()> {
+    if listings.is_empty() {
+        return Ok(());
+    }
+
+    let db_path = path.as_ref();
+    backup_listings_db(db_path)?;
+
+    let mut connection = open_listings_db(db_path)?;
+    let result = (|| {
+        let tx = connection.transaction()?;
+
+        for listing in listings {
+            tx.execute("DELETE FROM listings WHERE id = ?1", params![listing.id])?;
+            insert_listing_graph(&tx, listing)?;
+        }
+
+        touch_meta_updated_at(&tx, updated_at)?;
+        tx.commit()?;
+        Ok(())
+    })();
+
+    finalize_connection(connection, result)
+}
+
+pub fn replace_listing_scores(
+    path: impl AsRef<Path>,
+    listings: &[Listing],
+    updated_at: &str,
+) -> Result<()> {
+    if listings.is_empty() {
+        return Ok(());
+    }
+
+    let db_path = path.as_ref();
+    backup_listings_db(db_path)?;
+
+    let mut connection = open_listings_db(db_path)?;
+    let result = (|| {
+        let tx = connection.transaction()?;
+
+        for listing in listings {
+            tx.execute(
+                "DELETE FROM scores WHERE listing_id = ?1",
+                params![listing.id.as_str()],
+            )?;
+            tx.execute(
+                "DELETE FROM score_contexts WHERE listing_id = ?1",
+                params![listing.id.as_str()],
+            )?;
+            insert_score_row(&tx, listing)?;
+            tx.execute(
+                "UPDATE listings SET assessed_score = ?1 WHERE id = ?2",
+                params![listing.assessed_score, listing.id.as_str()],
+            )?;
+        }
+
+        touch_meta_updated_at(&tx, updated_at)?;
+        tx.commit()?;
+        Ok(())
+    })();
+
+    finalize_connection(connection, result)
+}
+
+pub fn update_listing_notion_page_ids(
+    path: impl AsRef<Path>,
+    updates: &[(String, String)],
+    updated_at: &str,
+) -> Result<()> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    let db_path = path.as_ref();
+    backup_listings_db(db_path)?;
+
+    let mut connection = open_listings_db(db_path)?;
+    let result = (|| {
+        let tx = connection.transaction()?;
+
+        for (listing_id, page_id) in updates {
+            tx.execute(
+                "UPDATE listings SET notion_page_id = ?1 WHERE id = ?2",
+                params![page_id, listing_id],
+            )?;
+        }
+
+        touch_meta_updated_at(&tx, updated_at)?;
+        tx.commit()?;
+        Ok(())
+    })();
+
+    finalize_connection(connection, result)
+}
+
 pub fn find_listing_by_id_from_db(path: impl AsRef<Path>, id: &str) -> Result<Option<Listing>> {
     let connection = open_listings_db_readonly(path)?;
     let result = find_listing_by_id_with_connection(&connection, id);
@@ -981,6 +1081,14 @@ fn update_unchanged_assessed_scores(
             )?;
         }
     }
+    Ok(())
+}
+
+fn touch_meta_updated_at(tx: &Transaction<'_>, updated_at: &str) -> Result<()> {
+    tx.execute(
+        "UPDATE meta SET updated_at = ?1 WHERE id = 1",
+        params![updated_at],
+    )?;
     Ok(())
 }
 

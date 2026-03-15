@@ -8,8 +8,8 @@ use std::time::Duration;
 use chrono::NaiveDate;
 use let_sdk::schema::listing::{CrimeBand, CrimeTrend, EpcBand, Listing, ListingStatus};
 use let_sdk::{
-    DbMeta, EnrichmentMode, SourceEnricher, close_listings_db, load_listings_file,
-    open_listings_db, recalc_assessed_scores, score_listings_with_config, upsert_listings,
+    EnrichmentMode, SourceEnricher, close_listings_db, load_listings_file, open_listings_db,
+    recalc_assessed_scores, replace_listing_scores, replace_listings, score_listings_with_config,
 };
 use rusqlite::{params, params_from_iter};
 use serde_json::{Map, Value, json};
@@ -316,19 +316,18 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
         .find(|candidate| candidate.id == listing_id)
         .and_then(|candidate| candidate.scores.as_ref().map(|scores| scores.overall));
 
-    let meta = DbMeta {
-        updated_at: let_sdk::utils::time::now_iso(),
-        last_search_total: data.last_search_total,
-    };
-    upsert_listings(
+    let updated_at = let_sdk::utils::time::now_iso();
+    let patched_listing = rescored
+        .iter()
+        .find(|candidate| candidate.id == listing_id)
+        .cloned()
+        .expect("patched listing should still exist after rescoring");
+    replace_listings(
         &db_path,
-        &[],
-        &rescored,
-        &rescored,
-        &meta,
-        &data.search_urls,
-        &data.locations,
+        std::slice::from_ref(&patched_listing),
+        &updated_at,
     )?;
+    replace_listing_scores(&db_path, &rescored, &updated_at)?;
 
     Ok(CommandOutput::new(json!({
         "id": listing_id,

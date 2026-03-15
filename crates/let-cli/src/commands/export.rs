@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use let_sdk::schema::listing::{Listing, ListingStatus};
-use let_sdk::{DbMeta, load_listings_file, upsert_listings};
+use let_sdk::{load_listings_file, update_listing_notion_page_ids};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -122,6 +122,7 @@ pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResul
     let mut updated = 0usize;
     let mut skipped = 0usize;
     let mut failed = 0usize;
+    let mut page_updates = Vec::<(String, String)>::new();
 
     for index in selected.iter().copied() {
         let Some(listing) = data.listings.get_mut(index) else {
@@ -147,6 +148,9 @@ pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResul
                     updated += 1;
                 } else {
                     created += 1;
+                    if let Some(page_id) = listing.notion_page_id.clone() {
+                        page_updates.push((listing.id.clone(), page_id));
+                    }
                 }
             }
             Err(_) => {
@@ -155,18 +159,7 @@ pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResul
         }
     }
 
-    upsert_listings(
-        &db_path,
-        &[],
-        &data.listings,
-        &data.listings,
-        &DbMeta {
-            updated_at: let_sdk::utils::time::now_iso(),
-            last_search_total: data.last_search_total,
-        },
-        &data.search_urls,
-        &data.locations,
-    )?;
+    update_listing_notion_page_ids(&db_path, &page_updates, &let_sdk::utils::time::now_iso())?;
 
     let payload = NotionExportOutput {
         created,
