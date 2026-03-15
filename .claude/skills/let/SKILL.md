@@ -8,7 +8,7 @@ description: >-
 argument-hint: [search request or location]
 compatibility: >-
     Designed for Claude Code with Bash access. Requires an already-installed
-    CLI binary at `${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let`. Network
+    CLI binary at $HOME/.tools/let/let. Network
     access for Rightmove; optional EPC/Mapbox/Notion keys enable richer
     enrichment and exports.
 allowed-tools: Bash Read Write WebSearch WebFetch
@@ -26,29 +26,21 @@ Autonomous UK rental property search, triage, and neighborhood assessment via th
 
 ## Invocation
 
-Resolve the runtime binary path once per session:
-
 ```bash
-LET_BIN="${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}/let"
-```
-
-Then call:
-
-```bash
-"$LET_BIN" <command>
+"$HOME/.tools/let/let" <command>
 ```
 
 Hard rules:
 
-- If `$LET_BIN` is missing or not executable, return a blocked prerequisite and stop.
+- If `"$HOME/.tools/let/let"` is missing or not executable, return a blocked prerequisite and stop.
 - All non-interactive commands emit JSON envelopes on stdout by default. Treat stderr as logs/progress only unless `--text` is requested.
 - Read stdout as the contract. Treat stderr as logs only.
-- Bare `"$LET_BIN"` prints clap help; it does not emit JSON.
+- Bare `"$HOME/.tools/let/let"` prints clap help; it does not emit JSON.
 - Do not run repo build commands from this skill.
 
 ## Operating Rules
 
-- Read `$LET_HOME/data/let.context.md` first. It contains the human context behind the config.
+- Read `$HOME/.tools/let/data/let.context.md` first. It contains the human context behind the config.
 - Treat config as the baseline. Use one-off CLI overrides for ad-hoc searches; do not edit config unless explicitly asked.
 - Record every override in the final report.
 - Treat scores as advisory. Use photos, floorplans, maps, and neighborhood research to override shallow algorithmic conclusions.
@@ -60,20 +52,20 @@ Hard rules:
 
 ## Data Files
 
-- `$LET_HOME/data/let.context.md`: prose summary of the family's situation, priorities, tradeoffs, and what "100/100" means.
-- `$LET_HOME/data/let.config.toml`: baseline search config.
-- `$LET_HOME/data/.env`: EPC, Mapbox, and optional Notion credentials.
+- `$HOME/.tools/let/data/let.context.md`: prose summary of the family's situation, priorities, tradeoffs, and what "100/100" means.
+- `$HOME/.tools/let/data/let.config.toml`: baseline search config.
+- `$HOME/.tools/let/data/.env`: EPC, Mapbox, and optional Notion credentials.
 - `templates/let.config.toml`: config template for first-run setup.
-- `$LET_HOME/sources/`: local enrichment databases for broadband, IMD, crime, flood, census, and income.
+- `$HOME/.tools/let/sources/`: local enrichment databases for broadband, IMD, crime, flood, census, and income.
 
 ## Orientation and Health
 
 Run these at the start of every meaningful session:
 
 ```bash
-"$LET_BIN" tools
-"$LET_BIN" health
-"$LET_BIN" config show
+"$HOME/.tools/let/let" tools
+"$HOME/.tools/let/let" health
+"$HOME/.tools/let/let" config show
 ```
 
 Interpretation:
@@ -94,9 +86,9 @@ Use this section when `health` is blocked, the setup is incomplete, or the user'
 
 ### Context and Config
 
-- If `NO_CONFIG` is reported, create `$LET_HOME/data/let.config.toml` from `templates/let.config.toml`.
+- If `NO_CONFIG` is reported, create `$HOME/.tools/let/data/let.config.toml` from `templates/let.config.toml`.
 - Ask open-ended context questions first, then config-specific questions.
-- Write or update `$LET_HOME/data/let.context.md` in natural prose. Do not reduce it to config bullets.
+- Write or update `$HOME/.tools/let/data/let.context.md` in natural prose. Do not reduce it to config bullets.
 
 Phase 1 questions capture the human problem:
 
@@ -108,7 +100,7 @@ Phase 1 questions capture the human problem:
 
 Phase 2 questions fill the config:
 
-- Areas under consideration. Resolve each with `"$LET_BIN" search resolve <name>`.
+- Areas under consideration. Resolve each with `"$HOME/.tools/let/let" search resolve <name>`.
 - Property types.
 - Budget range.
 - Bedroom range.
@@ -118,13 +110,13 @@ Phase 2 questions fill the config:
 
 Config notes:
 
-- Config path: `$LET_HOME/data/let.config.toml`.
+- Config path: `$HOME/.tools/let/data/let.config.toml`.
 - Core sections: `[search]`, `[search.filters]`, `[fetch]`, `[scoring]`, `[scoring.regionPriority]`.
 - Region priority scores are `0-100`. Higher values increase ranking preference for that area.
 
 ### API Keys
 
-- `EPC_API_KEY` in `$LET_HOME/data/.env`: recommended for EPC rating, floor area, and UPRN enrichment.
+- `EPC_API_KEY` in `$HOME/.tools/let/data/.env`: recommended for EPC rating, floor area, and UPRN enrichment.
 - `MAPBOX_ACCESS_TOKEN`: optional, enables cached satellite and street map views.
 - `NOTION_API_KEY` and `NOTION_DATABASE_ID`: optional, only required for Notion export.
 - If credentials are missing, continue unless the requested task specifically depends on them.
@@ -136,7 +128,7 @@ Config notes:
 - To build sources locally:
 
 ```bash
-"$LET_BIN" build sources all --jobs 3
+"$HOME/.tools/let/let" build sources all --jobs 3
 ```
 
 - Optional integrity guard: set matching `*_SHA256` env vars (for example `POSTCODES_ZIP_SHA256`) before running source builds to enforce SHA-256 verification.
@@ -147,7 +139,7 @@ Config notes:
 After setup or remediation, run:
 
 ```bash
-"$LET_BIN" health
+"$HOME/.tools/let/let" health
 ```
 
 Proceed only when status is `ready` or `degraded`.
@@ -195,18 +187,18 @@ Follow these phases in order.
 ### Phase 0: Orient
 
 ```bash
-"$LET_BIN" tools
-"$LET_BIN" health
-"$LET_BIN" config show
+"$HOME/.tools/let/let" tools
+"$HOME/.tools/let/let" health
+"$HOME/.tools/let/let" config show
 ```
 
-Run `"$LET_BIN" tools` again whenever command shape or parameters are unclear.
+Run `"$HOME/.tools/let/let" tools` again whenever command shape or parameters are unclear.
 
 ### Phase 1: Discover
 
 ```bash
-"$LET_BIN" search discover
-"$LET_BIN" search diff <comma-separated-ids>
+"$HOME/.tools/let/let" search discover
+"$HOME/.tools/let/let" search diff <comma-separated-ids>
 ```
 
 Rules:
@@ -219,16 +211,16 @@ Rules:
 Example region-batched fetch:
 
 ```bash
-"$LET_BIN" fetch <sheffield-ids> --region Sheffield
-"$LET_BIN" fetch <stamford-ids> --region Stamford
+"$HOME/.tools/let/let" fetch <sheffield-ids> --region Sheffield
+"$HOME/.tools/let/let" fetch <stamford-ids> --region Stamford
 ```
 
 ### Phase 2: Acquire
 
 ```bash
-"$LET_BIN" fetch <new-ids>
-"$LET_BIN" fetch <single-id> --override-postcode "SY2 5WP" --override-address "Flat 2, Example House, SY2 5WP"
-"$LET_BIN" fetch <new-ids> --min-score 70
+"$HOME/.tools/let/let" fetch <new-ids>
+"$HOME/.tools/let/let" fetch <single-id> --override-postcode "SY2 5WP" --override-address "Flat 2, Example House, SY2 5WP"
+"$HOME/.tools/let/let" fetch <new-ids> --min-score 70
 ```
 
 Rules:
@@ -249,7 +241,7 @@ Rules:
 ### Phase 3: Triage
 
 ```bash
-"$LET_BIN" view list --top 30
+"$HOME/.tools/let/let" view list --top 30
 ```
 
 Suggested triage tiers:
@@ -265,14 +257,14 @@ Prefer 2-5 deep assessments over 30 shallow reviews.
 Queue and context:
 
 ```bash
-"$LET_BIN" assess candidates
-"$LET_BIN" assess context <id>
+"$HOME/.tools/let/let" assess candidates
+"$HOME/.tools/let/let" assess context <id>
 ```
 
 Submission:
 
 ```bash
-"$LET_BIN" assess submit <id> '<assessment-json>'
+"$HOME/.tools/let/let" assess submit <id> '<assessment-json>'
 ```
 
 Assessment rules:
@@ -296,9 +288,9 @@ What to evaluate:
 Useful commands:
 
 ```bash
-"$LET_BIN" view list --top 20
-"$LET_BIN" view detail <id>
-"$LET_BIN" score explain <id>
+"$HOME/.tools/let/let" view list --top 20
+"$HOME/.tools/let/let" view detail <id>
+"$HOME/.tools/let/let" score explain <id>
 ```
 
 Report structure:
@@ -327,10 +319,10 @@ If comparing regions, include:
 Use these to verify and prune the working set:
 
 ```bash
-"$LET_BIN" ops verify --dry-run --limit 20
-"$LET_BIN" ops prune --dry-run
-"$LET_BIN" ops patch <id> --patch-json '{"crimeRatePer1k": 12.3}'
-"$LET_BIN" score compute
+"$HOME/.tools/let/let" ops verify --dry-run --limit 20
+"$HOME/.tools/let/let" ops prune --dry-run
+"$HOME/.tools/let/let" ops patch <id> --patch-json '{"crimeRatePer1k": 12.3}'
+"$HOME/.tools/let/let" score compute
 ```
 
 Prune selector rules:
@@ -350,10 +342,10 @@ Patch and rescore rules:
 Examples:
 
 ```bash
-"$LET_BIN" ops prune --dry-run
-"$LET_BIN" ops prune --region Sheffield --dry-run
-"$LET_BIN" ops prune --region Sheffield --min-score 60 --dry-run
-"$LET_BIN" ops prune --inactive --region Sheffield --dry-run
+"$HOME/.tools/let/let" ops prune --dry-run
+"$HOME/.tools/let/let" ops prune --region Sheffield --dry-run
+"$HOME/.tools/let/let" ops prune --region Sheffield --min-score 60 --dry-run
+"$HOME/.tools/let/let" ops prune --inactive --region Sheffield --dry-run
 ```
 
 ## Postcode and Neighborhood Research
@@ -432,7 +424,7 @@ Use sequential subagents for multi-region exploration.
 
 When delegating a location, give the subagent:
 
-- the summary from `$LET_HOME/data/let.context.md`
+- the summary from `$HOME/.tools/let/data/let.context.md`
 - the current user request
 - the location name and identifier if known
 - the rule set: no config edits, use overrides if needed, keep batches small, write assessments back normally
@@ -442,7 +434,7 @@ Template:
 ```text
 You are a subagent exploring one location for the `let` property search.
 
-Read first: $LET_HOME/data/let.context.md.
+Read first: $HOME/.tools/let/data/let.context.md.
 
 Constraints:
 * Do not edit config files.
@@ -457,7 +449,7 @@ Location:
 * Identifier: {LOCATION_ID}
 
 Steps:
-1) `"$LET_BIN" health`
+1) `"$HOME/.tools/let/let" health`
 2) Discover listings for this location
 3) Diff new vs known
 4) Fetch a small batch and assign region if needed
@@ -482,15 +474,15 @@ Error codes appear in `error.code` when `ok: false`.
 | Code | Meaning | Recovery Action |
 | --- | --- | --- |
 | `NO_CONFIG` | Config missing | Create from `templates/let.config.toml`, then re-run health |
-| `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$LET_BIN" build sources all --jobs 3` |
-| `SCHEMA_MISMATCH` | DB schema incompatible | Restore `let.db.bak` or delete `let.db`, then run `"$LET_BIN" fetch <id>` |
+| `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$HOME/.tools/let/let" build sources all --jobs 3` |
+| `SCHEMA_MISMATCH` | DB schema incompatible | Restore `let.db.bak` or delete `let.db`, then run `"$HOME/.tools/let/let" fetch <id>` |
 | `NOT_FOUND` | Listing removed | Skip and continue |
 | `VALIDATION_ERROR` | Invalid assessment or input data | Fix according to schema and `error.hint` |
-| `DB_ERROR` | Database read/write failed | Run `"$LET_BIN" health`; if schema mismatch, restore/delete DB and fetch again |
+| `DB_ERROR` | Database read/write failed | Run `"$HOME/.tools/let/let" health`; if schema mismatch, restore/delete DB and fetch again |
 | `NETWORK_ERROR` | Network request failed | Check connectivity/TLS, then retry once |
 | `PARSE_ERROR` | Upstream payload parse failed | Retry once; if persistent, treat as upstream drift and continue degraded |
 | `PATCH_JSON_PARSE_ERROR` / `PATCH_JSON_SCHEMA_ERROR` / `PATCH_JSON_VALIDATION_ERROR` | Invalid `ops patch --patch-json` payload | Fix JSON shape/values using `error.details`, then retry |
-| `NO_CREDENTIALS` | API credentials missing | Set keys in `$LET_HOME/data/.env` and re-run health |
+| `NO_CREDENTIALS` | API credentials missing | Set keys in `$HOME/.tools/let/data/.env` and re-run health |
 | `INVALID_DB` | Notion database inaccessible | Check Notion credentials and DB ID |
 
 Exit codes:
@@ -505,7 +497,7 @@ Recovery rules:
 
 1. Read `error.code` and `error.hint`.
 2. Apply the table action.
-3. If the error persists, re-run `"$LET_BIN" health"` to check for systemic issues.
+3. If the error persists, re-run `"$HOME/.tools/let/let" health"` to check for systemic issues.
 4. For rate limits, back off and never retry more than twice overall.
 5. For missing enrichment or media, continue with lower confidence instead of blocking the run.
 
