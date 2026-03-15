@@ -14,6 +14,7 @@ use let_sdk::pipeline::fetch::rightmove::{
 };
 use let_sdk::pipeline::fetch::{carry_over_persistent_fields, is_newer_listing};
 use let_sdk::pipeline::geocode::{GeocodeSource, GeocodedCoordinates, mapbox_forward_geocode};
+use let_sdk::pipeline::naptan::resolve_listing_stations;
 use let_sdk::pipeline::uprn::{UprnResolution, resolve_listing_uprn};
 use let_sdk::schema::listing::{
     Listing, ListingsFile, MapViews, PinType, UprnConfidence, UprnSource,
@@ -314,6 +315,27 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
                                 error.message
                             );
                             push_unique(&mut enrichment_unavailable_sources, "uprn".to_owned());
+                        }
+                    }
+                }
+
+                if listing.nearest_stations.is_empty()
+                    && !enrichment_unavailable_sources
+                        .iter()
+                        .any(|source| source == "naptan")
+                {
+                    match resolve_listing_stations(&source_enricher, &listing) {
+                        Ok(Some(stations)) => {
+                            listing.nearest_stations = stations;
+                            push_unique(&mut enrichment_applied, "nearestStations".to_owned());
+                        }
+                        Ok(None) => push_unique(&mut enrichment_missing, "naptan".to_owned()),
+                        Err(error) => {
+                            eprintln!(
+                                "[fetch] naptan lookup failed for {portal_id}: {}",
+                                error.message
+                            );
+                            push_unique(&mut enrichment_unavailable_sources, "naptan".to_owned());
                         }
                     }
                 }

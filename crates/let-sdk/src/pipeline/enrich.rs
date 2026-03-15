@@ -6,6 +6,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::errors::{ErrorCode, LetError, Result};
+use crate::pipeline::naptan::NaptanStopCandidate;
 use crate::pipeline::uprn::UprnDistanceCandidate;
 use crate::schema::listing::Listing;
 use crate::utils::text::normalize_postcode;
@@ -18,6 +19,7 @@ const SOURCE_POPULATION: &str = "population";
 const SOURCE_INCOME: &str = "income";
 const SOURCE_FLOOD: &str = "flood";
 const SOURCE_CRIME: &str = "crime";
+const SOURCE_NAPTAN: &str = "naptan";
 const SOURCE_UPRN: &str = "uprn";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +55,7 @@ pub struct SourceEnricher {
     income: Option<Connection>,
     flood: Option<Connection>,
     crime: Option<Connection>,
+    naptan: Option<Connection>,
     uprn: Option<Connection>,
     unavailable_sources: Vec<String>,
 }
@@ -108,6 +111,7 @@ impl SourceEnricher {
         let income = open_optional_source_db(sources_dir, SOURCE_INCOME, &mut unavailable_sources)?;
         let flood = open_optional_source_db(sources_dir, SOURCE_FLOOD, &mut unavailable_sources)?;
         let crime = open_optional_source_db(sources_dir, SOURCE_CRIME, &mut unavailable_sources)?;
+        let naptan = open_optional_source_db(sources_dir, SOURCE_NAPTAN, &mut unavailable_sources)?;
         let uprn = open_optional_source_db(sources_dir, SOURCE_UPRN, &mut unavailable_sources)?;
         unavailable_sources.sort();
 
@@ -120,6 +124,7 @@ impl SourceEnricher {
             income,
             flood,
             crime,
+            naptan,
             uprn,
             unavailable_sources,
         })
@@ -410,6 +415,19 @@ impl SourceEnricher {
         };
         query_uprn_candidates(connection, lat, lng, max_distance_m, limit)
     }
+
+    pub fn lookup_naptan_stops(
+        &self,
+        lat: f64,
+        lng: f64,
+        max_distance_m: f64,
+        limit: usize,
+    ) -> Result<Vec<NaptanStopCandidate>> {
+        let Some(connection) = self.naptan.as_ref() else {
+            return Ok(Vec::new());
+        };
+        query_naptan_stops(connection, lat, lng, max_distance_m, limit)
+    }
 }
 
 fn open_optional_source_db(
@@ -652,6 +670,69 @@ fn query_uprn_candidates(
     Ok(candidates)
 }
 
+fn query_naptan_stops(
+    connection: &Connection,
+    lat: f64,
+    lng: f64,
+    max_distance_m: f64,
+    limit: usize,
+) -> Result<Vec<NaptanStopCandidate>> {
+    let lat_delta = max_distance_m / 111_320.0;
+    let cos_lat = lat.to_radians().cos().abs().max(0.1);
+    let lng_delta = max_distance_m / (111_320.0 * cos_lat);
+
+    let mut statement = connection.prepare(
+        "SELECT common_name, stop_type, lat, lng
+         FROM stops
+         WHERE common_name IS NOT NULL
+           AND lat IS NOT NULL
+           AND lng IS NOT NULL
+           AND lat BETWEEN ?1 AND ?2
+           AND lng BETWEEN ?3 AND ?4
+         ORDER BY ABS(lat - ?5) + ABS(lng - ?6)
+         LIMIT ?7",
+    )?;
+
+    let rows = statement.query_map(
+        params![
+            lat - lat_delta,
+            lat + lat_delta,
+            lng - lng_delta,
+            lng + lng_delta,
+            lat,
+            lng,
+            limit as i64
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        },
+    )?;
+
+    let mut candidates = Vec::new();
+    for row in rows {
+        let (name, stop_type, candidate_lat, candidate_lng) = row?;
+        let distance_m = haversine_distance_m(lat, lng, candidate_lat, candidate_lng);
+        if distance_m <= max_distance_m {
+            candidates.push(NaptanStopCandidate {
+                name,
+                stop_type,
+                distance_m,
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.distance_m
+            .partial_cmp(&right.distance_m)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(candidates)
+}
+
 fn haversine_distance_m(left_lat: f64, left_lng: f64, right_lat: f64, right_lng: f64) -> f64 {
     let earth_radius_m = 6_371_000.0;
     let d_lat = (right_lat - left_lat).to_radians();
@@ -774,7 +855,7 @@ mod tests {
 
     use super::{
         EnrichmentMode, SOURCE_BROADBAND, SOURCE_CENSUS, SOURCE_CRIME, SOURCE_DEPRIVATION,
-        SOURCE_FLOOD, SOURCE_INCOME, SOURCE_POPULATION, SOURCE_UPRN, SourceEnricher,
+        SOURCE_FLOOD, SOURCE_INCOME, SOURCE_NAPTAN, SOURCE_POPULATION, SOURCE_UPRN, SourceEnricher,
     };
 
     #[test]
@@ -875,6 +956,11 @@ mod tests {
             report
                 .unavailable_sources
                 .contains(&SOURCE_CRIME.to_owned())
+        );
+        assert!(
+            report
+                .unavailable_sources
+                .contains(&SOURCE_NAPTAN.to_owned())
         );
         assert!(report.unavailable_sources.contains(&SOURCE_UPRN.to_owned()));
     }
@@ -1065,6 +1151,30 @@ mod tests {
             .expect("seed uprn");
     }
 
+    fn seed_naptan_db(root: &Path) {
+        let path = root.join("naptan.db");
+        let connection = Connection::open(path).expect("open db");
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE stops (
+                    atco_code TEXT PRIMARY KEY,
+                    naptan_code TEXT,
+                    common_name TEXT,
+                    stop_type TEXT,
+                    lat REAL,
+                    lng REAL
+                );
+                INSERT INTO stops (atco_code, naptan_code, common_name, stop_type, lat, lng)
+                VALUES
+                    ('stop-1', 'nap-1', 'Central Rail Station', 'RLY', 51.50745, -0.12775),
+                    ('stop-2', 'nap-2', 'Town Tram Stop', 'MKD', 51.50760, -0.12760),
+                    ('stop-3', 'nap-3', 'High Street Bus Stop', 'BCT', 51.50741, -0.12779);
+                ",
+            )
+            .expect("seed naptan");
+    }
+
     #[test]
     fn lookup_postcode_coordinates_returns_lat_lng() {
         let temp = build_test_sources();
@@ -1103,6 +1213,21 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].uprn, "100021234567");
+        assert!(result[0].distance_m < result[1].distance_m);
+    }
+
+    #[test]
+    fn lookup_naptan_stops_returns_nearest_sorted_matches() {
+        let temp = build_test_sources();
+        seed_naptan_db(temp.path());
+        let enricher = SourceEnricher::open(temp.path()).expect("open enricher");
+
+        let result = enricher
+            .lookup_naptan_stops(51.5074, -0.1278, 500.0, 5)
+            .expect("query should succeed");
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].name, "High Street Bus Stop");
         assert!(result[0].distance_m < result[1].distance_m);
     }
 
