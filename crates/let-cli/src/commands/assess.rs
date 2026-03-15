@@ -10,7 +10,9 @@ use let_sdk::{
 use serde_json::{Value, json};
 use std::cmp::Ordering;
 
-use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs, to_camel_json};
+use crate::commands::{
+    CommandError, CommandOutput, CommandResult, ErrorDetail, SharedArgs, to_camel_json,
+};
 
 #[derive(Debug, Clone)]
 pub struct CandidatesParams {
@@ -149,11 +151,12 @@ pub fn submit(shared: &SharedArgs, id: &str, assessment_raw: &str) -> CommandRes
 
     let validation = validate_assessment_json(&parsed);
     if !validation.errors.is_empty() {
-        return Ok(CommandOutput::new(json!({
-            "valid": false,
-            "errors": validation.errors,
-        }))
-        .with_text("assessment validation failed"));
+        return Err(CommandError::runtime(
+            "VALIDATION_ERROR",
+            "assessment payload failed validation",
+            "fix the invalid fields in `error.details` and retry",
+        )
+        .with_details(validation.errors));
     }
 
     let assessment = validation
@@ -309,22 +312,19 @@ fn assessment_schema() -> Value {
 #[derive(Debug, Default)]
 struct AssessmentValidation {
     assessment: Option<ListingAssessment>,
-    errors: Vec<ValidationError>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct ValidationError {
-    path: String,
-    message: String,
+    errors: Vec<ErrorDetail>,
 }
 
 fn validate_assessment_json(value: &Value) -> AssessmentValidation {
     let mut result = AssessmentValidation::default();
     let Some(object) = value.as_object() else {
-        result.errors.push(ValidationError {
-            path: "".to_owned(),
-            message: "expected object".to_owned(),
-        });
+        result.errors.push(validation_error(
+            "",
+            "INVALID_TYPE",
+            "expected object",
+            Some("object".to_owned()),
+            Some(value_kind(value)),
+        ));
         return result;
     };
 
@@ -387,25 +387,31 @@ fn parse_enum(
     value: Option<&Value>,
     path: &str,
     allowed: &[&str],
-    errors: &mut Vec<ValidationError>,
+    errors: &mut Vec<ErrorDetail>,
 ) -> Option<String> {
     match value.and_then(Value::as_str) {
         Some(raw) => {
             if allowed.contains(&raw) {
                 Some(raw.to_owned())
             } else {
-                errors.push(ValidationError {
-                    path: path.to_owned(),
-                    message: format!("must be one of {}", allowed.join(", ")),
-                });
+                errors.push(validation_error(
+                    path,
+                    "INVALID_VALUE",
+                    format!("must be one of {}", allowed.join(", ")),
+                    Some(format!("one of {}", allowed.join(", "))),
+                    Some(format!("string `{raw}`")),
+                ));
                 None
             }
         }
         None => {
-            errors.push(ValidationError {
-                path: path.to_owned(),
-                message: "required string".to_owned(),
-            });
+            errors.push(validation_error(
+                path,
+                "MISSING_FIELD",
+                "required string",
+                Some("string".to_owned()),
+                value.map(value_kind),
+            ));
             None
         }
     }
@@ -414,22 +420,28 @@ fn parse_enum(
 fn parse_string(
     value: Option<&Value>,
     path: &str,
-    errors: &mut Vec<ValidationError>,
+    errors: &mut Vec<ErrorDetail>,
 ) -> Option<String> {
     match value.and_then(Value::as_str) {
         Some(raw) if !raw.trim().is_empty() => Some(raw.to_owned()),
         Some(_) => {
-            errors.push(ValidationError {
-                path: path.to_owned(),
-                message: "must not be empty".to_owned(),
-            });
+            errors.push(validation_error(
+                path,
+                "INVALID_VALUE",
+                "must not be empty",
+                Some("non-empty string".to_owned()),
+                Some("empty string".to_owned()),
+            ));
             None
         }
         None => {
-            errors.push(ValidationError {
-                path: path.to_owned(),
-                message: "required string".to_owned(),
-            });
+            errors.push(validation_error(
+                path,
+                "MISSING_FIELD",
+                "required string",
+                Some("string".to_owned()),
+                value.map(value_kind),
+            ));
             None
         }
     }
@@ -438,38 +450,75 @@ fn parse_string(
 fn parse_optional_string(
     value: Option<&Value>,
     path: &str,
-    errors: &mut Vec<ValidationError>,
+    errors: &mut Vec<ErrorDetail>,
 ) -> Option<String> {
     match value {
         None | Some(Value::Null) => None,
         Some(Value::String(raw)) => Some(raw.to_owned()),
         Some(_) => {
-            errors.push(ValidationError {
-                path: path.to_owned(),
-                message: "must be a string".to_owned(),
-            });
+            errors.push(validation_error(
+                path,
+                "INVALID_TYPE",
+                "must be a string",
+                Some("string or null".to_owned()),
+                value.map(value_kind),
+            ));
             None
         }
     }
 }
 
-fn parse_score_adjustment(value: Option<&Value>, errors: &mut Vec<ValidationError>) -> Option<f64> {
+fn parse_score_adjustment(value: Option<&Value>, errors: &mut Vec<ErrorDetail>) -> Option<f64> {
     match value.and_then(Value::as_f64) {
         Some(raw) if (-30.0..=30.0).contains(&raw) => Some(raw),
-        Some(_) => {
-            errors.push(ValidationError {
-                path: "scoreAdjustment".to_owned(),
-                message: "must be between -30 and 30".to_owned(),
-            });
+        Some(raw) => {
+            errors.push(validation_error(
+                "scoreAdjustment",
+                "OUT_OF_RANGE",
+                "must be between -30 and 30",
+                Some("-30..30".to_owned()),
+                Some(raw.to_string()),
+            ));
             None
         }
         None => {
-            errors.push(ValidationError {
-                path: "scoreAdjustment".to_owned(),
-                message: "required number".to_owned(),
-            });
+            errors.push(validation_error(
+                "scoreAdjustment",
+                "MISSING_FIELD",
+                "required number",
+                Some("number".to_owned()),
+                value.map(value_kind),
+            ));
             None
         }
+    }
+}
+
+fn validation_error(
+    path: impl Into<String>,
+    code: impl Into<String>,
+    message: impl Into<String>,
+    expected: Option<String>,
+    actual: Option<String>,
+) -> ErrorDetail {
+    ErrorDetail {
+        path: path.into(),
+        code: code.into(),
+        message: message.into(),
+        expected,
+        actual,
+        suggestion: None,
+    }
+}
+
+fn value_kind(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(_) => "boolean".to_owned(),
+        Value::Number(_) => "number".to_owned(),
+        Value::String(_) => "string".to_owned(),
+        Value::Array(_) => "array".to_owned(),
+        Value::Object(_) => "object".to_owned(),
     }
 }
 

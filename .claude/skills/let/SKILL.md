@@ -271,6 +271,7 @@ Assessment rules:
 
 - Use the assessment schema returned by the CLI as the submission contract.
 - Use `media.*` paths from `assess context`; do not guess directories.
+- Invalid submissions fail with `VALIDATION_ERROR`; use `error.details` to fix the payload and retry.
 - Keep conclusions evidence-based.
 - Explain any score adjustment in 1-2 sentences.
 - If media is missing, say so and lower confidence rather than guessing.

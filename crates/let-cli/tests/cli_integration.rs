@@ -253,6 +253,39 @@ fn fetch_with_empty_ids_returns_validation_error() {
 }
 
 #[test]
+fn assess_submit_invalid_payload_returns_error_envelope() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args([
+            "assess",
+            "submit",
+            "165432101",
+            r#"{"maintenance":"invalid","scoreAdjustment":99}"#,
+        ])
+        .output()
+        .expect("run assess submit");
+
+    assert_eq!(output.status.code(), Some(1));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+
+    let details = json["error"]["details"]
+        .as_array()
+        .expect("error details array");
+    assert!(
+        details.iter().any(|item| item["path"] == "maintenance"),
+        "expected maintenance validation detail, got: {details:?}"
+    );
+    assert!(
+        details.iter().any(|item| item["path"] == "scoreAdjustment"),
+        "expected scoreAdjustment validation detail, got: {details:?}"
+    );
+}
+
+#[test]
 fn ops_patch_re_enriches_from_sources_by_default() {
     let fixture = Fixture::new();
     seed_minimal_sources(&fixture.sources_dir);
