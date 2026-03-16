@@ -1006,6 +1006,7 @@ mod tests {
     fn sample_config() -> AppConfig {
         AppConfig {
             search: SearchConfig {
+                use_api: true,
                 locations: vec![Location {
                     id: "REGION^123".to_owned(),
                     name: "Sample".to_owned(),

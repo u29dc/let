@@ -55,7 +55,7 @@ Hard rules:
 - `$HOME/.tools/let/data/let.context.md`: prose summary of the family's situation, priorities, tradeoffs, and what "100/100" means.
 - `$HOME/.tools/let/data/let.config.toml`: baseline search config.
 - `$HOME/.tools/let/data/.env`: EPC, Mapbox, and optional Notion credentials.
-- `templates/let.config.toml`: config template for first-run setup.
+- `.claude/skills/let/templates/let.config.toml`: config template for first-run setup.
 - `$HOME/.tools/let/sources/`: local enrichment databases for broadband, IMD, crime, flood, census, and income.
 
 ## Orientation and Health
@@ -86,7 +86,7 @@ Use this section when `health` is blocked, the setup is incomplete, or the user'
 
 ### Context and Config
 
-- If `NO_CONFIG` is reported, create `$HOME/.tools/let/data/let.config.toml` from `templates/let.config.toml`.
+- If `NO_CONFIG` is reported, create `$HOME/.tools/let/data/let.config.toml` from `.claude/skills/let/templates/let.config.toml`.
 - Ask open-ended context questions first, then config-specific questions.
 - Write or update `$HOME/.tools/let/data/let.context.md` in natural prose. Do not reduce it to config bullets.
 
@@ -112,6 +112,9 @@ Config notes:
 
 - Config path: `$HOME/.tools/let/data/let.config.toml`.
 - Core sections: `[search]`, `[search.filters]`, `[fetch]`, `[scoring]`, `[scoring.regionPriority]`.
+- `search.useApi` controls only Rightmove discovery transport:
+  `true` = API first with HTML fallback, `false` = HTML-only discovery.
+- `search.useApi` does not affect EPC enrichment. EPC API usage is still controlled by credentials and `fetch --skip-epc`.
 - Region priority scores are `0-100`. Higher values increase ranking preference for that area.
 
 ### API Keys
@@ -179,6 +182,7 @@ Rules:
 - When `--location` is used, `mustHave`, `dontShow`, and `propertyTypes` are cleared unless explicitly re-passed.
 - Ad-hoc location searches start from a blank slate. Carry forward desired filters explicitly.
 - When fetching an ad-hoc location batch, use `--region <name>` to stamp the display region.
+- `sourceMode: "html"` means config-driven HTML-only discovery; `sourceMode: "html-fallback"` means the API was attempted first and HTML was used after fallback.
 - Read `requestedLimit`, `effectivePageSize`, `pagesFetched`, `truncated`, and per-location `locations[]` stats before assuming discovery is complete.
 
 ## Workflow
@@ -481,7 +485,7 @@ Error codes appear in `error.code` when `ok: false`.
 
 | Code | Meaning | Recovery Action |
 | --- | --- | --- |
-| `NO_CONFIG` | Config missing | Create from `templates/let.config.toml`, then re-run health |
+| `NO_CONFIG` | Config missing | Create from `.claude/skills/let/templates/let.config.toml`, then re-run health |
 | `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$HOME/.tools/let/let" build sources all --jobs 3` |
 | `SCHEMA_MISMATCH` | DB schema incompatible | Delete `let.db`, then run `"$HOME/.tools/let/let" fetch <id>` to recreate it |
 | `CONFLICT` | Database lock contention | Close competing DB users, then retry the command |

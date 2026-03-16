@@ -1,10 +1,11 @@
-# Copy this file to .let/data/let.config.toml and customize
+# Copy this file to $HOME/.tools/let/data/let.config.toml and customize
 #
 # =============================================================================
 # SEARCH PARAMETERS
 # =============================================================================
 
 [search]
+useApi = true  # false = skip Rightmove API and use HTML discovery directly
 locations = [
     # { id = "REGION^1234", name = "City Name" },
     # { id = "REGION^5678", name = "Another City, County" },

@@ -1138,6 +1138,7 @@ mod tests {
     fn scores_listing_batch() {
         let app_config = crate::config::AppConfig {
             search: crate::config::SearchConfig {
+                use_api: true,
                 locations: vec![crate::config::Location {
                     id: "REGION^1208".to_owned(),
                     name: "Shrewsbury".to_owned(),

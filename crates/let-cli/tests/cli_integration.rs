@@ -45,6 +45,7 @@ impl Fixture {
 
         let config = AppConfig {
             search: SearchConfig {
+                use_api: true,
                 locations: vec![Location {
                     id: "REGION^87490".to_owned(),
                     name: "Manchester".to_owned(),
@@ -145,6 +146,128 @@ fn view_list_json_reads_seeded_listing() {
     let json = assert_single_json_envelope(&output);
     let listings = json["data"]["listings"].as_array().expect("listings array");
     assert_eq!(listings.len(), 1);
+}
+
+#[test]
+fn config_show_exposes_search_use_api() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["config", "show"])
+        .output()
+        .expect("run config show");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["config"]["search"]["useApi"], true);
+}
+
+#[test]
+fn config_validate_rejects_legacy_fetch_use_api_key() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.config_dir.join("let.config.toml"),
+        r#"
+[search]
+locations = [{ id = "REGION^87490", name = "Manchester" }]
+
+[search.filters]
+minBedrooms = 1
+maxBedrooms = 4
+minPrice = 600
+maxPrice = 2500
+propertyTypes = ["flat", "terraced"]
+includeLetAgreed = false
+radius = 0
+dontShow = []
+mustHave = ["garden"]
+
+[fetch]
+useApi = false
+delayMs = 1
+maxListings = 100
+maxRetries = 2
+
+[scoring]
+adaptiveness = 2.0
+adaptivenessFactor = 10
+
+[scoring.weights]
+affordability = 0.3
+location = 0.4
+liveability = 0.3
+
+[scoring.affordability]
+priceWeight = 1.0
+epcWeight = 0.0
+
+[scoring.affordability.heatingCosts]
+A = 30
+B = 45
+C = 70
+D = 100
+E = 400
+F = 450
+G = 500
+
+[scoring.location]
+stationWeight = 0.2
+broadbandWeight = 0.2
+priorityWeight = 0.2
+imdWeight = 0.2
+crimeWeight = 0.2
+
+[scoring.liveability]
+gardenWeight = 0.4
+heatingWeight = 0.3
+propertyTypeWeight = 0.3
+
+[scoring.liveability.garden]
+private = 100
+shared = 40
+none = 0
+
+[scoring.liveability.heating]
+gas = 100
+electric = 60
+unknown = 30
+
+[scoring.liveability.propertyType]
+flat = 80
+terraced = 85
+
+[scoring.penalties]
+epcF = 0.0
+epcG = 0.0
+noGarden = 0.5
+noPets = 0.9
+deprivation = 0.75
+deprivationThreshold = 2
+highCrime = 0.8
+highCrimeThreshold = 120
+missingDataPenalty = 0.95
+
+[scoring.regionPriority]
+Manchester = 70
+"#,
+    )
+    .expect("write legacy config");
+
+    let output = fixture
+        .cmd()
+        .args(["config", "validate"])
+        .output()
+        .expect("run config validate");
+    assert_eq!(output.status.code(), Some(1));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"]["code"], "INVALID_INPUT");
+    assert_eq!(
+        json["error"]["hint"],
+        "rename fetch.useApi to search.useApi"
+    );
 }
 
 #[test]

@@ -32,6 +32,8 @@ pub struct SearchFilters {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SearchConfig {
+    #[serde(rename = "useApi", default = "default_search_use_api")]
+    pub use_api: bool,
     pub locations: Vec<Location>,
     pub filters: SearchFilters,
 }
@@ -109,6 +111,10 @@ impl Default for FetchConfig {
             media_timeout_ms: default_media_timeout_ms(),
         }
     }
+}
+
+const fn default_search_use_api() -> bool {
+    true
 }
 
 const fn default_fetch_min_score() -> u8 {
@@ -582,7 +588,17 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
         )
     })?;
 
-    let parsed: AppConfig = toml::from_str(&text).map_err(|err| {
+    let raw: toml::Value = text.parse().map_err(|err| {
+        LetError::new(
+            ErrorCode::InvalidInput,
+            format!("invalid config TOML {}: {err}", path.display()),
+            "fix config syntax and required fields",
+        )
+    })?;
+
+    reject_legacy_fetch_use_api(&raw, &path)?;
+
+    let parsed: AppConfig = raw.try_into().map_err(|err| {
         LetError::new(
             ErrorCode::InvalidInput,
             format!("invalid config TOML {}: {err}", path.display()),
@@ -593,6 +609,27 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
     let parsed = apply_search_scoring(parsed);
     parsed.validate()?;
     Ok(parsed)
+}
+
+fn reject_legacy_fetch_use_api(raw: &toml::Value, path: &Path) -> Result<()> {
+    let has_legacy_key = raw
+        .get("fetch")
+        .and_then(toml::Value::as_table)
+        .map(|fetch| fetch.contains_key("useApi"))
+        .unwrap_or(false);
+
+    if has_legacy_key {
+        return Err(LetError::new(
+            ErrorCode::InvalidInput,
+            format!(
+                "invalid config TOML {}: fetch.useApi is no longer supported",
+                path.display()
+            ),
+            "rename fetch.useApi to search.useApi",
+        ));
+    }
+
+    Ok(())
 }
 
 pub fn load_scoring_config(config_path: Option<&Path>) -> ScoringConfig {
@@ -614,6 +651,8 @@ mod tests {
     use std::fs;
 
     use tempfile::TempDir;
+
+    use crate::ErrorCode;
 
     use super::{
         AppConfig, FetchConfig, Location, SearchConfig, SearchFilters, default_scoring_config,
@@ -644,6 +683,7 @@ mod tests {
     fn config_validation_requires_locations() {
         let mut config = AppConfig {
             search: super::SearchConfig {
+                use_api: true,
                 locations: vec![],
                 filters: super::SearchFilters {
                     min_bedrooms: 1,
@@ -698,9 +738,217 @@ mod tests {
         assert_eq!(config_b.search.locations[0].name, "Beta");
     }
 
+    #[test]
+    fn load_config_defaults_search_use_api_to_true() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("config.toml");
+
+        fs::write(
+            &path,
+            r#"
+[search]
+locations = [{ id = "REGION^1", name = "Alpha" }]
+
+[search.filters]
+minBedrooms = 1
+maxBedrooms = 2
+minPrice = 700
+maxPrice = 1400
+propertyTypes = ["flat"]
+includeLetAgreed = false
+radius = 1
+dontShow = []
+mustHave = []
+
+[fetch]
+delayMs = 250
+maxListings = 100
+maxRetries = 3
+
+[scoring]
+adaptiveness = 2.0
+adaptivenessFactor = 10
+
+[scoring.weights]
+affordability = 0.3
+location = 0.4
+liveability = 0.3
+
+[scoring.affordability]
+priceWeight = 1.0
+epcWeight = 0.0
+
+[scoring.affordability.heatingCosts]
+A = 30
+B = 45
+C = 70
+D = 100
+E = 400
+F = 450
+G = 500
+
+[scoring.location]
+stationWeight = 0.2
+broadbandWeight = 0.2
+priorityWeight = 0.2
+imdWeight = 0.2
+crimeWeight = 0.2
+
+[scoring.liveability]
+gardenWeight = 0.4
+heatingWeight = 0.3
+propertyTypeWeight = 0.3
+
+[scoring.liveability.garden]
+private = 100
+shared = 40
+none = 0
+
+[scoring.liveability.heating]
+gas = 100
+electric = 60
+unknown = 30
+
+[scoring.liveability.propertyType]
+flat = 80
+
+[scoring.penalties]
+epcF = 0.0
+epcG = 0.0
+noGarden = 0.5
+noPets = 0.9
+deprivation = 0.75
+deprivationThreshold = 2
+highCrime = 0.8
+highCrimeThreshold = 120
+missingDataPenalty = 0.95
+
+[scoring.regionPriority]
+Alpha = 80
+"#,
+        )
+        .expect("write config");
+
+        let config = load_config(Some(&path)).expect("load config");
+        assert!(config.search.use_api);
+    }
+
+    #[test]
+    fn load_config_parses_search_use_api_false() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("config.toml");
+
+        let mut config = sample_config("Alpha");
+        config.search.use_api = false;
+        fs::write(&path, toml::to_string(&config).expect("serialize config"))
+            .expect("write config");
+
+        let parsed = load_config(Some(&path)).expect("load config");
+        assert!(!parsed.search.use_api);
+    }
+
+    #[test]
+    fn load_config_rejects_legacy_fetch_use_api() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("config.toml");
+
+        fs::write(
+            &path,
+            r#"
+[search]
+locations = [{ id = "REGION^1", name = "Alpha" }]
+
+[search.filters]
+minBedrooms = 1
+maxBedrooms = 2
+minPrice = 700
+maxPrice = 1400
+propertyTypes = ["flat"]
+includeLetAgreed = false
+radius = 1
+dontShow = []
+mustHave = []
+
+[fetch]
+useApi = false
+delayMs = 250
+maxListings = 100
+maxRetries = 3
+
+[scoring]
+adaptiveness = 2.0
+adaptivenessFactor = 10
+
+[scoring.weights]
+affordability = 0.3
+location = 0.4
+liveability = 0.3
+
+[scoring.affordability]
+priceWeight = 1.0
+epcWeight = 0.0
+
+[scoring.affordability.heatingCosts]
+A = 30
+B = 45
+C = 70
+D = 100
+E = 400
+F = 450
+G = 500
+
+[scoring.location]
+stationWeight = 0.2
+broadbandWeight = 0.2
+priorityWeight = 0.2
+imdWeight = 0.2
+crimeWeight = 0.2
+
+[scoring.liveability]
+gardenWeight = 0.4
+heatingWeight = 0.3
+propertyTypeWeight = 0.3
+
+[scoring.liveability.garden]
+private = 100
+shared = 40
+none = 0
+
+[scoring.liveability.heating]
+gas = 100
+electric = 60
+unknown = 30
+
+[scoring.liveability.propertyType]
+flat = 80
+
+[scoring.penalties]
+epcF = 0.0
+epcG = 0.0
+noGarden = 0.5
+noPets = 0.9
+deprivation = 0.75
+deprivationThreshold = 2
+highCrime = 0.8
+highCrimeThreshold = 120
+missingDataPenalty = 0.95
+
+[scoring.regionPriority]
+Alpha = 80
+"#,
+        )
+        .expect("write config");
+
+        let error = load_config(Some(&path)).expect_err("legacy key should fail");
+        assert_eq!(error.code, ErrorCode::InvalidInput);
+        assert!(error.message.contains("fetch.useApi"));
+        assert_eq!(error.hint, "rename fetch.useApi to search.useApi");
+    }
+
     fn sample_config(name: &str) -> AppConfig {
         AppConfig {
             search: SearchConfig {
+                use_api: true,
                 locations: vec![Location {
                     id: format!("REGION^{name}"),
                     name: name.to_owned(),

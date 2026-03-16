@@ -67,6 +67,7 @@ struct DiscoverRuntimeConfig<'a> {
     page_size: usize,
     max_retries: usize,
     delay_ms: u64,
+    use_api: bool,
     api_base_url: &'a str,
     html_base_url: &'a str,
 }
@@ -76,6 +77,7 @@ impl<'a> DiscoverRuntimeConfig<'a> {
         requested_limit: usize,
         max_retries: usize,
         delay_ms: u64,
+        use_api: bool,
         api_base_url: &'a str,
         html_base_url: &'a str,
     ) -> Self {
@@ -84,6 +86,7 @@ impl<'a> DiscoverRuntimeConfig<'a> {
             page_size: requested_limit.min(SEARCH_API_PAGE_SIZE),
             max_retries,
             delay_ms,
+            use_api,
             api_base_url,
             html_base_url,
         }
@@ -255,15 +258,15 @@ pub fn discover(shared: &SharedArgs, params: &DiscoverParams) -> CommandResult {
     let mut any_truncated = false;
 
     for location in &locations {
-        let outcome = discover_location(
-            &runtime,
-            &client,
-            location,
-            &filters,
+        let runtime_config = DiscoverRuntimeConfig::new(
             limit_per_location,
             config.fetch.max_retries.max(1),
             config.fetch.delay_ms,
+            config.search.use_api,
+            SEARCH_API_BASE_URL,
+            SEARCH_HTML_BASE_URL,
         );
+        let outcome = discover_location(&runtime, &client, location, &filters, runtime_config);
         total_pages_fetched += outcome.stats.pages_fetched;
         any_truncated |= outcome.stats.truncated;
         ids.extend(outcome.ids.iter().cloned());
@@ -297,18 +300,8 @@ fn discover_location(
     client: &reqwest::Client,
     location: &let_sdk::config::Location,
     filters: &SearchFilters,
-    requested_limit: usize,
-    max_retries: usize,
-    delay_ms: u64,
+    config: DiscoverRuntimeConfig<'_>,
 ) -> LocationDiscoverOutcome {
-    let config = DiscoverRuntimeConfig::new(
-        requested_limit,
-        max_retries,
-        delay_ms,
-        SEARCH_API_BASE_URL,
-        SEARCH_HTML_BASE_URL,
-    );
-
     discover_location_with_base_urls(runtime, client, location, filters, config)
 }
 
@@ -319,6 +312,10 @@ fn discover_location_with_base_urls(
     filters: &SearchFilters,
     config: DiscoverRuntimeConfig<'_>,
 ) -> LocationDiscoverOutcome {
+    if !config.use_api {
+        return discover_location_via_html(runtime, client, location, filters, config, None);
+    }
+
     let first_api_url = build_search_api_url_from_base(
         config.api_base_url,
         &location.id,
@@ -562,7 +559,11 @@ fn discover_location_via_html(
             pages_fetched,
             requested_limit: config.requested_limit,
             effective_page_size: config.page_size,
-            source_mode: "html-fallback".to_owned(),
+            source_mode: if config.use_api {
+                "html-fallback".to_owned()
+            } else {
+                "html".to_owned()
+            },
             truncated,
             truncation_reason,
             error,
@@ -959,6 +960,7 @@ mod tests {
                 30,
                 1,
                 0,
+                true,
                 &format!("{}/api/_search", server.uri()),
                 &format!("{}/property-to-rent/find.html", server.uri()),
             ),
@@ -1006,6 +1008,7 @@ mod tests {
                 27,
                 1,
                 0,
+                true,
                 &format!("{}/api/_search", server.uri()),
                 &format!("{}/property-to-rent/find.html", server.uri()),
             ),
@@ -1015,6 +1018,58 @@ mod tests {
         assert_eq!(outcome.stats.pages_fetched, 2);
         assert_eq!(outcome.stats.source_mode, "html-fallback");
         assert!(!outcome.stats.truncated);
+    }
+
+    #[test]
+    fn discovery_uses_html_only_when_config_disables_api() {
+        let (mock_runtime, server) = start_mock_server();
+        mount_html_fixture(
+            &mock_runtime,
+            &server,
+            "/property-to-rent/find.html",
+            0,
+            SEARCH_HTML_PAGE_ONE,
+        );
+        mount_html_fixture(
+            &mock_runtime,
+            &server,
+            "/property-to-rent/find.html",
+            24,
+            SEARCH_HTML_PAGE_TWO,
+        );
+
+        let runtime = build_runtime().expect("runtime");
+        let client = build_client(&runtime, 5).expect("client");
+        let outcome = discover_location_with_base_urls(
+            &runtime,
+            &client,
+            &sample_location(),
+            &sample_filters(),
+            DiscoverRuntimeConfig::new(
+                27,
+                1,
+                0,
+                false,
+                &format!("{}/api/_search", server.uri()),
+                &format!("{}/property-to-rent/find.html", server.uri()),
+            ),
+        );
+
+        assert_eq!(outcome.ids.len(), 27, "{outcome:?}");
+        assert_eq!(outcome.stats.pages_fetched, 2);
+        assert_eq!(outcome.stats.source_mode, "html");
+        assert!(!outcome.stats.truncated);
+
+        let requests = mock_runtime
+            .block_on(async { server.received_requests().await })
+            .expect("request recording enabled");
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.url.path() == "/api/_search")
+                .count(),
+            0
+        );
     }
 
     fn sample_location() -> let_sdk::config::Location {
