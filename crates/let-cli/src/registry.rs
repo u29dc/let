@@ -828,15 +828,23 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     "let view detail <id>",
                     "view",
                     "Full listing detail by UUID or portal id.",
-                    vec![ToolParameter {
-                        name: "id",
-                        param_type: "string",
-                        required: true,
-                        description: "Listing UUID or portal identifier.",
-                    }],
+                    vec![
+                        ToolParameter {
+                            name: "id",
+                            param_type: "string",
+                            required: true,
+                            description: "Listing UUID or portal identifier.",
+                        },
+                        ToolParameter {
+                            name: "--copy",
+                            param_type: "bool",
+                            required: false,
+                            description: "Copy rendered detail output to the clipboard. Copies human text in `--text` mode and pretty listing JSON otherwise.",
+                        },
+                    ],
                     vec!["listing"],
                     true,
-                    "let view detail 170448131",
+                    "let view detail 170448131 --text",
                 ),
                 tool(
                     "config.show",

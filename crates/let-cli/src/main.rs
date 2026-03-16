@@ -7,6 +7,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use let_sdk::paths::PathOverrides;
 
+mod clipboard;
 mod commands;
 mod env;
 mod envelope;
@@ -167,6 +168,9 @@ enum ViewCommand {
     Detail {
         /// Listing UUID or portal id.
         id: String,
+        /// Copy rendered detail output to the clipboard.
+        #[arg(long, short = 'c', default_value_t = false)]
+        copy: bool,
     },
 }
 
@@ -468,7 +472,9 @@ fn main() {
     match outcome {
         DispatchOutcome::Local { tool, result } => {
             let elapsed = started.elapsed().as_millis() as u64;
-            let exit_code = emit(&result, tool, elapsed, output_mode(cli.text));
+            let mode = output_mode(cli.text);
+            let result = apply_copy_request(result, &cli.command, mode);
+            let exit_code = emit(&result, tool, elapsed, mode);
             process::exit(exit_code);
         }
     }
@@ -537,7 +543,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             ),
         },
         Command::View {
-            command: ViewCommand::Detail { id },
+            command: ViewCommand::Detail { id, .. },
         } => DispatchOutcome::Local {
             tool: "view.detail",
             result: commands::view::detail(shared, id),
@@ -859,6 +865,85 @@ fn output_mode(text_requested: bool) -> OutputMode {
     }
 }
 
+fn apply_copy_request(
+    result: Result<CommandOutput, CommandError>,
+    command: &Command,
+    mode: OutputMode,
+) -> Result<CommandOutput, CommandError> {
+    if !copy_requested(command) {
+        return result;
+    }
+
+    let payload = match &result {
+        Ok(output) => render_copy_payload(command, output, mode)?,
+        Err(err) => return Err(err.clone()),
+    };
+
+    clipboard::copy_text(&payload)?;
+    result
+}
+
+fn copy_requested(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::View {
+            command: ViewCommand::Detail { copy: true, .. }
+        }
+    )
+}
+
+fn render_copy_payload(
+    command: &Command,
+    output: &CommandOutput,
+    mode: OutputMode,
+) -> Result<String, CommandError> {
+    match command {
+        Command::View {
+            command: ViewCommand::Detail { .. },
+        } => match mode {
+            OutputMode::EnvelopeJson => render_view_detail_copy_json(output),
+            OutputMode::Text => render_text_payload(output),
+        },
+        _ => Err(CommandError::runtime(
+            "INTERNAL_ERROR",
+            "clipboard copy requested for unsupported command",
+            "report this bug",
+        )),
+    }
+}
+
+fn render_view_detail_copy_json(output: &CommandOutput) -> Result<String, CommandError> {
+    let Some(listing) = output.data.get("listing") else {
+        return Err(CommandError::runtime(
+            "INTERNAL_ERROR",
+            "view.detail output missing listing payload",
+            "report this bug",
+        ));
+    };
+
+    serde_json::to_string_pretty(listing).map_err(|error| {
+        CommandError::runtime(
+            "INTERNAL_ERROR",
+            format!("failed to serialize listing payload for clipboard copy: {error}"),
+            "report this bug",
+        )
+    })
+}
+
+fn render_text_payload(output: &CommandOutput) -> Result<String, CommandError> {
+    if let Some(text) = &output.text {
+        return Ok(text.clone());
+    }
+
+    serde_json::to_string_pretty(&output.data).map_err(|error| {
+        CommandError::runtime(
+            "INTERNAL_ERROR",
+            format!("failed to render text output: {error}"),
+            "report this bug",
+        )
+    })
+}
+
 fn emit(
     result: &Result<CommandOutput, CommandError>,
     tool: &str,
@@ -906,18 +991,17 @@ fn emit_json(result: &Result<CommandOutput, CommandError>, tool: &str, elapsed: 
 
 fn emit_text(result: &Result<CommandOutput, CommandError>) -> i32 {
     match result {
-        Ok(output) => {
-            if let Some(text) = &output.text {
+        Ok(output) => match render_text_payload(output) {
+            Ok(text) => {
                 println!("{text}");
-            } else {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&output.data)
-                        .expect("text payload pretty serialization failed")
-                );
+                0
             }
-            0
-        }
+            Err(err) => {
+                eprintln!("{}: {}", err.code, err.message);
+                eprintln!("hint: {}", err.hint);
+                err.exit_code
+            }
+        },
         Err(err) => {
             eprintln!("{}: {}", err.code, err.message);
             eprintln!("hint: {}", err.hint);

@@ -149,6 +149,161 @@ fn view_list_json_reads_seeded_listing() {
 }
 
 #[test]
+fn view_list_text_renders_readable_rows() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["view", "list", "--text"])
+        .output()
+        .expect("run view list text");
+    assert_eq!(output.status.code(), Some(0));
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    assert!(
+        stdout.contains("Showing 1 of 1 listings"),
+        "expected summary line, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("165432101"),
+        "expected id in text table, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("10 Example Street, Manchester"),
+        "expected address in text table, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("\"listings\""),
+        "text mode should not dump JSON keys, got: {stdout}"
+    );
+}
+
+#[test]
+fn view_detail_text_renders_human_summary() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["view", "detail", "165432101", "--text"])
+        .output()
+        .expect("run view detail text");
+    assert_eq!(output.status.code(), Some(0));
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    assert!(
+        stdout.contains("10 Example Street, Manchester"),
+        "expected address in detail text, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("£1,450 pcm | 2 bed | 1 bath | Flat"),
+        "expected headline summary, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("Property"),
+        "expected property section, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("Area"),
+        "expected area section, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("Links"),
+        "expected links section, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("loaded listing"),
+        "placeholder text should be gone, got: {stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn view_detail_copy_keeps_json_stdout_and_copies_listing_json() {
+    let fixture = Fixture::new();
+    let script_dir = TempDir::new().expect("script tempdir");
+    let script_path = script_dir.path().join("clipboard-mock.sh");
+    let capture_path = script_dir.path().join("clipboard.txt");
+    write_clipboard_capture_script(&script_path);
+
+    let output = fixture
+        .cmd()
+        .env("LET_CLIPBOARD_BIN", &script_path)
+        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
+        .args(["view", "detail", "165432101", "--copy"])
+        .output()
+        .expect("run view detail copy");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(
+        json["data"]["listing"]["address"],
+        "10 Example Street, Manchester"
+    );
+
+    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
+    let copied_json: serde_json::Value =
+        serde_json::from_str(&capture).expect("parse copied listing json");
+    assert_eq!(copied_json["address"], "10 Example Street, Manchester");
+    assert!(
+        copied_json.get("meta").is_none(),
+        "clipboard should contain listing payload, not envelope: {copied_json:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn view_detail_text_copy_copies_rendered_text() {
+    let fixture = Fixture::new();
+    let script_dir = TempDir::new().expect("script tempdir");
+    let script_path = script_dir.path().join("clipboard-mock.sh");
+    let capture_path = script_dir.path().join("clipboard.txt");
+    write_clipboard_capture_script(&script_path);
+
+    let output = fixture
+        .cmd()
+        .env("LET_CLIPBOARD_BIN", &script_path)
+        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
+        .args(["view", "detail", "165432101", "--text", "--copy"])
+        .output()
+        .expect("run view detail text copy");
+    assert_eq!(output.status.code(), Some(0));
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
+    assert_eq!(capture, stdout.trim_end_matches('\n'));
+    assert!(
+        capture.contains("10 Example Street, Manchester"),
+        "expected rendered text in clipboard capture, got: {capture}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn view_detail_copy_not_found_preserves_error_and_skips_clipboard_write() {
+    let fixture = Fixture::new();
+    let script_dir = TempDir::new().expect("script tempdir");
+    let script_path = script_dir.path().join("clipboard-mock.sh");
+    let capture_path = script_dir.path().join("clipboard.txt");
+    write_clipboard_capture_script(&script_path);
+
+    let output = fixture
+        .cmd()
+        .env("LET_CLIPBOARD_BIN", &script_path)
+        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
+        .args(["view", "detail", "missing-id", "--copy"])
+        .output()
+        .expect("run missing view detail copy");
+    assert_eq!(output.status.code(), Some(1));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"]["code"], "NOT_FOUND");
+    assert!(
+        !capture_path.exists(),
+        "clipboard helper should not run when detail lookup fails"
+    );
+}
+
+#[test]
 fn config_show_exposes_search_use_api() {
     let fixture = Fixture::new();
     let output = fixture
@@ -742,6 +897,26 @@ fn assert_single_json_envelope(output: &Output) -> serde_json::Value {
     );
 
     serde_json::from_str(trimmed).expect("parse envelope")
+}
+
+#[cfg(unix)]
+fn write_clipboard_capture_script(path: &Path) {
+    fs::write(path, "#!/bin/sh\ncat > \"$LET_CLIPBOARD_CAPTURE_PATH\"\n")
+        .expect("write clipboard capture script");
+    make_executable(path);
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    let chmod = Command::new("chmod")
+        .args(["+x", path.to_str().expect("path str")])
+        .status()
+        .expect("chmod path");
+    assert!(
+        chmod.success(),
+        "chmod should succeed for {}",
+        path.display()
+    );
 }
 
 fn drop_score_contexts_table(db_path: &Path) {
