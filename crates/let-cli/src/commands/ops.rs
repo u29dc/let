@@ -6,6 +6,7 @@ use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use chrono::NaiveDate;
+use let_sdk::pipeline::fetch::rightmove::{RightmoveListingPageStatus, classify_listing_page};
 use let_sdk::schema::listing::{CrimeBand, CrimeTrend, EpcBand, Listing, ListingStatus};
 use let_sdk::{
     EnrichmentMode, SourceEnricher, close_listings_db, load_listings_file, open_listings_db,
@@ -126,6 +127,8 @@ struct VerifySummary {
     inactive: usize,
     errors: usize,
 }
+
+const RIGHTMOVE_PROPERTY_BASE_URL: &str = "https://www.rightmove.co.uk/properties";
 
 pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
     let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
@@ -2188,6 +2191,15 @@ fn verify_one_listing(
     client: &reqwest::Client,
     listing: &Listing,
 ) -> VerifyResult {
+    verify_one_listing_with_base_url(runtime, client, listing, RIGHTMOVE_PROPERTY_BASE_URL)
+}
+
+fn verify_one_listing_with_base_url(
+    runtime: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    listing: &Listing,
+    property_base_url: &str,
+) -> VerifyResult {
     let rightmove_id = listing.portal_ids.rightmove.clone();
     let Some(rightmove_id_value) = rightmove_id.as_ref() else {
         return VerifyResult {
@@ -2198,7 +2210,11 @@ fn verify_one_listing(
         };
     };
 
-    let url = format!("https://www.rightmove.co.uk/properties/{rightmove_id_value}");
+    let url = format!(
+        "{}/{}",
+        property_base_url.trim_end_matches('/'),
+        rightmove_id_value
+    );
     let response = runtime.block_on(async { client.get(url).send().await });
 
     match response {
@@ -2232,17 +2248,27 @@ fn verify_one_listing(
                     };
                 }
             };
-            let status_value = if detect_inactive_html(&html) {
-                "inactive"
-            } else {
-                "active"
-            };
-
-            VerifyResult {
-                id: listing.id.clone(),
-                rightmove_id,
-                status: status_value.to_owned(),
-                error: None,
+            match classify_listing_page(&html) {
+                Ok(RightmoveListingPageStatus::Active) => VerifyResult {
+                    id: listing.id.clone(),
+                    rightmove_id,
+                    status: "active".to_owned(),
+                    error: None,
+                },
+                Ok(RightmoveListingPageStatus::LetAgreed | RightmoveListingPageStatus::Removed) => {
+                    VerifyResult {
+                        id: listing.id.clone(),
+                        rightmove_id,
+                        status: "inactive".to_owned(),
+                        error: None,
+                    }
+                }
+                Err(error) => VerifyResult {
+                    id: listing.id.clone(),
+                    rightmove_id,
+                    status: "error".to_owned(),
+                    error: Some(format!("unable to determine listing status: {error}")),
+                },
             }
         }
         Err(error) => VerifyResult {
@@ -2252,15 +2278,6 @@ fn verify_one_listing(
             error: Some(error.to_string()),
         },
     }
-}
-
-fn detect_inactive_html(html: &str) -> bool {
-    let lower = html.to_lowercase();
-    lower.contains("let agreed")
-        || lower.contains("letagreed")
-        || lower.contains("no longer on the market")
-        || lower.contains("no longer available")
-        || lower.contains("this property has been removed")
 }
 
 fn parse_epc_band(raw: &str) -> Option<EpcBand> {
@@ -2418,10 +2435,19 @@ fn delete_listing_ids(
 #[cfg(test)]
 mod tests {
     use let_sdk::schema::listing::{ListingStatus, PortalIds};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const PROPERTY_ACTIVE_HTML: &str =
+        include_str!("../../tests/fixtures/rightmove/property-active.html");
+    const PROPERTY_LET_AGREED_HTML: &str =
+        include_str!("../../tests/fixtures/rightmove/property-let-agreed.html");
+    const PROPERTY_REMOVED_HTML: &str =
+        include_str!("../../tests/fixtures/rightmove/property-removed.html");
 
     use super::{
-        PruneParams, VerifyResult, detect_inactive_html, matches_region, select_prune_ids,
-        summarize_verify_results,
+        PruneParams, VerifyResult, matches_region, select_prune_ids, summarize_verify_results,
+        verify_one_listing_with_base_url,
     };
 
     #[test]
@@ -2593,12 +2619,122 @@ mod tests {
     }
 
     #[test]
-    fn inactive_detector_matches_known_markers() {
-        assert!(detect_inactive_html(
-            "This property has been removed from the market."
-        ));
-        assert!(detect_inactive_html("LET AGREED"));
-        assert!(!detect_inactive_html("Beautiful apartment available now."));
+    fn verify_one_listing_keeps_active_listing_active() {
+        let (runtime, server) = start_mock_server();
+        mount_property_response(
+            &runtime,
+            &server,
+            "172491704",
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .set_body_string(PROPERTY_ACTIVE_HTML),
+        );
+
+        let client = reqwest::Client::builder().build().expect("http client");
+        let result = verify_one_listing_with_base_url(
+            &runtime,
+            &client,
+            &sample_listing("id-1", "172491704"),
+            &format!("{}/properties", server.uri()),
+        );
+
+        assert_eq!(result.status, "active");
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn verify_one_listing_marks_let_agreed_listing_inactive() {
+        let (runtime, server) = start_mock_server();
+        mount_property_response(
+            &runtime,
+            &server,
+            "49705845",
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .set_body_string(PROPERTY_LET_AGREED_HTML),
+        );
+
+        let client = reqwest::Client::builder().build().expect("http client");
+        let result = verify_one_listing_with_base_url(
+            &runtime,
+            &client,
+            &sample_listing("id-1", "49705845"),
+            &format!("{}/properties", server.uri()),
+        );
+
+        assert_eq!(result.status, "inactive");
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn verify_one_listing_marks_removed_listing_inactive_from_body() {
+        let (runtime, server) = start_mock_server();
+        mount_property_response(
+            &runtime,
+            &server,
+            "999",
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .set_body_string(PROPERTY_REMOVED_HTML),
+        );
+
+        let client = reqwest::Client::builder().build().expect("http client");
+        let result = verify_one_listing_with_base_url(
+            &runtime,
+            &client,
+            &sample_listing("id-1", "999"),
+            &format!("{}/properties", server.uri()),
+        );
+
+        assert_eq!(result.status, "inactive");
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn verify_one_listing_marks_404_listing_inactive() {
+        let (runtime, server) = start_mock_server();
+        mount_property_response(&runtime, &server, "404", ResponseTemplate::new(404));
+
+        let client = reqwest::Client::builder().build().expect("http client");
+        let result = verify_one_listing_with_base_url(
+            &runtime,
+            &client,
+            &sample_listing("id-1", "404"),
+            &format!("{}/properties", server.uri()),
+        );
+
+        assert_eq!(result.status, "inactive");
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn verify_one_listing_errors_on_unknown_success_page_shape() {
+        let (runtime, server) = start_mock_server();
+        mount_property_response(
+            &runtime,
+            &server,
+            "opaque",
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .set_body_string("<html><body>Welcome to Rightmove</body></html>"),
+        );
+
+        let client = reqwest::Client::builder().build().expect("http client");
+        let result = verify_one_listing_with_base_url(
+            &runtime,
+            &client,
+            &sample_listing("id-1", "opaque"),
+            &format!("{}/properties", server.uri()),
+        );
+
+        assert_eq!(result.status, "error");
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unable to determine listing status")
+        );
     }
 
     #[test]
@@ -2627,5 +2763,81 @@ mod tests {
         assert_eq!(summary.active, 1);
         assert_eq!(summary.inactive, 1);
         assert_eq!(summary.errors, 1);
+    }
+
+    fn sample_listing(id: &str, rightmove_id: &str) -> let_sdk::schema::listing::Listing {
+        let_sdk::schema::listing::Listing {
+            id: id.to_owned(),
+            portal_ids: PortalIds {
+                rightmove: Some(rightmove_id.to_owned()),
+                zoopla: None,
+                onthemarket: None,
+            },
+            uprn: None,
+            uprn_source: None,
+            uprn_confidence: None,
+            url: format!("https://www.rightmove.co.uk/properties/{rightmove_id}"),
+            location: let_sdk::schema::listing::GeoLocation {
+                lat: 0.0,
+                lng: 0.0,
+                pin_type: None,
+            },
+            postcode: "AA1 1AA".to_owned(),
+            address: "Address".to_owned(),
+            region: Some("City".to_owned()),
+            google_maps_url: "https://maps.example.com".to_owned(),
+            google_maps_street_view_url: "https://maps.example.com/street".to_owned(),
+            area: let_sdk::schema::listing::AreaMetrics::default(),
+            price: 1000,
+            price_display: "£1,000 pcm".to_owned(),
+            bedrooms: 2,
+            bathrooms: 1,
+            property_type: "Flat".to_owned(),
+            description: "desc".to_owned(),
+            notes: vec![],
+            images: vec![],
+            floorplan: let_sdk::schema::listing::RemoteLocalAsset::default(),
+            epc: let_sdk::schema::listing::RemoteLocalAsset::default(),
+            map_views: let_sdk::schema::listing::MapViews::default(),
+            epc_rating: None,
+            floor_area_sqm: None,
+            epc_lodgement_date: None,
+            epc_address_match: None,
+            epc_search_url: None,
+            nearest_stations: vec![],
+            gigabit_availability: None,
+            listed_date: None,
+            lettings: let_sdk::schema::listing::Lettings::default(),
+            agent: let_sdk::schema::listing::Agent::default(),
+            assessment: None,
+            assessed_at: None,
+            assessed_score: None,
+            scores: None,
+            fetched_at: "2026-03-01T00:00:00.000Z".to_owned(),
+            extraction_status: let_sdk::schema::listing::ExtractionStatus::Success,
+            status: ListingStatus::Active,
+            notion_page_id: None,
+        }
+    }
+
+    fn start_mock_server() -> (tokio::runtime::Runtime, MockServer) {
+        let runtime = tokio::runtime::Runtime::new().expect("mock runtime");
+        let server = runtime.block_on(async { MockServer::start().await });
+        (runtime, server)
+    }
+
+    fn mount_property_response(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        id: &str,
+        response: ResponseTemplate,
+    ) {
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(format!("/properties/{id}")))
+                .respond_with(response)
+                .mount(server)
+                .await;
+        });
     }
 }

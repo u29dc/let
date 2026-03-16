@@ -10,6 +10,13 @@ use crate::schema::listing::{
     PinType, PortalIds, RemoteLocalAsset, StationDistance,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RightmoveListingPageStatus {
+    Active,
+    LetAgreed,
+    Removed,
+}
+
 pub fn fetch_listing(
     runtime: &tokio::runtime::Runtime,
     client: &reqwest::Client,
@@ -65,6 +72,38 @@ fn fetch_listing_html(
     }
 
     Err(format!("fetch failed: {last_error}"))
+}
+
+pub fn classify_listing_page(
+    html: &str,
+) -> std::result::Result<RightmoveListingPageStatus, String> {
+    match extract_page_model(html) {
+        Ok(page_model) => match get_path(
+            &page_model,
+            &["analyticsInfo", "analyticsProperty", "letAgreed"],
+        )
+        .and_then(Value::as_bool)
+        {
+            Some(true) => Ok(RightmoveListingPageStatus::LetAgreed),
+            Some(false) => Ok(RightmoveListingPageStatus::Active),
+            None => {
+                if detect_removed_html(html) {
+                    Ok(RightmoveListingPageStatus::Removed)
+                } else {
+                    Err("listing availability signal not found in PAGE_MODEL".to_owned())
+                }
+            }
+        },
+        Err(error) => {
+            if detect_removed_html(html) {
+                Ok(RightmoveListingPageStatus::Removed)
+            } else {
+                Err(format!(
+                    "listing availability could not be determined: {error}"
+                ))
+            }
+        }
+    }
 }
 
 pub fn extract_page_model(html: &str) -> std::result::Result<Value, String> {
@@ -559,6 +598,13 @@ fn month_name_to_num(month: &str) -> Option<&'static str> {
     }
 }
 
+fn detect_removed_html(html: &str) -> bool {
+    let lower = html.to_ascii_lowercase();
+    lower.contains("no longer on the market")
+        || lower.contains("no longer available")
+        || lower.contains("this property has been removed")
+}
+
 fn get_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = value;
     for segment in path {
@@ -586,7 +632,10 @@ pub fn build_google_maps_street_view_url(lat: f64, lng: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_page_model, find_json_end, parse_price};
+    use super::{
+        RightmoveListingPageStatus, classify_listing_page, extract_page_model, find_json_end,
+        parse_price,
+    };
 
     #[test]
     fn parse_price_converts_weekly_to_monthly() {
@@ -606,5 +655,56 @@ mod tests {
         let html = r#"<script>window.PAGE_MODEL = {"propertyData":{"id":1}}</script>"#;
         let model = extract_page_model(html).expect("page model should parse");
         assert_eq!(model["propertyData"]["id"], 1);
+    }
+
+    #[test]
+    fn classify_listing_page_uses_structured_let_agreed_signal() {
+        let html = r#"
+            <a href="/property-to-rent/find.html?includeLetAgreed=true">More properties</a>
+            <script>
+                window.PAGE_MODEL = {
+                    "analyticsInfo": {
+                        "analyticsProperty": {
+                            "letAgreed": false
+                        }
+                    }
+                }
+            </script>
+        "#;
+
+        let status = classify_listing_page(html).expect("page status should classify");
+        assert_eq!(status, RightmoveListingPageStatus::Active);
+    }
+
+    #[test]
+    fn classify_listing_page_marks_let_agreed_when_signal_is_true() {
+        let html = r#"
+            <script>
+                window.PAGE_MODEL = {
+                    "analyticsInfo": {
+                        "analyticsProperty": {
+                            "letAgreed": true
+                        }
+                    }
+                }
+            </script>
+        "#;
+
+        let status = classify_listing_page(html).expect("page status should classify");
+        assert_eq!(status, RightmoveListingPageStatus::LetAgreed);
+    }
+
+    #[test]
+    fn classify_listing_page_falls_back_to_removed_markers() {
+        let html = "<html><body>This property has been removed from the market.</body></html>";
+        let status = classify_listing_page(html).expect("page status should classify");
+        assert_eq!(status, RightmoveListingPageStatus::Removed);
+    }
+
+    #[test]
+    fn classify_listing_page_errors_on_unknown_success_page_shape() {
+        let html = "<html><body>Welcome to Rightmove</body></html>";
+        let error = classify_listing_page(html).expect_err("page shape should be unknown");
+        assert!(error.contains("could not be determined"));
     }
 }
