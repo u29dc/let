@@ -588,7 +588,7 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
         )
     })?;
 
-    let raw: toml::Value = text.parse().map_err(|err| {
+    let raw: toml::Value = toml::from_str(&text).map_err(|err| {
         LetError::new(
             ErrorCode::InvalidInput,
             format!("invalid config TOML {}: {err}", path.display()),
@@ -639,7 +639,7 @@ pub fn load_scoring_config(config_path: Option<&Path>) -> ScoringConfig {
 
     match std::fs::read_to_string(path)
         .ok()
-        .and_then(|text| text.parse::<toml::Value>().ok())
+        .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
     {
         Some(raw) => parse_scoring_config(&raw),
         None => default_scoring_config(),
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn parse_scoring_falls_back_to_default() {
-        let raw = "search = {}".parse().expect("valid toml value");
+        let raw = toml::from_str("search = {}").expect("valid toml value");
         let cfg = parse_scoring_config(&raw);
         assert_eq!(cfg.adaptiveness, default_scoring_config().adaptiveness);
     }

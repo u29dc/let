@@ -6,13 +6,14 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
 };
+use ratatui_image::Image as PreviewImage;
 
 use crate::{
     app::{App, FocusPane},
     theme::Theme,
 };
 
-pub(crate) fn render(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
+pub(crate) fn render(frame: &mut Frame<'_>, app: &mut App, theme: &Theme) {
     let root = Block::default().style(theme.root);
     frame.render_widget(root, frame.area());
 
@@ -62,7 +63,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     frame.render_widget(right, chunks[2]);
 }
 
-fn render_body(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+fn render_body(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme: &Theme) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
@@ -287,111 +288,10 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
     frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
+fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme: &Theme) {
     let context_focused = app.focus() == FocusPane::Context;
-    let media_items = app.context_rows();
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(area);
-
-    let summary_lines = if let Some(listing) = app.selected_listing() {
-        let mut lines = Vec::new();
-        let id = listing
-            .portal_ids
-            .rightmove
-            .as_deref()
-            .unwrap_or(listing.id.as_str());
-        let cache = app
-            .selected_media()
-            .cache_dir
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "--".to_owned());
-
-        lines.push(kv_line("id", id, theme));
-        lines.push(kv_line("rightmove", truncate(&listing.url, 128), theme));
-        lines.push(kv_line(
-            "maps",
-            truncate(&listing.google_maps_url, 128),
-            theme,
-        ));
-        lines.push(kv_line("cache", truncate(&cache, 128), theme));
-        lines.push(kv_line("media items", media_items.len().to_string(), theme));
-
-        if !listing.notes.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("notes", theme.section_heading)));
-            for note in listing.notes.iter().take(3) {
-                lines.push(Line::from(Span::styled(
-                    format!("- {}", truncate(note, 140)),
-                    theme.body,
-                )));
-            }
-        }
-
-        if let Some(assessment) = &listing.assessment {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "assessment",
-                theme.section_heading,
-            )));
-            lines.push(kv_line(
-                "recommendation",
-                format!("{:?}", assessment.recommendation).to_lowercase(),
-                theme,
-            ));
-            lines.push(kv_line(
-                "maintenance",
-                format!("{:?}", assessment.maintenance).to_lowercase(),
-                theme,
-            ));
-            lines.push(kv_line(
-                "family",
-                format!("{:?}", assessment.family_suitability).to_lowercase(),
-                theme,
-            ));
-            lines.push(kv_line(
-                "score adjustment",
-                format!("{:.1}", assessment.score_adjustment),
-                theme,
-            ));
-            lines.push(kv_line(
-                "light/space",
-                truncate(&assessment.light_and_space, 220),
-                theme,
-            ));
-            lines.push(kv_line(
-                "photo analysis",
-                truncate(&assessment.photo_analysis, 220),
-                theme,
-            ));
-            lines.push(kv_line(
-                "reasoning",
-                truncate(&assessment.reasoning, 220),
-                theme,
-            ));
-            if let Some(tradeoffs) = &assessment.tradeoffs {
-                lines.push(kv_line("tradeoffs", truncate(tradeoffs, 220), theme));
-            }
-            if let Some(neighborhood) = &assessment.neighborhood_analysis {
-                lines.push(kv_line("neighborhood", truncate(neighborhood, 220), theme));
-            }
-        }
-
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("tab ", theme.section_heading),
-            Span::styled("switch pane ", theme.footer_meta),
-            Span::styled("enter ", theme.section_heading),
-            Span::styled("quicklook selected media", theme.footer_meta),
-        ]));
-        lines
-    } else {
-        vec![Line::from(Span::styled(
-            "No listing selected",
-            theme.footer_meta,
-        ))]
-    };
+    let layout = context_layout(area, app.preview_preferred_block_height(area.width));
+    let summary_lines = build_context_summary_lines(app, theme, layout.compact_summary);
 
     let summary = Paragraph::new(summary_lines)
         .wrap(Wrap { trim: false })
@@ -401,14 +301,19 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Th
                 .border_style(theme.border)
                 .title(Span::styled(" context ", theme.header_meta)),
         );
-    frame.render_widget(summary, sections[0]);
+    frame.render_widget(summary, layout.summary);
 
+    if let Some(preview_area) = layout.preview {
+        render_preview_panel(frame, preview_area, app, theme);
+    }
+
+    let media_items = app.context_items();
     let media_rows = media_items
         .iter()
-        .map(|(kind, asset)| {
+        .map(|item| {
             Row::new([
-                Cell::from(truncate(kind, 14)),
-                Cell::from(truncate(asset, 120)),
+                Cell::from(truncate(&item.kind, 14)),
+                Cell::from(truncate(&item.asset, 120)),
             ])
             .style(theme.body)
         })
@@ -426,14 +331,25 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Th
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme.border)
-                .title(Span::styled(" media (enter quicklook) ", theme.header_meta)),
+                .title(Span::styled(
+                    format!(
+                        " media {}/{} (enter quicklook) ",
+                        app.context_selected_index()
+                            .saturating_add(1)
+                            .min(media_items.len()),
+                        media_items.len()
+                    ),
+                    theme.header_meta,
+                )),
         );
 
-    let mut media_state = ratatui::widgets::TableState::default();
+    let mut media_state =
+        ratatui::widgets::TableState::default().with_offset(app.context_scroll_offset());
     if !media_items.is_empty() {
         media_state.select(Some(app.context_selected_index()));
     }
-    frame.render_stateful_widget(media_table, sections[1], &mut media_state);
+    frame.render_stateful_widget(media_table, layout.media, &mut media_state);
+    app.set_context_scroll_offset(media_state.offset());
 }
 
 fn render_palette(frame: &mut Frame<'_>, app: &App, theme: &Theme) {
@@ -505,6 +421,11 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
         Span::styled("jump ", theme.footer_meta),
         Span::styled("enter ", theme.section_heading),
         Span::styled("open/quicklook ", theme.footer_meta),
+        Span::styled("m ", theme.section_heading),
+        Span::styled(
+            format!("preview:{} ", app.preview_mode_label()),
+            theme.footer_meta,
+        ),
         Span::styled(": ", theme.section_heading),
         Span::styled("palette ", theme.footer_meta),
         Span::styled("cmd/ctrl+p ", theme.section_heading),
@@ -525,6 +446,232 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &Theme) {
     )))
     .alignment(Alignment::Right);
     frame.render_widget(right, chunks[1]);
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ContextLayout {
+    summary: Rect,
+    preview: Option<Rect>,
+    media: Rect,
+    compact_summary: bool,
+}
+
+fn context_layout(area: Rect, preview_block_height: u16) -> ContextLayout {
+    const SUMMARY_MIN: u16 = 8;
+    const MEDIA_MIN: u16 = 7;
+    const PREVIEW_MIN: u16 = 8;
+    const PREVIEW_MAX: u16 = 18;
+    const PREVIEW_MIN_WIDTH: u16 = 26;
+
+    let can_show_preview = area.width >= PREVIEW_MIN_WIDTH
+        && area.height
+            >= SUMMARY_MIN
+                .saturating_add(MEDIA_MIN)
+                .saturating_add(PREVIEW_MIN);
+
+    if !can_show_preview {
+        let summary_height = area.height.saturating_mul(3).saturating_div(5).clamp(
+            SUMMARY_MIN.min(area.height),
+            area.height.saturating_sub(3).max(1),
+        );
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(summary_height), Constraint::Min(3)])
+            .split(area);
+        return ContextLayout {
+            summary: sections[0],
+            preview: None,
+            media: sections[1],
+            compact_summary: area.height < 22,
+        };
+    }
+
+    let min_preview = PREVIEW_MIN.min(area.height);
+    let mut summary_height = area.height.saturating_mul(45).saturating_div(100).clamp(
+        SUMMARY_MIN.min(area.height),
+        area.height
+            .saturating_sub(MEDIA_MIN)
+            .max(SUMMARY_MIN.min(area.height)),
+    );
+    let mut preview_height = preview_block_height.clamp(min_preview, PREVIEW_MAX);
+    let mut media_height = area.height.saturating_sub(summary_height + preview_height);
+
+    if media_height < MEDIA_MIN {
+        let deficit = MEDIA_MIN - media_height;
+        let shrink_summary = deficit.min(summary_height.saturating_sub(SUMMARY_MIN));
+        summary_height = summary_height.saturating_sub(shrink_summary);
+        let remaining = deficit.saturating_sub(shrink_summary);
+        preview_height = preview_height
+            .saturating_sub(remaining.min(preview_height.saturating_sub(min_preview)));
+        media_height = area.height.saturating_sub(summary_height + preview_height);
+    }
+
+    if media_height < MEDIA_MIN {
+        let fallback = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(summary_height), Constraint::Min(3)])
+            .split(area);
+        return ContextLayout {
+            summary: fallback[0],
+            preview: None,
+            media: fallback[1],
+            compact_summary: true,
+        };
+    }
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(summary_height),
+            Constraint::Length(preview_height),
+            Constraint::Min(media_height),
+        ])
+        .split(area);
+
+    ContextLayout {
+        summary: sections[0],
+        preview: Some(sections[1]),
+        media: sections[2],
+        compact_summary: true,
+    }
+}
+
+fn render_preview_panel(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme: &Theme) {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    app.sync_preview(inner);
+    let preview = app.preview_view();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.border)
+        .title(Span::styled(preview.title, theme.header_meta));
+    frame.render_widget(block, area);
+    frame.render_widget(Clear, inner);
+
+    if let Some(protocol) = preview.protocol {
+        frame.render_widget(PreviewImage::new(protocol), inner);
+        return;
+    }
+
+    let placeholder = Paragraph::new(preview.lines)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    frame.render_widget(placeholder, inner);
+}
+
+fn build_context_summary_lines(app: &App, theme: &Theme, compact: bool) -> Vec<Line<'static>> {
+    let Some(listing) = app.selected_listing() else {
+        return vec![Line::from(Span::styled(
+            "No listing selected",
+            theme.footer_meta,
+        ))];
+    };
+
+    let mut lines = Vec::new();
+    let id = listing
+        .portal_ids
+        .rightmove
+        .as_deref()
+        .unwrap_or(listing.id.as_str());
+    let cache = app
+        .selected_media()
+        .cache_dir
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "--".to_owned());
+    let media_count = app.context_items().len();
+
+    lines.push(kv_line("id", id, theme));
+    lines.push(kv_line("rightmove", truncate(&listing.url, 96), theme));
+    lines.push(kv_line(
+        "maps",
+        truncate(&listing.google_maps_url, 96),
+        theme,
+    ));
+    lines.push(kv_line("cache", truncate(&cache, 96), theme));
+    lines.push(kv_line("media items", media_count.to_string(), theme));
+
+    if let Some(assessment) = &listing.assessment {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "assessment",
+            theme.section_heading,
+        )));
+        lines.push(kv_line(
+            "recommendation",
+            format!("{:?}", assessment.recommendation).to_lowercase(),
+            theme,
+        ));
+        lines.push(kv_line(
+            "maintenance",
+            format!("{:?}", assessment.maintenance).to_lowercase(),
+            theme,
+        ));
+        lines.push(kv_line(
+            "family",
+            format!("{:?}", assessment.family_suitability).to_lowercase(),
+            theme,
+        ));
+
+        if compact {
+            lines.push(kv_line(
+                "reasoning",
+                truncate(&assessment.reasoning, 156),
+                theme,
+            ));
+            if let Some(tradeoffs) = &assessment.tradeoffs {
+                lines.push(kv_line("tradeoffs", truncate(tradeoffs, 156), theme));
+            }
+        } else {
+            lines.push(kv_line(
+                "score adjustment",
+                format!("{:.1}", assessment.score_adjustment),
+                theme,
+            ));
+            lines.push(kv_line(
+                "light/space",
+                truncate(&assessment.light_and_space, 220),
+                theme,
+            ));
+            lines.push(kv_line(
+                "photo analysis",
+                truncate(&assessment.photo_analysis, 220),
+                theme,
+            ));
+            lines.push(kv_line(
+                "reasoning",
+                truncate(&assessment.reasoning, 220),
+                theme,
+            ));
+            if let Some(tradeoffs) = &assessment.tradeoffs {
+                lines.push(kv_line("tradeoffs", truncate(tradeoffs, 220), theme));
+            }
+            if let Some(neighborhood) = &assessment.neighborhood_analysis {
+                lines.push(kv_line("neighborhood", truncate(neighborhood, 220), theme));
+            }
+        }
+    }
+
+    if !compact && !listing.notes.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("notes", theme.section_heading)));
+        for note in listing.notes.iter().take(3) {
+            lines.push(Line::from(Span::styled(
+                format!("- {}", truncate(note, 140)),
+                theme.body,
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("tab ", theme.section_heading),
+        Span::styled("switch pane ", theme.footer_meta),
+        Span::styled("enter ", theme.section_heading),
+        Span::styled("quicklook media ", theme.footer_meta),
+        Span::styled("m ", theme.section_heading),
+        Span::styled("cycle preview mode", theme.footer_meta),
+    ]));
+    lines
 }
 
 fn kv_line(key: &str, value: impl Into<String>, theme: &Theme) -> Line<'static> {

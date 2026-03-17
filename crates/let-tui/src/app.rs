@@ -6,7 +6,9 @@ use std::process::{Command, Stdio};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use let_sdk::load_listings_file;
 use let_sdk::schema::listing::Listing;
+use ratatui::layout::Rect;
 
+use crate::preview::{PreviewAssetKind, PreviewController, PreviewTarget, PreviewView};
 use crate::theme::{HEADER_CONTRACT, HeaderContract};
 
 const SOURCE_NAMES: [&str; 10] = [
@@ -39,8 +41,8 @@ pub(crate) struct ListingMedia {
 }
 
 impl ListingMedia {
-    fn first_image(&self) -> Option<PathBuf> {
-        self.images.first().cloned()
+    fn first_image(&self) -> Option<&PathBuf> {
+        self.images.first()
     }
 }
 
@@ -67,19 +69,22 @@ pub(crate) enum FocusPane {
 }
 
 #[derive(Debug, Clone)]
-struct ContextMediaItem {
-    kind: String,
-    asset: String,
-    path: PathBuf,
+pub(crate) struct ContextMediaItem {
+    pub(crate) kind: String,
+    pub(crate) asset: String,
+    pub(crate) path: PathBuf,
+    pub(crate) asset_kind: PreviewAssetKind,
 }
 
-#[derive(Debug)]
 pub(crate) struct App {
     running: bool,
     listings: Vec<Listing>,
     selected: usize,
     focus: FocusPane,
     context_selected: usize,
+    context_offset: usize,
+    selected_media: ListingMedia,
+    context_items: Vec<ContextMediaItem>,
     status: String,
     header: HeaderContract,
     palette_open: bool,
@@ -88,11 +93,49 @@ pub(crate) struct App {
     palette_actions: Vec<PaletteAction>,
     palette_filtered: Vec<usize>,
     source_status: Vec<SourceStatus>,
+    preview: PreviewController,
 }
 
 impl App {
+    pub(crate) fn with_preview(preview: PreviewController) -> Self {
+        let (listings, status) = load_ranked_listings();
+        let mut app = Self {
+            running: true,
+            listings,
+            selected: 0,
+            focus: FocusPane::Listings,
+            context_selected: 0,
+            context_offset: 0,
+            selected_media: ListingMedia::default(),
+            context_items: Vec::new(),
+            status,
+            header: HEADER_CONTRACT,
+            palette_open: false,
+            palette_query: String::new(),
+            palette_selected: 0,
+            palette_actions: Vec::new(),
+            palette_filtered: Vec::new(),
+            source_status: collect_source_status(),
+            preview,
+        };
+        app.rebuild_context_cache(true);
+        app
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         self.running
+    }
+
+    pub(crate) fn tick(&mut self) {
+        self.preview.tick();
+    }
+
+    pub(crate) fn poll_timeout_ms(&self) -> u64 {
+        if self.preview.has_pending_request() {
+            60
+        } else {
+            200
+        }
     }
 
     pub(crate) fn listings(&self) -> &[Listing] {
@@ -115,14 +158,8 @@ impl App {
         self.listings.get(self.selected)
     }
 
-    pub(crate) fn selected_media(&self) -> ListingMedia {
-        let Some(listing) = self.selected_listing() else {
-            return ListingMedia::default();
-        };
-
-        let paths = let_sdk::paths::paths();
-        let cache_root = paths.resolved.cache.as_path();
-        build_media_index(cache_root, listing)
+    pub(crate) fn selected_media(&self) -> &ListingMedia {
+        &self.selected_media
     }
 
     pub(crate) fn source_health_counts(&self) -> (usize, usize) {
@@ -176,15 +213,37 @@ impl App {
         self.palette_selected
     }
 
-    pub(crate) fn context_rows(&self) -> Vec<(String, String)> {
-        self.build_context_media_items()
-            .into_iter()
-            .map(|item| (item.kind, item.asset))
-            .collect()
+    pub(crate) fn context_items(&self) -> &[ContextMediaItem] {
+        &self.context_items
     }
 
     pub(crate) fn context_selected_index(&self) -> usize {
         self.context_selected
+    }
+
+    pub(crate) fn context_scroll_offset(&self) -> usize {
+        self.context_offset
+    }
+
+    pub(crate) fn set_context_scroll_offset(&mut self, offset: usize) {
+        self.context_offset = offset;
+    }
+
+    pub(crate) fn preview_mode_label(&self) -> &'static str {
+        self.preview.mode().label()
+    }
+
+    pub(crate) fn preview_preferred_block_height(&self, block_width: u16) -> u16 {
+        self.preview.preferred_block_height(block_width)
+    }
+
+    pub(crate) fn sync_preview(&mut self, area: Rect) {
+        let (target, empty_message) = self.preview_target();
+        self.preview.sync(target, area, empty_message);
+    }
+
+    pub(crate) fn preview_view(&self) -> PreviewView<'_> {
+        self.preview.view()
     }
 
     pub(crate) fn on_key(&mut self, key: KeyEvent) {
@@ -218,6 +277,7 @@ impl App {
                 FocusPane::Listings => self.select_last(),
                 FocusPane::Context => self.context_last(),
             },
+            KeyCode::Char('m') | KeyCode::Char('M') => self.cycle_preview_mode(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.refresh_all(),
             KeyCode::Char(':') => self.open_palette(),
             KeyCode::Enter => match self.focus {
@@ -316,31 +376,31 @@ impl App {
             });
 
             let media = self.selected_media();
-            if let Some(path) = media.first_image() {
+            if let Some(path) = media.first_image().cloned() {
                 actions.push(PaletteAction {
                     label: "quick look first image".to_owned(),
                     kind: PaletteActionKind::QuickLook(path),
                 });
             }
-            if let Some(path) = media.floorplan {
+            if let Some(path) = media.floorplan.clone() {
                 actions.push(PaletteAction {
                     label: "quick look floorplan".to_owned(),
                     kind: PaletteActionKind::QuickLook(path),
                 });
             }
-            if let Some(path) = media.satellite {
+            if let Some(path) = media.satellite.clone() {
                 actions.push(PaletteAction {
                     label: "quick look satellite map".to_owned(),
                     kind: PaletteActionKind::QuickLook(path),
                 });
             }
-            if let Some(path) = media.street {
+            if let Some(path) = media.street.clone() {
                 actions.push(PaletteAction {
                     label: "quick look street map".to_owned(),
                     kind: PaletteActionKind::QuickLook(path),
                 });
             }
-            if let Some(path) = media.cache_dir {
+            if let Some(path) = media.cache_dir.clone() {
                 actions.push(PaletteAction {
                     label: "reveal cache folder".to_owned(),
                     kind: PaletteActionKind::RevealInFinder(path),
@@ -418,7 +478,7 @@ impl App {
     }
 
     fn context_next(&mut self) {
-        let len = self.build_context_media_items().len();
+        let len = self.context_items.len();
         if len == 0 {
             self.context_selected = 0;
             return;
@@ -435,7 +495,7 @@ impl App {
     }
 
     fn context_last(&mut self) {
-        let len = self.build_context_media_items().len();
+        let len = self.context_items.len();
         if len == 0 {
             self.context_selected = 0;
             return;
@@ -444,9 +504,10 @@ impl App {
     }
 
     fn clamp_context_selection(&mut self) {
-        let len = self.build_context_media_items().len();
+        let len = self.context_items.len();
         if len == 0 {
             self.context_selected = 0;
+            self.context_offset = 0;
             return;
         }
         if self.context_selected >= len {
@@ -464,59 +525,12 @@ impl App {
     }
 
     fn quicklook_selected_context_media(&mut self) {
-        let items = self.build_context_media_items();
-        let Some(item) = items.get(self.context_selected) else {
+        let Some(item) = self.context_items.get(self.context_selected) else {
             self.status = "no media selected".to_owned();
             return;
         };
         let path = item.path.clone();
         self.quicklook_path(&path);
-    }
-
-    fn build_context_media_items(&self) -> Vec<ContextMediaItem> {
-        let Some(listing) = self.selected_listing() else {
-            return Vec::new();
-        };
-
-        let media = self.selected_media();
-        let listing_key = listing
-            .portal_ids
-            .rightmove
-            .as_deref()
-            .unwrap_or(listing.id.as_str())
-            .to_owned();
-        let mut items = Vec::new();
-
-        for (index, path) in media.images.iter().enumerate() {
-            items.push(ContextMediaItem {
-                kind: format!("img_{:02}", index + 1),
-                asset: compact_media_asset(&listing_key, path),
-                path: path.clone(),
-            });
-        }
-        if let Some(path) = media.floorplan {
-            items.push(ContextMediaItem {
-                kind: "floorplan".to_owned(),
-                asset: compact_media_asset(&listing_key, &path),
-                path,
-            });
-        }
-        if let Some(path) = media.satellite {
-            items.push(ContextMediaItem {
-                kind: "satellite-map".to_owned(),
-                asset: compact_media_asset(&listing_key, &path),
-                path,
-            });
-        }
-        if let Some(path) = media.street {
-            items.push(ContextMediaItem {
-                kind: "street-map".to_owned(),
-                asset: compact_media_asset(&listing_key, &path),
-                path,
-            });
-        }
-
-        items
     }
 
     fn open_url(&mut self, url: &str) {
@@ -580,7 +594,7 @@ impl App {
             return;
         }
         self.selected = (self.selected + 1).min(self.listings.len().saturating_sub(1));
-        self.clamp_context_selection();
+        self.rebuild_context_cache(true);
     }
 
     fn select_prev(&mut self) {
@@ -588,20 +602,20 @@ impl App {
             return;
         }
         self.selected = self.selected.saturating_sub(1);
-        self.clamp_context_selection();
+        self.rebuild_context_cache(true);
     }
 
     fn select_first(&mut self) {
         if !self.listings.is_empty() {
             self.selected = 0;
-            self.clamp_context_selection();
+            self.rebuild_context_cache(true);
         }
     }
 
     fn select_last(&mut self) {
         if !self.listings.is_empty() {
             self.selected = self.listings.len().saturating_sub(1);
-            self.clamp_context_selection();
+            self.rebuild_context_cache(true);
         }
     }
 
@@ -611,7 +625,7 @@ impl App {
         if self.selected >= self.listings.len() {
             self.selected = self.listings.len().saturating_sub(1);
         }
-        self.clamp_context_selection();
+        self.rebuild_context_cache(true);
         self.status = status;
         self.refresh_sources();
     }
@@ -619,27 +633,120 @@ impl App {
     fn refresh_sources(&mut self) {
         self.source_status = collect_source_status();
     }
+
+    fn rebuild_context_cache(&mut self, reset_selection: bool) {
+        let (selected_media, context_items) = if let Some(listing) = self.selected_listing() {
+            let paths = let_sdk::paths::paths();
+            let cache_root = paths.resolved.cache.as_path();
+            let selected_media = build_media_index(cache_root, listing);
+            let context_items = build_context_media_items(listing, &selected_media);
+            (selected_media, context_items)
+        } else {
+            (ListingMedia::default(), Vec::new())
+        };
+
+        self.selected_media = selected_media;
+        self.context_items = context_items;
+
+        if reset_selection {
+            self.context_selected = 0;
+            self.context_offset = 0;
+        }
+        self.clamp_context_selection();
+    }
+
+    fn preview_target(&self) -> (Option<PreviewTarget>, &'static str) {
+        if self.selected_listing().is_none() {
+            return (None, "select a listing to preview");
+        }
+        if self.context_items.is_empty() {
+            return (None, "no cached media for this listing");
+        }
+
+        let item = match self.focus {
+            FocusPane::Listings => select_primary_preview_item(&self.context_items),
+            FocusPane::Context => self
+                .context_items
+                .get(self.context_selected)
+                .or_else(|| select_primary_preview_item(&self.context_items)),
+        };
+
+        let Some(item) = item else {
+            return (None, "no cached media for this listing");
+        };
+
+        (
+            Some(PreviewTarget::new(
+                item.path.clone(),
+                item.asset_kind,
+                item.kind.clone(),
+            )),
+            "no cached media for this listing",
+        )
+    }
+
+    fn cycle_preview_mode(&mut self) {
+        self.preview.cycle_mode();
+        self.status = format!("preview mode: {}", self.preview_mode_label());
+    }
 }
 
 impl Default for App {
     fn default() -> Self {
-        let (listings, status) = load_ranked_listings();
-        Self {
-            running: true,
-            listings,
-            selected: 0,
-            focus: FocusPane::Listings,
-            context_selected: 0,
-            status,
-            header: HEADER_CONTRACT,
-            palette_open: false,
-            palette_query: String::new(),
-            palette_selected: 0,
-            palette_actions: Vec::new(),
-            palette_filtered: Vec::new(),
-            source_status: collect_source_status(),
-        }
+        Self::with_preview(PreviewController::disabled("preview unavailable in tests"))
     }
+}
+
+fn select_primary_preview_item(items: &[ContextMediaItem]) -> Option<&ContextMediaItem> {
+    items
+        .iter()
+        .find(|item| item.asset_kind == PreviewAssetKind::Photo)
+        .or_else(|| items.first())
+}
+
+fn build_context_media_items(listing: &Listing, media: &ListingMedia) -> Vec<ContextMediaItem> {
+    let listing_key = listing
+        .portal_ids
+        .rightmove
+        .as_deref()
+        .unwrap_or(listing.id.as_str())
+        .to_owned();
+    let mut items = Vec::new();
+
+    for (index, path) in media.images.iter().enumerate() {
+        items.push(ContextMediaItem {
+            kind: format!("img_{:02}", index + 1),
+            asset: compact_media_asset(&listing_key, path),
+            path: path.clone(),
+            asset_kind: PreviewAssetKind::Photo,
+        });
+    }
+    if let Some(path) = &media.floorplan {
+        items.push(ContextMediaItem {
+            kind: "floorplan".to_owned(),
+            asset: compact_media_asset(&listing_key, path),
+            path: path.clone(),
+            asset_kind: PreviewAssetKind::Floorplan,
+        });
+    }
+    if let Some(path) = &media.satellite {
+        items.push(ContextMediaItem {
+            kind: "satellite-map".to_owned(),
+            asset: compact_media_asset(&listing_key, path),
+            path: path.clone(),
+            asset_kind: PreviewAssetKind::Satellite,
+        });
+    }
+    if let Some(path) = &media.street {
+        items.push(ContextMediaItem {
+            kind: "street-map".to_owned(),
+            asset: compact_media_asset(&listing_key, path),
+            path: path.clone(),
+            asset_kind: PreviewAssetKind::Street,
+        });
+    }
+
+    items
 }
 
 fn load_ranked_listings() -> (Vec<Listing>, String) {
@@ -896,8 +1003,8 @@ fn reveal_in_finder(path: &Path) -> std::io::Result<()> {
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::{App, FocusPane};
-    use crate::theme::HEADER_CONTRACT;
+    use super::App;
+    use crate::preview::PreviewController;
 
     #[test]
     fn quits_on_q_keypress() {
@@ -908,21 +1015,10 @@ mod tests {
 
     #[test]
     fn navigation_is_bounded_for_empty_lists() {
-        let mut app = App {
-            running: true,
-            listings: vec![],
-            selected: 0,
-            focus: FocusPane::Listings,
-            context_selected: 0,
-            status: String::new(),
-            header: HEADER_CONTRACT,
-            palette_open: false,
-            palette_query: String::new(),
-            palette_selected: 0,
-            palette_actions: Vec::new(),
-            palette_filtered: Vec::new(),
-            source_status: vec![],
-        };
+        let mut app = App::with_preview(PreviewController::disabled("test preview"));
+        app.listings.clear();
+        app.selected = 0;
+        app.rebuild_context_cache(true);
 
         app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(app.selected_index(), 0);
