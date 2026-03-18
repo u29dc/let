@@ -554,11 +554,11 @@ fn health_marks_schema_version_mismatch_as_blocking() {
 }
 
 #[test]
-fn health_checks_epc_email_and_key_separately() {
+fn health_accepts_epc_bearer_token() {
     let fixture = Fixture::new();
     fs::write(
         fixture.config_dir.join(".env"),
-        "EPC_API_KEY=secret-key\nNOTION_API_KEY=secret_xxx\n",
+        "EPC_API_BEARER_TOKEN=bearer-secret\nNOTION_API_KEY=secret_xxx\n",
     )
     .expect("write env file");
 
@@ -567,18 +567,19 @@ fn health_checks_epc_email_and_key_separately() {
 
     let json = assert_single_json_envelope(&output);
     let checks = json["data"]["checks"].as_array().expect("checks array");
-    let epc_email = checks
+    let epc_auth = checks
         .iter()
-        .find(|check| check["id"] == "env.epc_api_email")
-        .expect("epc email check");
-    let epc_key = checks
-        .iter()
-        .find(|check| check["id"] == "env.epc_api_key")
-        .expect("epc key check");
+        .find(|check| check["id"] == "env.epc_auth")
+        .expect("epc auth check");
 
-    assert_eq!(epc_email["status"], "missing");
-    assert_eq!(epc_email["severity"], "degraded");
-    assert_eq!(epc_key["status"], "ok");
+    assert_eq!(epc_auth["status"], "ok");
+    assert_eq!(epc_auth["severity"], "info");
+    assert!(
+        epc_auth["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("EPC_API_BEARER_TOKEN")),
+        "expected bearer-token detail, got: {epc_auth:?}"
+    );
 }
 
 #[test]

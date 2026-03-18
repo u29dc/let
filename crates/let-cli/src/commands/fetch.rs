@@ -599,13 +599,20 @@ fn effective_min_score(
 }
 
 fn resolve_epc_credentials(env_file: &Path) -> Option<EpcCredentials> {
+    let bearer_token = resolve_env_var("EPC_API_BEARER_TOKEN", env_file)
+        .map(|(value, _)| value)
+        .filter(|value| !value.trim().is_empty());
+    if let Some(bearer_token) = bearer_token {
+        return Some(EpcCredentials::bearer_token(bearer_token));
+    }
+
     let email = resolve_env_var("EPC_API_EMAIL", env_file)
         .map(|(value, _)| value)
         .filter(|value| !value.trim().is_empty())?;
     let api_key = resolve_env_var("EPC_API_KEY", env_file)
         .map(|(value, _)| value)
         .filter(|value| !value.trim().is_empty())?;
-    Some(EpcCredentials { email, api_key })
+    Some(EpcCredentials::legacy_basic(email, api_key))
 }
 
 fn apply_epc_lookup(listing: &mut Listing, lookup: &EpcLookup) -> Vec<String> {
@@ -889,6 +896,7 @@ mod tests {
     use let_sdk::config::{
         AppConfig, FetchConfig, Location, SearchConfig, SearchFilters, default_scoring_config,
     };
+    use let_sdk::pipeline::epc::EpcCredentials;
     use let_sdk::schema::listing::{
         Agent, AreaMetrics, EpcBand, ExtractionStatus, GeoLocation, Lettings, Listing,
         ListingStatus, MapViews, PortalIds, RemoteLocalAsset, UprnConfidence, UprnSource,
@@ -958,21 +966,30 @@ mod tests {
     }
 
     #[test]
-    fn resolve_epc_credentials_requires_email_and_key() {
+    fn resolve_epc_credentials_prefers_bearer_token_and_falls_back_to_legacy_pair() {
         let temp = TempDir::new().expect("temp dir");
         let env_file = temp.path().join(".env");
 
         fs::write(&env_file, "EPC_API_KEY=secret\n").expect("write env file");
         assert!(resolve_epc_credentials(&env_file).is_none());
 
+        fs::write(&env_file, "EPC_API_BEARER_TOKEN=bearer-secret\n").expect("write env file");
+        let bearer_credentials = resolve_epc_credentials(&env_file).expect("credentials");
+        assert_eq!(
+            bearer_credentials,
+            EpcCredentials::bearer_token("bearer-secret")
+        );
+
         fs::write(
             &env_file,
             "EPC_API_EMAIL=user@example.com\nEPC_API_KEY=secret\n",
         )
         .expect("write full env file");
-        let credentials = resolve_epc_credentials(&env_file).expect("credentials");
-        assert_eq!(credentials.email, "user@example.com");
-        assert_eq!(credentials.api_key, "secret");
+        let legacy_credentials = resolve_epc_credentials(&env_file).expect("credentials");
+        assert_eq!(
+            legacy_credentials,
+            EpcCredentials::legacy_basic("user@example.com", "secret")
+        );
     }
 
     #[test]

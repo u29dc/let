@@ -119,7 +119,8 @@ Config notes:
 
 ### API Keys
 
-- `EPC_API_EMAIL` and `EPC_API_KEY` in `$HOME/.tools/let/data/.env`: recommended for live EPC rating, floor area, and EPC-derived UPRN enrichment.
+- `EPC_API_BEARER_TOKEN` in `$HOME/.tools/let/data/.env`: preferred for live EPC rating, floor area, and EPC-derived UPRN enrichment on the new Get Energy Performance Data service.
+- Legacy transition fallback: `EPC_API_EMAIL` and `EPC_API_KEY` still work only while Open Data Communities remains available.
 - `MAPBOX_ACCESS_TOKEN`: optional, enables cached satellite and street map views.
 - `NOTION_API_KEY` and `NOTION_DATABASE_ID`: optional, only required for Notion export.
 - If credentials are missing, continue unless the requested task specifically depends on them.

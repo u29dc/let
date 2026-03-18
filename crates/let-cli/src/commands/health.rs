@@ -47,20 +47,7 @@ pub fn run(shared: &SharedArgs) -> CommandResult {
             &bundle.derived.source_db(&bundle.resolved.sources, source),
         ));
     }
-    checks.push(check_env_key(
-        "EPC_API_EMAIL",
-        "env.epc_api_email",
-        "EPC API Email",
-        &bundle.derived.env_file,
-        "your-email@example.com",
-    ));
-    checks.push(check_env_key(
-        "EPC_API_KEY",
-        "env.epc_api_key",
-        "EPC API Key",
-        &bundle.derived.env_file,
-        "your-api-key",
-    ));
+    checks.push(check_epc_credentials(&bundle.derived.env_file));
     checks.push(check_env_key(
         "NOTION_API_KEY",
         "env.notion_api_key",
@@ -124,6 +111,76 @@ pub fn run(shared: &SharedArgs) -> CommandResult {
         .with_total(count)
         .with_has_more(false)
         .with_text(format!("health status: {status}")))
+}
+
+fn check_epc_credentials(env_file: &Path) -> HealthCheck {
+    let bearer_token = resolve_env_var("EPC_API_BEARER_TOKEN", env_file);
+    let email = resolve_env_var("EPC_API_EMAIL", env_file);
+    let api_key = resolve_env_var("EPC_API_KEY", env_file);
+    let has_email = email.is_some();
+    let has_api_key = api_key.is_some();
+
+    if let Some((_, source)) = bearer_token {
+        return HealthCheck {
+            id: "env.epc_auth".to_owned(),
+            label: "EPC API Auth".to_owned(),
+            status: "ok".to_owned(),
+            severity: "info".to_owned(),
+            detail: format!(
+                "EPC_API_BEARER_TOKEN is set ({})",
+                env_value_source_text(source)
+            ),
+            fix: Value::Null,
+        };
+    }
+
+    if let (Some((_, email_source)), Some((_, api_key_source))) = (&email, &api_key) {
+        let source_text = if email_source == api_key_source {
+            env_value_source_text(*email_source).to_owned()
+        } else {
+            format!(
+                "{}/{}",
+                env_value_source_text(*email_source),
+                env_value_source_text(*api_key_source)
+            )
+        };
+        return HealthCheck {
+            id: "env.epc_auth".to_owned(),
+            label: "EPC API Auth".to_owned(),
+            status: "ok".to_owned(),
+            severity: "info".to_owned(),
+            detail: format!(
+                "legacy EPC_API_EMAIL and EPC_API_KEY are set ({source_text}); prefer EPC_API_BEARER_TOKEN for the new service"
+            ),
+            fix: Value::Null,
+        };
+    }
+
+    let detail = match (has_email, has_api_key) {
+        (true, false) => "EPC_API_EMAIL is set but EPC_API_KEY is missing",
+        (false, true) => "EPC_API_KEY is set but EPC_API_EMAIL is missing",
+        _ => "EPC API credentials not set",
+    };
+
+    HealthCheck {
+        id: "env.epc_auth".to_owned(),
+        label: "EPC API Auth".to_owned(),
+        status: "missing".to_owned(),
+        severity: "degraded".to_owned(),
+        detail: detail.to_owned(),
+        fix: json!([
+            format!(
+                "echo 'EPC_API_BEARER_TOKEN=your-bearer-token' >> {}",
+                env_file.display()
+            ),
+            format!(
+                "echo 'EPC_API_EMAIL=your-email@example.com' >> {}",
+                env_file.display()
+            ),
+            format!("echo 'EPC_API_KEY=your-api-key' >> {}", env_file.display()),
+            "prefer EPC_API_BEARER_TOKEN for Get Energy Performance Data; legacy email/key only works during the Open Data Communities transition"
+        ]),
+    }
 }
 
 fn check_config_file(path: &Path) -> HealthCheck {
@@ -229,16 +286,12 @@ fn check_source_db(name: &str, path: &Path) -> HealthCheck {
 
 fn check_env_key(key: &str, id: &str, label: &str, env_file: &Path, example: &str) -> HealthCheck {
     if let Some((_, source)) = resolve_env_var(key, env_file) {
-        let source_text = match source {
-            EnvValueSource::Process => "process env",
-            EnvValueSource::EnvFile => ".env file",
-        };
         return HealthCheck {
             id: id.to_owned(),
             label: label.to_owned(),
             status: "ok".to_owned(),
             severity: "info".to_owned(),
-            detail: format!("{key} is set ({source_text})"),
+            detail: format!("{key} is set ({})", env_value_source_text(source)),
             fix: Value::Null,
         };
     }
@@ -250,6 +303,13 @@ fn check_env_key(key: &str, id: &str, label: &str, env_file: &Path, example: &st
         severity: "degraded".to_owned(),
         detail: format!("{key} not set"),
         fix: json!([format!("echo '{key}={example}' >> {}", env_file.display())]),
+    }
+}
+
+fn env_value_source_text(source: EnvValueSource) -> &'static str {
+    match source {
+        EnvValueSource::Process => "process env",
+        EnvValueSource::EnvFile => ".env file",
     }
 }
 
