@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use let_sdk::paths::PathOverrides;
 
 mod clipboard;
@@ -147,6 +147,13 @@ enum BuildCommand {
     },
 }
 
+#[derive(Debug, Clone, Args)]
+struct ViewCopyArgs {
+    /// Copy rendered output to the clipboard.
+    #[arg(long, short = 'c', default_value_t = false)]
+    copy: bool,
+}
+
 #[derive(Debug, Subcommand)]
 enum ViewCommand {
     /// Ranked listing table.
@@ -163,14 +170,15 @@ enum ViewCommand {
         region: Option<String>,
         #[arg(long = "type")]
         property_type: Option<String>,
+        #[command(flatten)]
+        copy: ViewCopyArgs,
     },
     /// Full listing details by id.
     Detail {
         /// Listing UUID or portal id.
         id: String,
-        /// Copy rendered detail output to the clipboard.
-        #[arg(long, short = 'c', default_value_t = false)]
-        copy: bool,
+        #[command(flatten)]
+        copy: ViewCopyArgs,
     },
 }
 
@@ -444,8 +452,31 @@ impl From<BuildProgressMode> for commands::build::ProgressMode {
 enum DispatchOutcome {
     Local {
         tool: &'static str,
+        copy_requested: bool,
         result: Result<CommandOutput, CommandError>,
     },
+}
+
+impl DispatchOutcome {
+    fn local(tool: &'static str, result: Result<CommandOutput, CommandError>) -> Self {
+        Self::Local {
+            tool,
+            copy_requested: false,
+            result,
+        }
+    }
+
+    fn local_with_copy(
+        tool: &'static str,
+        copy_requested: bool,
+        result: Result<CommandOutput, CommandError>,
+    ) -> Self {
+        Self::Local {
+            tool,
+            copy_requested,
+            result,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,10 +501,14 @@ fn main() {
     let outcome = dispatch(&cli.command, &shared);
 
     match outcome {
-        DispatchOutcome::Local { tool, result } => {
+        DispatchOutcome::Local {
+            tool,
+            copy_requested,
+            result,
+        } => {
             let elapsed = started.elapsed().as_millis() as u64;
             let mode = output_mode(cli.text);
-            let result = apply_copy_request(result, &cli.command, mode);
+            let result = apply_copy_request(result, copy_requested, mode);
             let exit_code = emit(&result, tool, elapsed, mode);
             process::exit(exit_code);
         }
@@ -482,42 +517,23 @@ fn main() {
 
 fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
     match command {
-        Command::Tools { name } => DispatchOutcome::Local {
-            tool: "tools",
-            result: commands::tools::run(name.as_deref()),
-        },
-        Command::Health => DispatchOutcome::Local {
-            tool: "health",
-            result: commands::health::run(shared),
-        },
+        Command::Tools { name } => {
+            DispatchOutcome::local("tools", commands::tools::run(name.as_deref()))
+        }
+        Command::Health => DispatchOutcome::local("health", commands::health::run(shared)),
         Command::Config {
             command: ConfigCommand::Show,
-        } => DispatchOutcome::Local {
-            tool: "config.show",
-            result: commands::config::show(shared),
-        },
+        } => DispatchOutcome::local("config.show", commands::config::show(shared)),
         Command::Config {
             command: ConfigCommand::Validate,
-        } => DispatchOutcome::Local {
-            tool: "config.validate",
-            result: commands::config::validate(shared),
-        },
-        Command::Start => DispatchOutcome::Local {
-            tool: "start",
-            result: commands::start::run(shared),
-        },
+        } => DispatchOutcome::local("config.validate", commands::config::validate(shared)),
+        Command::Start => DispatchOutcome::local("start", commands::start::run(shared)),
         Command::Score {
             command: ScoreCommand::Compute,
-        } => DispatchOutcome::Local {
-            tool: "score.compute",
-            result: commands::score::compute(shared),
-        },
+        } => DispatchOutcome::local("score.compute", commands::score::compute(shared)),
         Command::Score {
             command: ScoreCommand::Explain { id },
-        } => DispatchOutcome::Local {
-            tool: "score.explain",
-            result: commands::score::explain(shared, id),
-        },
+        } => DispatchOutcome::local("score.explain", commands::score::explain(shared, id)),
         Command::View {
             command:
                 ViewCommand::List {
@@ -527,10 +543,12 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     asc,
                     region,
                     property_type,
+                    copy,
                 },
-        } => DispatchOutcome::Local {
-            tool: "view.list",
-            result: commands::view::list(
+        } => DispatchOutcome::local_with_copy(
+            "view.list",
+            copy.copy,
+            commands::view::list(
                 shared,
                 &commands::view::ViewListParams {
                     top: if *top == 0 { 20 } else { *top },
@@ -541,13 +559,14 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     property_type: property_type.clone(),
                 },
             ),
-        },
+        ),
         Command::View {
-            command: ViewCommand::Detail { id, .. },
-        } => DispatchOutcome::Local {
-            tool: "view.detail",
-            result: commands::view::detail(shared, id),
-        },
+            command: ViewCommand::Detail { id, copy },
+        } => DispatchOutcome::local_with_copy(
+            "view.detail",
+            copy.copy,
+            commands::view::detail(shared, id),
+        ),
         Command::Assess {
             command:
                 AssessCommand::Candidates {
@@ -555,9 +574,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     region,
                     min_score,
                 },
-        } => DispatchOutcome::Local {
-            tool: "assess.candidates",
-            result: commands::assess::candidates(
+        } => DispatchOutcome::local(
+            "assess.candidates",
+            commands::assess::candidates(
                 shared,
                 &commands::assess::CandidatesParams {
                     top: if *top == 0 { 10 } else { *top },
@@ -565,25 +584,19 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     min_score: *min_score,
                 },
             ),
-        },
+        ),
         Command::Assess {
             command: AssessCommand::Context { id },
-        } => DispatchOutcome::Local {
-            tool: "assess.context",
-            result: commands::assess::context(shared, id),
-        },
+        } => DispatchOutcome::local("assess.context", commands::assess::context(shared, id)),
         Command::Assess {
             command: AssessCommand::Submit { id, assessment },
-        } => DispatchOutcome::Local {
-            tool: "assess.submit",
-            result: commands::assess::submit(shared, id, assessment),
-        },
+        } => DispatchOutcome::local(
+            "assess.submit",
+            commands::assess::submit(shared, id, assessment),
+        ),
         Command::Search {
             command: SearchCommand::Resolve { location },
-        } => DispatchOutcome::Local {
-            tool: "search.resolve",
-            result: commands::search::resolve(location),
-        },
+        } => DispatchOutcome::local("search.resolve", commands::search::resolve(location)),
         Command::Search {
             command:
                 SearchCommand::Discover {
@@ -595,9 +608,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     location_name,
                     limit,
                 },
-        } => DispatchOutcome::Local {
-            tool: "search.discover",
-            result: commands::search::discover(
+        } => DispatchOutcome::local(
+            "search.discover",
+            commands::search::discover(
                 shared,
                 &commands::search::DiscoverParams {
                     region: region.clone(),
@@ -609,13 +622,10 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     limit: *limit,
                 },
             ),
-        },
+        ),
         Command::Search {
             command: SearchCommand::Diff { ids },
-        } => DispatchOutcome::Local {
-            tool: "search.diff",
-            result: commands::search::diff(shared, ids),
-        },
+        } => DispatchOutcome::local("search.diff", commands::search::diff(shared, ids)),
         Command::Search {
             command: SearchCommand::External(args),
         } => unsupported_external("search", args),
@@ -656,9 +666,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     skip_re_enrich,
                     skip_images,
                 },
-        } => DispatchOutcome::Local {
-            tool: "ops.patch",
-            result: commands::ops::patch(
+        } => DispatchOutcome::local(
+            "ops.patch",
+            commands::ops::patch(
                 shared,
                 &commands::ops::PatchParams {
                     id: id.clone(),
@@ -696,7 +706,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     skip_images: *skip_images,
                 },
             ),
-        },
+        ),
         Command::Ops {
             command:
                 OpsCommand::Prune {
@@ -707,9 +717,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     dry_run,
                     force,
                 },
-        } => DispatchOutcome::Local {
-            tool: "ops.prune",
-            result: commands::ops::prune(
+        } => DispatchOutcome::local(
+            "ops.prune",
+            commands::ops::prune(
                 shared,
                 &commands::ops::PruneParams {
                     min_score: *min_score,
@@ -720,7 +730,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     force: *force,
                 },
             ),
-        },
+        ),
         Command::Ops {
             command:
                 OpsCommand::Verify {
@@ -729,9 +739,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     limit,
                     delay,
                 },
-        } => DispatchOutcome::Local {
-            tool: "ops.verify",
-            result: commands::ops::verify(
+        } => DispatchOutcome::local(
+            "ops.verify",
+            commands::ops::verify(
                 shared,
                 &commands::ops::VerifyParams {
                     dry_run: *dry_run,
@@ -740,16 +750,16 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     delay_ms: *delay,
                 },
             ),
-        },
+        ),
         Command::Ops {
             command: OpsCommand::External(args),
         } => unsupported_external("ops", args),
         Command::Export {
             command: ExportCommand::Json { output },
-        } => DispatchOutcome::Local {
-            tool: "export.json",
-            result: commands::export::export_json(shared, output.clone()),
-        },
+        } => DispatchOutcome::local(
+            "export.json",
+            commands::export::export_json(shared, output.clone()),
+        ),
         Command::Export {
             command:
                 ExportCommand::Notion {
@@ -759,9 +769,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     dry_run,
                     force,
                 },
-        } => DispatchOutcome::Local {
-            tool: "export.notion",
-            result: commands::export::export_notion(
+        } => DispatchOutcome::local(
+            "export.notion",
+            commands::export::export_notion(
                 shared,
                 &commands::export::NotionParams {
                     top: *top,
@@ -771,7 +781,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     force: *force,
                 },
             ),
-        },
+        ),
         Command::Export {
             command: ExportCommand::External(args),
         } => unsupported_external("export", args),
@@ -782,15 +792,10 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     jobs,
                     progress,
                 },
-        } => DispatchOutcome::Local {
-            tool: "build.sources",
-            result: commands::build::run_sources(
-                (*target).into(),
-                *jobs,
-                shared,
-                (*progress).into(),
-            ),
-        },
+        } => DispatchOutcome::local(
+            "build.sources",
+            commands::build::run_sources((*target).into(), *jobs, shared, (*progress).into()),
+        ),
         Command::Fetch {
             ids,
             region,
@@ -800,9 +805,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             skip_epc,
             min_score,
             keep_below_min,
-        } => DispatchOutcome::Local {
-            tool: "fetch",
-            result: commands::fetch::run(
+        } => DispatchOutcome::local(
+            "fetch",
+            commands::fetch::run(
                 shared,
                 &commands::fetch::FetchParams {
                     ids: ids.clone(),
@@ -815,26 +820,26 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     keep_below_min: *keep_below_min,
                 },
             ),
-        },
+        ),
         Command::External(args) => {
             if args.is_empty() {
-                DispatchOutcome::Local {
-                    tool: "external",
-                    result: Err(CommandError::runtime(
+                DispatchOutcome::local(
+                    "external",
+                    Err(CommandError::runtime(
                         "VALIDATION_ERROR",
                         "missing command",
                         "run `let tools` to list available commands",
                     )),
-                }
+                )
             } else {
-                DispatchOutcome::Local {
-                    tool: "external",
-                    result: Err(CommandError::runtime(
+                DispatchOutcome::local(
+                    "external",
+                    Err(CommandError::runtime(
                         "UNSUPPORTED_COMMAND",
                         format!("unsupported command: {}", args.join(" ")),
                         "run `let tools` to list available commands",
                     )),
-                }
+                )
             }
         }
     }
@@ -847,14 +852,14 @@ fn unsupported_external(group: &str, args: &[String]) -> DispatchOutcome {
         format!("{group} command is not supported: {}", args.join(" "))
     };
 
-    DispatchOutcome::Local {
-        tool: "external",
-        result: Err(CommandError::runtime(
+    DispatchOutcome::local(
+        "external",
+        Err(CommandError::runtime(
             "UNSUPPORTED_COMMAND",
             detail,
             "run `let tools` to list available commands",
         )),
-    }
+    )
 }
 
 fn output_mode(text_requested: bool) -> OutputMode {
@@ -867,15 +872,15 @@ fn output_mode(text_requested: bool) -> OutputMode {
 
 fn apply_copy_request(
     result: Result<CommandOutput, CommandError>,
-    command: &Command,
+    copy_requested: bool,
     mode: OutputMode,
 ) -> Result<CommandOutput, CommandError> {
-    if !copy_requested(command) {
+    if !copy_requested {
         return result;
     }
 
     let payload = match &result {
-        Ok(output) => render_copy_payload(command, output, mode)?,
+        Ok(output) => render_copy_payload(output, mode)?,
         Err(err) => return Err(err.clone()),
     };
 
@@ -883,51 +888,30 @@ fn apply_copy_request(
     result
 }
 
-fn copy_requested(command: &Command) -> bool {
-    matches!(
-        command,
-        Command::View {
-            command: ViewCommand::Detail { copy: true, .. }
-        }
-    )
-}
-
-fn render_copy_payload(
-    command: &Command,
-    output: &CommandOutput,
-    mode: OutputMode,
-) -> Result<String, CommandError> {
-    match command {
-        Command::View {
-            command: ViewCommand::Detail { .. },
-        } => match mode {
-            OutputMode::EnvelopeJson => render_view_detail_copy_json(output),
-            OutputMode::Text => render_text_payload(output),
-        },
-        _ => Err(CommandError::runtime(
-            "INTERNAL_ERROR",
-            "clipboard copy requested for unsupported command",
-            "report this bug",
-        )),
+fn render_copy_payload(output: &CommandOutput, mode: OutputMode) -> Result<String, CommandError> {
+    match mode {
+        OutputMode::EnvelopeJson => render_json_copy_payload(output),
+        OutputMode::Text => render_text_copy_payload(output),
     }
 }
 
-fn render_view_detail_copy_json(output: &CommandOutput) -> Result<String, CommandError> {
-    let Some(listing) = output.data.get("listing") else {
-        return Err(CommandError::runtime(
-            "INTERNAL_ERROR",
-            "view.detail output missing listing payload",
-            "report this bug",
-        ));
-    };
-
-    serde_json::to_string_pretty(listing).map_err(|error| {
+fn render_json_copy_payload(output: &CommandOutput) -> Result<String, CommandError> {
+    let payload = output.clipboard.json.as_ref().unwrap_or(&output.data);
+    serde_json::to_string_pretty(payload).map_err(|error| {
         CommandError::runtime(
             "INTERNAL_ERROR",
-            format!("failed to serialize listing payload for clipboard copy: {error}"),
+            format!("failed to serialize command payload for clipboard copy: {error}"),
             "report this bug",
         )
     })
+}
+
+fn render_text_copy_payload(output: &CommandOutput) -> Result<String, CommandError> {
+    if let Some(text) = &output.clipboard.text {
+        return Ok(text.clone());
+    }
+
+    render_text_payload(output)
 }
 
 fn render_text_payload(output: &CommandOutput) -> Result<String, CommandError> {

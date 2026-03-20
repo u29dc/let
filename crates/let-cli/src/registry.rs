@@ -818,6 +818,12 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             required: false,
                             description: "Comma-separated property type filter.",
                         },
+                        ToolParameter {
+                            name: "--copy",
+                            param_type: "bool",
+                            required: false,
+                            description: "Copy rendered list output to the clipboard. Copies human text in `--text` mode and pretty command JSON otherwise.",
+                        },
                     ],
                     vec!["listings", "total", "filtered"],
                     true,

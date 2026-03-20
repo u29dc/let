@@ -119,7 +119,8 @@ pub fn list(shared: &SharedArgs, params: &ViewListParams) -> CommandResult {
     .with_count(filtered)
     .with_total(total)
     .with_has_more(filtered < total)
-    .with_text(text))
+    .with_text(text.clone())
+    .with_copy_text(text))
 }
 
 pub fn detail(shared: &SharedArgs, id: &str) -> CommandResult {
@@ -136,8 +137,14 @@ pub fn detail(shared: &SharedArgs, id: &str) -> CommandResult {
     };
 
     let text = render_listing_detail_text(&listing);
+    let listing_json = to_camel_json(&listing);
 
-    Ok(CommandOutput::new(json!({ "listing": to_camel_json(&listing) })).with_text(text))
+    Ok(
+        CommandOutput::new(json!({ "listing": listing_json.clone() }))
+            .with_text(text.clone())
+            .with_copy_text(text)
+            .with_copy_json(listing_json),
+    )
 }
 
 fn render_listing_list_text(listings: &[ListingSummary], shown: usize, total: usize) -> String {

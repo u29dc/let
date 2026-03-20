@@ -177,6 +177,98 @@ fn view_list_text_renders_readable_rows() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn view_list_copy_keeps_json_stdout_and_copies_payload_json() {
+    let fixture = Fixture::new();
+    let script_dir = TempDir::new().expect("script tempdir");
+    let script_path = script_dir.path().join("clipboard-mock.sh");
+    let capture_path = script_dir.path().join("clipboard.txt");
+    write_clipboard_capture_script(&script_path);
+
+    let output = fixture
+        .cmd()
+        .env("LET_CLIPBOARD_BIN", &script_path)
+        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
+        .args(["view", "list", "--copy"])
+        .output()
+        .expect("run view list copy");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["filtered"], 1);
+    assert_eq!(json["data"]["listings"].as_array().map(Vec::len), Some(1));
+
+    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
+    let copied_json: serde_json::Value =
+        serde_json::from_str(&capture).expect("parse copied list json");
+    assert_eq!(copied_json["filtered"], 1);
+    assert_eq!(copied_json["total"], 1);
+    assert_eq!(copied_json["listings"].as_array().map(Vec::len), Some(1));
+    assert!(
+        copied_json.get("meta").is_none(),
+        "clipboard should contain data payload, not envelope: {copied_json:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn view_list_text_copy_copies_rendered_table() {
+    let fixture = Fixture::new();
+    let script_dir = TempDir::new().expect("script tempdir");
+    let script_path = script_dir.path().join("clipboard-mock.sh");
+    let capture_path = script_dir.path().join("clipboard.txt");
+    write_clipboard_capture_script(&script_path);
+
+    let output = fixture
+        .cmd()
+        .env("LET_CLIPBOARD_BIN", &script_path)
+        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
+        .args(["view", "list", "--text", "--copy"])
+        .output()
+        .expect("run view list text copy");
+    assert_eq!(output.status.code(), Some(0));
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
+    assert_eq!(capture, stdout.trim_end_matches('\n'));
+    assert!(
+        capture.contains("Showing 1 of 1 listings"),
+        "expected rendered table in clipboard capture, got: {capture}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn view_list_copy_empty_result_copies_valid_empty_payload() {
+    let fixture = Fixture::new();
+    let script_dir = TempDir::new().expect("script tempdir");
+    let script_path = script_dir.path().join("clipboard-mock.sh");
+    let capture_path = script_dir.path().join("clipboard.txt");
+    write_clipboard_capture_script(&script_path);
+
+    let output = fixture
+        .cmd()
+        .env("LET_CLIPBOARD_BIN", &script_path)
+        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
+        .args(["view", "list", "--region", "Leeds", "--copy"])
+        .output()
+        .expect("run view list empty copy");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["filtered"], 0);
+
+    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
+    let copied_json: serde_json::Value =
+        serde_json::from_str(&capture).expect("parse copied empty list json");
+    assert_eq!(copied_json["filtered"], 0);
+    assert_eq!(copied_json["total"], 1);
+    assert_eq!(copied_json["listings"].as_array().map(Vec::len), Some(0));
+}
+
 #[test]
 fn view_detail_text_renders_human_summary() {
     let fixture = Fixture::new();
@@ -211,6 +303,35 @@ fn view_detail_text_renders_human_summary() {
     assert!(
         !stdout.contains("loaded listing"),
         "placeholder text should be gone, got: {stdout}"
+    );
+}
+
+#[test]
+fn tools_json_includes_view_list_copy_parameter() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["tools", "view.list"])
+        .output()
+        .expect("run tools view.list");
+    assert_eq!(output.status.code(), Some(0));
+
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["tool"]["name"], "view.list");
+
+    let parameters = json["data"]["tool"]["parameters"]
+        .as_array()
+        .expect("tool parameters array");
+    assert!(
+        parameters.iter().any(|value| {
+            value["name"] == "--copy"
+                && value["type"] == "bool"
+                && value["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("clipboard"))
+        }),
+        "expected --copy parameter in view.list metadata, got: {parameters:?}"
     );
 }
 

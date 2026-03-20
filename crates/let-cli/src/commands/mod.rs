@@ -29,11 +29,18 @@ pub struct MetaOptions {
     pub has_more: Option<bool>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ClipboardOptions {
+    pub json: Option<Value>,
+    pub text: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
     pub data: Value,
     pub text: Option<String>,
     pub meta: MetaOptions,
+    pub clipboard: ClipboardOptions,
 }
 
 impl CommandOutput {
@@ -42,6 +49,7 @@ impl CommandOutput {
             data,
             text: None,
             meta: MetaOptions::default(),
+            clipboard: ClipboardOptions::default(),
         }
     }
 
@@ -62,6 +70,16 @@ impl CommandOutput {
 
     pub fn with_has_more(mut self, has_more: bool) -> Self {
         self.meta.has_more = Some(has_more);
+        self
+    }
+
+    pub fn with_copy_json(mut self, value: Value) -> Self {
+        self.clipboard.json = Some(value);
+        self
+    }
+
+    pub fn with_copy_text(mut self, text: impl Into<String>) -> Self {
+        self.clipboard.text = Some(text.into());
         self
     }
 }
