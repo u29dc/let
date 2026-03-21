@@ -552,6 +552,10 @@ fn render_preview_panel(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme:
         return;
     }
 
+    if preview.lines.is_empty() {
+        return;
+    }
+
     let placeholder = Paragraph::new(preview.lines)
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });

@@ -144,7 +144,7 @@ impl RequestKey {
 enum PreviewState {
     Disabled(String),
     Empty(String),
-    Loading(RequestKey),
+    Pending(RequestKey),
     Failed {
         key: RequestKey,
         message: String,
@@ -160,7 +160,7 @@ enum PreviewState {
 impl PreviewState {
     fn key(&self) -> Option<&RequestKey> {
         match self {
-            Self::Loading(key) => Some(key),
+            Self::Pending(key) => Some(key),
             Self::Failed { key, .. } => Some(key),
             Self::Ready { key, .. } => Some(key),
             Self::Disabled(_) | Self::Empty(_) => None,
@@ -194,6 +194,12 @@ struct PreparedPreview {
     image: DynamicImage,
     source_width: u32,
     source_height: u32,
+}
+
+#[derive(Debug, Clone)]
+struct PendingPreview {
+    id: u64,
+    key: RequestKey,
 }
 
 #[derive(Clone)]
@@ -296,6 +302,7 @@ pub(crate) struct PreviewController {
     queue: Option<PreviewJobQueue>,
     response_rx: Option<Receiver<PreviewResponse>>,
     state: PreviewState,
+    pending: Option<PendingPreview>,
     mode: PreviewMode,
     font_size: (u16, u16),
     request_id: u64,
@@ -322,6 +329,7 @@ impl PreviewController {
                     queue: Some(queue),
                     response_rx: Some(response_rx),
                     state: PreviewState::Empty("select a listing to preview".to_owned()),
+                    pending: None,
                     mode: PreviewMode::Auto,
                     font_size,
                     request_id: 0,
@@ -337,6 +345,7 @@ impl PreviewController {
             queue: None,
             response_rx: None,
             state: PreviewState::Disabled(reason.into()),
+            pending: None,
             mode: PreviewMode::Auto,
             font_size: DEFAULT_FONT_SIZE,
             request_id: 0,
@@ -349,10 +358,14 @@ impl PreviewController {
         };
 
         while let Ok(response) = response_rx.try_recv() {
-            let current_key = self.state.key().cloned();
-            if current_key.as_ref() != Some(&response.key) || response.id != self.request_id {
+            let is_current = self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.id == response.id && pending.key == response.key);
+            if !is_current {
                 continue;
             }
+            self.pending = None;
 
             let Some(picker) = self.picker.as_ref() else {
                 self.state = PreviewState::Disabled("preview unavailable".to_owned());
@@ -420,7 +433,7 @@ impl PreviewController {
     }
 
     pub(crate) fn has_pending_request(&self) -> bool {
-        matches!(self.state, PreviewState::Loading(_))
+        self.pending.is_some()
     }
 
     pub(crate) fn sync(
@@ -434,26 +447,43 @@ impl PreviewController {
         }
 
         let Some(target) = target else {
+            self.pending = None;
             self.state = PreviewState::Empty(empty_message.to_owned());
             return;
         };
 
         if area.width == 0 || area.height == 0 {
+            self.pending = None;
             self.state = PreviewState::Empty("preview area too small".to_owned());
             return;
         }
 
         let key = RequestKey::from_target(target, self.mode, area);
-        if self.state.key() == Some(&key) {
+        if self.state.key() == Some(&key) && self.pending.is_none() {
+            return;
+        }
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.key == key)
+        {
             return;
         }
 
         let pixel_width = u32::from(area.width).saturating_mul(u32::from(self.font_size.0));
         let pixel_height = u32::from(area.height).saturating_mul(u32::from(self.font_size.1));
         self.request_id = self.request_id.wrapping_add(1);
-        self.state = PreviewState::Loading(key.clone());
+        self.pending = Some(PendingPreview {
+            id: self.request_id,
+            key: key.clone(),
+        });
+        // Preserve the last successful preview while the replacement renders.
+        if !matches!(self.state, PreviewState::Ready { .. }) {
+            self.state = PreviewState::Pending(key.clone());
+        }
 
         let Some(queue) = self.queue.as_ref() else {
+            self.pending = None;
             self.state = PreviewState::Disabled("preview unavailable".to_owned());
             return;
         };
@@ -478,14 +508,10 @@ impl PreviewController {
                 protocol: None,
                 lines: vec![Line::from(message.clone())],
             },
-            PreviewState::Loading(key) => PreviewView {
+            PreviewState::Pending(key) => PreviewView {
                 title: title_for_key(key),
                 protocol: None,
-                lines: vec![
-                    Line::from(format!("loading {}", key.kind.label())),
-                    Line::from(compact_path(&key.path)),
-                    loading_mode_line(key),
-                ],
+                lines: Vec::new(),
             },
             PreviewState::Failed { key, message } => PreviewView {
                 title: title_for_key(key),
@@ -676,11 +702,65 @@ fn should_force_ghostty_kitty() -> bool {
 #[cfg(test)]
 mod tests {
     use image::{DynamicImage, ImageBuffer, Rgba};
+    use ratatui::layout::Rect;
+    use ratatui_image::{Resize as RatatuiResize, picker::Picker};
 
     use super::{
-        PREVIEW_ASPECT_HEIGHT, PREVIEW_ASPECT_WIDTH, PreviewAssetKind, PreviewMode,
+        DEFAULT_FONT_SIZE, PREVIEW_ASPECT_HEIGHT, PREVIEW_ASPECT_WIDTH, PreviewAssetKind,
+        PreviewController, PreviewMode, PreviewState, PreviewTarget, PreviewView, RequestKey,
         normalize_contain, normalize_cover,
     };
+
+    fn sample_image() -> DynamicImage {
+        DynamicImage::ImageRgba8(ImageBuffer::from_pixel(12, 8, Rgba([0, 0, 0, 255])))
+    }
+
+    fn sample_target(label: &str) -> PreviewTarget {
+        PreviewTarget::new(
+            format!("/tmp/{label}.png").into(),
+            PreviewAssetKind::Photo,
+            label.to_owned(),
+        )
+    }
+
+    fn sample_controller() -> PreviewController {
+        PreviewController {
+            picker: Some(Picker::halfblocks()),
+            queue: Some(super::PreviewJobQueue::new()),
+            response_rx: None,
+            state: PreviewState::Empty("empty".to_owned()),
+            pending: None,
+            mode: PreviewMode::Auto,
+            font_size: DEFAULT_FONT_SIZE,
+            request_id: 0,
+        }
+    }
+
+    fn ready_controller(key: RequestKey) -> PreviewController {
+        let picker = Picker::halfblocks();
+        let protocol = picker
+            .new_protocol(
+                sample_image(),
+                key.area(),
+                RatatuiResize::Scale(Some(image::imageops::FilterType::CatmullRom)),
+            )
+            .expect("build preview protocol");
+        PreviewController {
+            picker: Some(picker),
+            queue: Some(super::PreviewJobQueue::new()),
+            response_rx: None,
+            state: PreviewState::Ready {
+                key,
+                protocol,
+                source_width: 12,
+                source_height: 8,
+            },
+            pending: None,
+            mode: PreviewMode::Auto,
+            font_size: DEFAULT_FONT_SIZE,
+            request_id: 0,
+        }
+    }
 
     #[test]
     fn auto_mode_uses_cover_for_photos() {
@@ -724,5 +804,48 @@ mod tests {
         assert_eq!(output.height(), 300);
         assert_eq!(PREVIEW_ASPECT_WIDTH, 4);
         assert_eq!(PREVIEW_ASPECT_HEIGHT, 3);
+    }
+
+    #[test]
+    fn pending_preview_renders_blank_instead_of_loading_text() {
+        let mut controller = sample_controller();
+        let area = Rect::new(0, 0, 40, 20);
+
+        controller.sync(Some(sample_target("img_01")), area, "empty");
+
+        assert!(controller.has_pending_request());
+        assert!(matches!(
+            controller.state,
+            PreviewState::Pending(ref key) if key.label == "img_01"
+        ));
+
+        let PreviewView {
+            title,
+            protocol,
+            lines,
+        } = controller.view();
+        assert_eq!(title, " preview cover img_01 ");
+        assert!(protocol.is_none());
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn keeps_ready_preview_visible_while_next_image_loads() {
+        let area = Rect::new(0, 0, 40, 20);
+        let current_key = RequestKey::from_target(sample_target("img_01"), PreviewMode::Auto, area);
+        let mut controller = ready_controller(current_key.clone());
+
+        controller.sync(Some(sample_target("img_02")), area, "empty");
+
+        assert!(controller.has_pending_request());
+        assert!(matches!(
+            controller.state,
+            PreviewState::Ready { ref key, .. } if key == &current_key
+        ));
+
+        let view = controller.view();
+        assert!(view.protocol.is_some());
+        assert!(view.lines.len() >= 2);
+        assert_eq!(view.title, " preview cover img_01 ");
     }
 }
