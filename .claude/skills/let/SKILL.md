@@ -363,30 +363,33 @@ Examples:
 
 ## Postcode and Neighborhood Research
 
-When a fetched listing includes a usable UK postcode, fetch `https://area360.uk/postcode/{POSTCODE}` with WebFetch as a standard part of shortlist assessment.
+When a fetched listing includes a usable UK postcode, fetch these postcode sources with WebFetch as a standard part of shortlist assessment:
+
+- `https://area360.uk/postcode/{POSTCODE}`
+- `https://www.streetcheck.co.uk/crime/{POSTCODE}`
+- `https://crystalroof.co.uk/report/postcode/{POSTCODE}/overview`
 
 Normalization:
 
-- Uppercase the postcode.
 - Remove spaces for the URL.
-- Example: `SY2 6BB` becomes `https://area360.uk/postcode/SY26BB`.
+- Use the compact token as `{POSTCODE}` in all three URLs.
+- Example: `SY2 6BB` becomes `SY26BB`.
 
-What to extract from the fetched page:
+What to extract from the fetched pages:
 
-- crime and deprivation
-- flood risk and noise
-- nearest station and transport context
-- schools, parks, and local amenities
-- local property price context
-- housing mix, tenure, and demographics only when they materially affect fit
+- From `area360.uk`: broad postcode context such as crime, deprivation, flood risk, noise, station distance, schools, parks, amenities, and local price context.
+- From `streetcheck.co.uk`: crime detail, overall crime level, notable category spikes, and nearby recent incidents that materially affect fit.
+- From `crystalroof.co.uk`: deprivation, income or affluence signals, noise, flood, transport, amenities, and school context.
+- Use housing mix, tenure, and demographics only when they materially affect fit.
 
 Rules:
 
-- Treat `area360.uk` as a standard context source for shortlist candidates, not an optional extra.
-- Use the fetched page for textual signals. Do not assume interactive maps or charts are visible in WebFetch output.
+- Treat these postcode pages as standard context sources for shortlist candidates, not optional extras.
+- Use the fetched pages for textual signals. Do not assume interactive maps or charts are visible in WebFetch output.
+- Combine overlapping signals proportionately. Do not double-count the same crime or deprivation pattern just because it appears on multiple sites.
 - Separate listing quality from location quality in the assessment.
 - Call out major positives, major negatives, and any dealbreakers.
-- If the postcode is missing or the page is unavailable, say so and lower confidence accordingly.
+- If the postcode is missing or one or more pages are unavailable, say so and lower confidence accordingly.
 
 ## Scoring
 
@@ -467,7 +470,7 @@ Steps:
 3) Diff new vs known
 4) Fetch a small batch and assign region if needed
 5) Triage the top 10
-6) Deep dive 1-2 using photos, maps, `area360.uk`, and quick neighborhood research
+6) Deep dive 1-2 using photos, maps, postcode research sources, and quick neighborhood research
 7) Submit 1-2 assessments
 8) Return:
    * Top 3 candidates with short rationale
