@@ -3,8 +3,9 @@ name: let
 description: >-
     Autonomous UK rental property search workflow powered by the `let` CLI toolbelt.
     Use this skill to discover Rightmove listings, enrich and score them, assess top
-    candidates (photos/maps + neighborhood research), and produce shortlists and
-    region comparisons for a family's preferences.
+    candidates (photos/maps + neighborhood research), produce shortlists and
+    region comparisons for a family's preferences, and coordinate viewing admin
+    when the user explicitly allows email or calendar access.
 argument-hint: [search request or location]
 compatibility: >-
     Designed for Claude Code with Bash access. Requires an already-installed
@@ -23,6 +24,7 @@ Autonomous UK rental property search, triage, and neighborhood assessment via th
 - Use when the user wants new rental listings, a region comparison, or a deeper review of shortlisted homes.
 - Use when the user wants an existing `let` setup initialized, repaired, or explained.
 - Use when the user wants listing assessments written back into the local `let` database.
+- Use when the user wants viewing admin tied to a listing, such as checking confirmation emails or creating calendar events.
 
 ## Invocation
 
@@ -49,6 +51,7 @@ Hard rules:
 - Never guess cache paths. Use paths returned by `assess context`.
 - Search/fetch subagents run sequentially by location because they can contend on the same DB and cache.
 - Assessment-only subagents may run in parallel only when each subagent owns disjoint listing IDs.
+- Treat inbox and calendar access as opt-in and sensitive. Use `gog` only when the user explicitly asks for or clearly allows email or calendar work.
 
 ## Data Files
 
@@ -359,6 +362,69 @@ Examples:
 "$HOME/.tools/let/let" ops prune --region Sheffield --dry-run
 "$HOME/.tools/let/let" ops prune --region Sheffield --min-score 60 --dry-run
 "$HOME/.tools/let/let" ops prune --inactive --region Sheffield --dry-run
+```
+
+## Viewing Coordination With `gog`
+
+Use this section only when the user wants help scheduling or tracking viewings and explicitly allows email or calendar access.
+
+Rules:
+
+- Confirm `gog` is installed and authenticated before using it.
+- Never hardcode account emails, calendar IDs, or private naming conventions into this skill.
+- If the user wants a calendar event and has not named a calendar, ask which calendar to use.
+- If the user wants you to match an existing viewing-event convention, inspect nearby events on the chosen calendar first.
+- Verify the listing identity before touching Gmail or Calendar. Prefer the Rightmove portal ID; if the request is ambiguous, resolve it from `let view detail <id>` or the recent email context.
+
+Suggested workflow:
+
+1. Identify the property and confirm the portal ID, address, listing URL, and agent.
+2. If the user explicitly allows inbox access, search recent mail with `gog gmail search` using the portal ID, address fragments, agent name, and terms like `viewing`, `confirmed`, or `appointment`.
+3. Read the most relevant thread with `gog gmail thread get <threadId> -j` and extract the confirmed date, time, contact name, address, and any special instructions.
+4. If the user explicitly allows calendar access, list calendars with `gog calendar calendars -j`, ask which calendar to use unless already specified, and inspect nearby events with `gog calendar events <calendarId> ... -j` to infer the local title, description, duration, and reminder convention.
+5. Create the event only after the booking details are confirmed. Re-read the target day afterwards to confirm the event exists and to spot obvious duplicates or overlaps.
+
+Default title pattern:
+
+- `Viewing: <short address or road> w/ <agent short name>`
+- Use the street or short address fragment that matches the nearby viewing events on the chosen calendar.
+- Keep the title terse and comparable across listings so the day view stays scannable.
+
+Default description pattern:
+
+- Start with one confirmation line naming the source and date.
+- Include the listing link, portal ID, rent, beds and baths, availability, agent contact, area metrics, stored assessment snapshot, booking confirmation line, exact EPC reference if known, and a one-line summary.
+- Omit unknown fields instead of inventing data.
+- Prefer this field order and punctuation so new events match the existing viewing entries closely.
+- Default viewing duration to `15` minutes when the confirmation email gives a start time but no duration and there is no stronger local convention on the calendar.
+
+Suggested description skeleton:
+
+```text
+Viewing confirmed by <agent or sender> email on <DD Mon YYYY>.
+
+Rightmove: <listing-url>
+Listing: <portal-id> | <property type> | <beds> bed | <baths> bath | <rent> pcm | Available <date-or-now>
+Agent: <agent name> | <agent phone>
+Area: <postcode> | <nearest station> <distance> | EPC <rating> | <floor area> sqm | Gigabit <pct>% | Crime <rate>/1k | IMD <decile> | Flood <level> | Social housing <pct>
+Stored assessment: <recommendation> | Family fit <familySuitability> | Assessed <assessedScore> (algo <algoScore>, adj <scoreAdjustment>)
+Booking: Confirmed by <contact name> for <weekday> <D Mon YYYY> at <time>
+Exact EPC: <full address> | Cert <certificate-number> | Valid until <date>
+Summary: <one-line verdict>
+```
+
+Example create:
+
+```bash
+gog calendar create <calendar-id> \
+  --summary 'Viewing: <short address> w/ <agent>' \
+  --from '<RFC3339>' \
+  --to '<RFC3339>' \
+  --location '<full address>' \
+  --visibility private \
+  --source-title 'Rightmove listing' \
+  --source-url '<listing-url>' \
+  --description $'Viewing confirmed by <agent or sender> email on <DD Mon YYYY>.\n\nRightmove: <listing-url>\nListing: <portal-id> | <property type> | <beds> bed | <baths> bath | <rent> pcm | Available <date-or-now>\nAgent: <agent name> | <agent phone>\nArea: <postcode> | <nearest station> <distance> | EPC <rating> | <floor area> sqm | Gigabit <pct>% | Crime <rate>/1k | IMD <decile> | Flood <level> | Social housing <pct>\nStored assessment: <recommendation> | Family fit <familySuitability> | Assessed <assessedScore> (algo <algoScore>, adj <scoreAdjustment>)\nBooking: Confirmed by <contact name> for <weekday> <D Mon YYYY> at <time>\nExact EPC: <full address> | Cert <certificate-number> | Valid until <date>\nSummary: <one-line verdict>'
 ```
 
 ## Postcode and Neighborhood Research
