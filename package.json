@@ -35,8 +35,8 @@
 		"clean": "cargo clean"
 	},
 	"devDependencies": {
-		"@commitlint/cli": "^21.0.0",
-		"@commitlint/config-conventional": "^21.0.0",
+		"@commitlint/cli": "^21.0.1",
+		"@commitlint/config-conventional": "^21.0.1",
 		"husky": "^9.1.7",
 		"lint-staged": "^17.0.4"
 	}
