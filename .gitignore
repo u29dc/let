@@ -26,5 +26,6 @@ target/
 
 # project
 .let/
+.clawpatch/
 .claude/*
 !.claude/skills/

@@ -561,6 +561,44 @@ fn search_diff_marks_known_and_new_ids() {
     let new_ids = json["data"]["new"].as_array().expect("new array");
     assert_eq!(known.len(), 1);
     assert_eq!(new_ids.len(), 1);
+    assert_eq!(known[0].as_str(), Some("165432101"));
+    assert_eq!(new_ids[0].as_str(), Some("999999999"));
+}
+
+#[test]
+fn unsupported_group_subcommands_return_json_envelope() {
+    let cases = [
+        ("search", vec!["search", "nope"]),
+        ("config", vec!["config", "nope"]),
+        ("view", vec!["view", "nope"]),
+        ("assess", vec!["assess", "nope"]),
+        ("score", vec!["score", "nope"]),
+        ("build", vec!["build", "nope"]),
+        ("ops", vec!["ops", "nope"]),
+        ("export", vec!["export", "nope"]),
+    ];
+
+    for (group, args) in cases {
+        let output = Command::new(bin_path())
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("run unsupported {group} subcommand: {error}"));
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            output.stderr.is_empty(),
+            "unsupported {group} subcommand should not emit clap usage text"
+        );
+
+        let json = assert_single_json_envelope(&output);
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["meta"]["tool"], "external");
+        assert_eq!(json["error"]["code"], "UNSUPPORTED_COMMAND");
+        assert_eq!(
+            json["error"]["message"],
+            format!("{group} command is not supported: nope")
+        );
+    }
 }
 
 #[test]
@@ -1007,18 +1045,42 @@ fn prune_requires_force_in_non_interactive_mode() {
     assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
 }
 
+#[test]
+fn json_envelope_helper_accepts_single_stdout_line() {
+    let json = assert_single_json_envelope_stdout("{\"ok\":true}\n");
+    assert_eq!(json["ok"], true);
+}
+
+#[test]
+fn json_envelope_helper_rejects_extra_blank_stdout_lines() {
+    let result = std::panic::catch_unwind(|| {
+        assert_single_json_envelope_stdout("{\"ok\":true}\n\n");
+    });
+
+    assert!(
+        result.is_err(),
+        "helper should reject trailing blank stdout lines"
+    );
+}
+
 fn assert_single_json_envelope(output: &Output) -> serde_json::Value {
     let stdout = String::from_utf8(output.stdout.clone()).expect("stdout utf-8");
-    let trimmed = stdout.trim_end_matches('\n');
-    let line_count = trimmed.lines().count();
+    assert_single_json_envelope_stdout(&stdout)
+}
 
-    assert!(!trimmed.is_empty(), "expected JSON envelope on stdout");
+fn assert_single_json_envelope_stdout(stdout: &str) -> serde_json::Value {
+    let Some(line) = stdout.strip_suffix('\n') else {
+        panic!("expected JSON envelope stdout to end with one newline, got: {stdout:?}");
+    };
+
+    assert!(!line.is_empty(), "expected JSON envelope on stdout");
     assert_eq!(
-        line_count, 1,
-        "expected exactly one stdout line in JSON mode, got {line_count}: {stdout}"
+        line.find('\n'),
+        None,
+        "expected exactly one stdout line in JSON mode, got: {stdout:?}"
     );
 
-    serde_json::from_str(trimmed).expect("parse envelope")
+    serde_json::from_str(line).expect("parse envelope")
 }
 
 #[cfg(unix)]

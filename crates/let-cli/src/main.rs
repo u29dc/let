@@ -129,6 +129,9 @@ enum ConfigCommand {
     Show,
     /// Validate config and report issues.
     Validate,
+    /// Capture unknown config subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -145,6 +148,9 @@ enum BuildCommand {
         #[arg(long, value_enum, default_value_t = BuildProgressMode::Auto)]
         progress: BuildProgressMode,
     },
+    /// Capture unknown build subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -180,6 +186,9 @@ enum ViewCommand {
         #[command(flatten)]
         copy: ViewCopyArgs,
     },
+    /// Capture unknown view subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -205,6 +214,9 @@ enum AssessCommand {
         /// Assessment JSON payload string.
         assessment: String,
     },
+    /// Capture unknown assess subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -393,6 +405,9 @@ enum ScoreCommand {
         /// Listing UUID or portal id.
         id: String,
     },
+    /// Capture unknown score subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -527,6 +542,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
         Command::Config {
             command: ConfigCommand::Validate,
         } => DispatchOutcome::local("config.validate", commands::config::validate(shared)),
+        Command::Config {
+            command: ConfigCommand::External(args),
+        } => unsupported_external("config", args),
         Command::Start => DispatchOutcome::local("start", commands::start::run(shared)),
         Command::Score {
             command: ScoreCommand::Compute,
@@ -534,6 +552,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
         Command::Score {
             command: ScoreCommand::Explain { id },
         } => DispatchOutcome::local("score.explain", commands::score::explain(shared, id)),
+        Command::Score {
+            command: ScoreCommand::External(args),
+        } => unsupported_external("score", args),
         Command::View {
             command:
                 ViewCommand::List {
@@ -567,6 +588,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             copy.copy,
             commands::view::detail(shared, id),
         ),
+        Command::View {
+            command: ViewCommand::External(args),
+        } => unsupported_external("view", args),
         Command::Assess {
             command:
                 AssessCommand::Candidates {
@@ -594,6 +618,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             "assess.submit",
             commands::assess::submit(shared, id, assessment),
         ),
+        Command::Assess {
+            command: AssessCommand::External(args),
+        } => unsupported_external("assess", args),
         Command::Search {
             command: SearchCommand::Resolve { location },
         } => DispatchOutcome::local("search.resolve", commands::search::resolve(location)),
@@ -796,6 +823,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             "build.sources",
             commands::build::run_sources((*target).into(), *jobs, shared, (*progress).into()),
         ),
+        Command::Build {
+            command: BuildCommand::External(args),
+        } => unsupported_external("build", args),
         Command::Fetch {
             ids,
             region,
