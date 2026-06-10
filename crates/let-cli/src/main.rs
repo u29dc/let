@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use let_sdk::paths::PathOverrides;
 
 mod clipboard;
@@ -14,7 +14,7 @@ mod envelope;
 mod registry;
 
 use commands::{CommandError, CommandOutput, SharedArgs};
-use envelope::{ErrorEnvelope, ErrorPayload, Meta, SuccessEnvelope};
+use envelope::{OutputFormat, emit_result};
 
 #[derive(Debug, Parser)]
 #[command(name = "let", version, about = "Agent-native rental CLI")]
@@ -35,12 +35,12 @@ struct Cli {
     #[arg(long, value_name = "DIR", global = true)]
     sources_dir: Option<PathBuf>,
 
-    /// Emit human-readable output instead of the default JSON envelope.
+    /// Emit Toon instead of the default JSON envelope.
     #[arg(long, global = true, default_value_t = false)]
-    text: bool,
+    toon: bool,
 
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -53,44 +53,44 @@ enum Command {
     /// Inspect or validate configuration.
     Config {
         #[command(subcommand)]
-        command: ConfigCommand,
+        command: Option<ConfigCommand>,
     },
     /// Start the terminal UI.
     Start,
     /// Score listing datasets.
     Score {
         #[command(subcommand)]
-        command: ScoreCommand,
+        command: Option<ScoreCommand>,
     },
-    /// View listing tables or details.
+    /// View listing lists or details.
     View {
         #[command(subcommand)]
-        command: ViewCommand,
+        command: Option<ViewCommand>,
     },
     /// Assessment workflow commands.
     Assess {
         #[command(subcommand)]
-        command: AssessCommand,
+        command: Option<AssessCommand>,
     },
     /// Search discovery command group.
     Search {
         #[command(subcommand)]
-        command: SearchCommand,
+        command: Option<SearchCommand>,
     },
     /// Operational maintenance command group.
     Ops {
         #[command(subcommand)]
-        command: OpsCommand,
+        command: Option<OpsCommand>,
     },
     /// Export commands.
     Export {
         #[command(subcommand)]
-        command: ExportCommand,
+        command: Option<ExportCommand>,
     },
     /// Build source databases.
     Build {
         #[command(subcommand)]
-        command: BuildCommand,
+        command: Option<BuildCommand>,
     },
     /// Fetch listings by portal ids.
     Fetch {
@@ -162,7 +162,7 @@ struct ViewCopyArgs {
 
 #[derive(Debug, Subcommand)]
 enum ViewCommand {
-    /// Ranked listing table.
+    /// Ranked listing list.
     List {
         #[arg(long, default_value_t = 20)]
         top: usize,
@@ -376,7 +376,7 @@ enum OpsCommand {
         /// Preview selected rows without deleting.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        /// Skip confirmation prompt in text mode.
+        /// Skip confirmation prompt.
         #[arg(long, default_value_t = false)]
         force: bool,
     },
@@ -470,6 +470,9 @@ enum DispatchOutcome {
         copy_requested: bool,
         result: Result<CommandOutput, CommandError>,
     },
+    Help {
+        path: &'static [&'static str],
+    },
 }
 
 impl DispatchOutcome {
@@ -492,16 +495,18 @@ impl DispatchOutcome {
             result,
         }
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputMode {
-    EnvelopeJson,
-    Text,
+    fn help(path: &'static [&'static str]) -> Self {
+        Self::Help { path }
+    }
 }
 
 fn main() {
     let cli = Cli::parse();
+
+    let Some(command) = &cli.command else {
+        process::exit(print_help(&[]));
+    };
 
     let shared = SharedArgs {
         overrides: PathOverrides {
@@ -513,7 +518,7 @@ fn main() {
     };
 
     let started = Instant::now();
-    let outcome = dispatch(&cli.command, &shared);
+    let outcome = dispatch(command, &shared);
 
     match outcome {
         DispatchOutcome::Local {
@@ -522,10 +527,13 @@ fn main() {
             result,
         } => {
             let elapsed = started.elapsed().as_millis() as u64;
-            let mode = output_mode(cli.text);
-            let result = apply_copy_request(result, copy_requested, mode);
-            let exit_code = emit(&result, tool, elapsed, mode);
+            let format = output_format(cli.toon);
+            let result = apply_copy_request(result, copy_requested, format);
+            let exit_code = emit_result(&result, tool, elapsed, format);
             process::exit(exit_code);
+        }
+        DispatchOutcome::Help { path } => {
+            process::exit(print_help(path));
         }
     }
 }
@@ -537,27 +545,29 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
         }
         Command::Health => DispatchOutcome::local("health", commands::health::run(shared)),
         Command::Config {
-            command: ConfigCommand::Show,
+            command: Some(ConfigCommand::Show),
         } => DispatchOutcome::local("config.show", commands::config::show(shared)),
         Command::Config {
-            command: ConfigCommand::Validate,
+            command: Some(ConfigCommand::Validate),
         } => DispatchOutcome::local("config.validate", commands::config::validate(shared)),
         Command::Config {
-            command: ConfigCommand::External(args),
+            command: Some(ConfigCommand::External(args)),
         } => unsupported_external("config", args),
+        Command::Config { command: None } => DispatchOutcome::help(&["config"]),
         Command::Start => DispatchOutcome::local("start", commands::start::run(shared)),
         Command::Score {
-            command: ScoreCommand::Compute,
+            command: Some(ScoreCommand::Compute),
         } => DispatchOutcome::local("score.compute", commands::score::compute(shared)),
         Command::Score {
-            command: ScoreCommand::Explain { id },
+            command: Some(ScoreCommand::Explain { id }),
         } => DispatchOutcome::local("score.explain", commands::score::explain(shared, id)),
         Command::Score {
-            command: ScoreCommand::External(args),
+            command: Some(ScoreCommand::External(args)),
         } => unsupported_external("score", args),
+        Command::Score { command: None } => DispatchOutcome::help(&["score"]),
         Command::View {
             command:
-                ViewCommand::List {
+                Some(ViewCommand::List {
                     top,
                     min_score,
                     sort,
@@ -565,7 +575,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     region,
                     property_type,
                     copy,
-                },
+                }),
         } => DispatchOutcome::local_with_copy(
             "view.list",
             copy.copy,
@@ -582,22 +592,23 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             ),
         ),
         Command::View {
-            command: ViewCommand::Detail { id, copy },
+            command: Some(ViewCommand::Detail { id, copy }),
         } => DispatchOutcome::local_with_copy(
             "view.detail",
             copy.copy,
             commands::view::detail(shared, id),
         ),
         Command::View {
-            command: ViewCommand::External(args),
+            command: Some(ViewCommand::External(args)),
         } => unsupported_external("view", args),
+        Command::View { command: None } => DispatchOutcome::help(&["view"]),
         Command::Assess {
             command:
-                AssessCommand::Candidates {
+                Some(AssessCommand::Candidates {
                     top,
                     region,
                     min_score,
-                },
+                }),
         } => DispatchOutcome::local(
             "assess.candidates",
             commands::assess::candidates(
@@ -610,23 +621,24 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             ),
         ),
         Command::Assess {
-            command: AssessCommand::Context { id },
+            command: Some(AssessCommand::Context { id }),
         } => DispatchOutcome::local("assess.context", commands::assess::context(shared, id)),
         Command::Assess {
-            command: AssessCommand::Submit { id, assessment },
+            command: Some(AssessCommand::Submit { id, assessment }),
         } => DispatchOutcome::local(
             "assess.submit",
             commands::assess::submit(shared, id, assessment),
         ),
         Command::Assess {
-            command: AssessCommand::External(args),
+            command: Some(AssessCommand::External(args)),
         } => unsupported_external("assess", args),
+        Command::Assess { command: None } => DispatchOutcome::help(&["assess"]),
         Command::Search {
-            command: SearchCommand::Resolve { location },
+            command: Some(SearchCommand::Resolve { location }),
         } => DispatchOutcome::local("search.resolve", commands::search::resolve(location)),
         Command::Search {
             command:
-                SearchCommand::Discover {
+                Some(SearchCommand::Discover {
                     region,
                     location,
                     property_types,
@@ -634,7 +646,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     dont_show,
                     location_name,
                     limit,
-                },
+                }),
         } => DispatchOutcome::local(
             "search.discover",
             commands::search::discover(
@@ -651,14 +663,15 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             ),
         ),
         Command::Search {
-            command: SearchCommand::Diff { ids },
+            command: Some(SearchCommand::Diff { ids }),
         } => DispatchOutcome::local("search.diff", commands::search::diff(shared, ids)),
         Command::Search {
-            command: SearchCommand::External(args),
+            command: Some(SearchCommand::External(args)),
         } => unsupported_external("search", args),
+        Command::Search { command: None } => DispatchOutcome::help(&["search"]),
         Command::Ops {
             command:
-                OpsCommand::Patch {
+                Some(OpsCommand::Patch {
                     id,
                     address,
                     postcode,
@@ -692,7 +705,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     patch_json,
                     skip_re_enrich,
                     skip_images,
-                },
+                }),
         } => DispatchOutcome::local(
             "ops.patch",
             commands::ops::patch(
@@ -736,14 +749,14 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
         ),
         Command::Ops {
             command:
-                OpsCommand::Prune {
+                Some(OpsCommand::Prune {
                     min_score,
                     bottom,
                     region,
                     inactive,
                     dry_run,
                     force,
-                },
+                }),
         } => DispatchOutcome::local(
             "ops.prune",
             commands::ops::prune(
@@ -760,12 +773,12 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
         ),
         Command::Ops {
             command:
-                OpsCommand::Verify {
+                Some(OpsCommand::Verify {
                     dry_run,
                     region,
                     limit,
                     delay,
-                },
+                }),
         } => DispatchOutcome::local(
             "ops.verify",
             commands::ops::verify(
@@ -779,23 +792,24 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             ),
         ),
         Command::Ops {
-            command: OpsCommand::External(args),
+            command: Some(OpsCommand::External(args)),
         } => unsupported_external("ops", args),
+        Command::Ops { command: None } => DispatchOutcome::help(&["ops"]),
         Command::Export {
-            command: ExportCommand::Json { output },
+            command: Some(ExportCommand::Json { output }),
         } => DispatchOutcome::local(
             "export.json",
             commands::export::export_json(shared, output.clone()),
         ),
         Command::Export {
             command:
-                ExportCommand::Notion {
+                Some(ExportCommand::Notion {
                     top,
                     min_score,
                     region,
                     dry_run,
                     force,
-                },
+                }),
         } => DispatchOutcome::local(
             "export.notion",
             commands::export::export_notion(
@@ -810,22 +824,24 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             ),
         ),
         Command::Export {
-            command: ExportCommand::External(args),
+            command: Some(ExportCommand::External(args)),
         } => unsupported_external("export", args),
+        Command::Export { command: None } => DispatchOutcome::help(&["export"]),
         Command::Build {
             command:
-                BuildCommand::Sources {
+                Some(BuildCommand::Sources {
                     target,
                     jobs,
                     progress,
-                },
+                }),
         } => DispatchOutcome::local(
             "build.sources",
             commands::build::run_sources((*target).into(), *jobs, shared, (*progress).into()),
         ),
         Command::Build {
-            command: BuildCommand::External(args),
+            command: Some(BuildCommand::External(args)),
         } => unsupported_external("build", args),
+        Command::Build { command: None } => DispatchOutcome::help(&["build"]),
         Command::Fetch {
             ids,
             region,
@@ -892,25 +908,25 @@ fn unsupported_external(group: &str, args: &[String]) -> DispatchOutcome {
     )
 }
 
-fn output_mode(text_requested: bool) -> OutputMode {
-    if text_requested {
-        OutputMode::Text
+fn output_format(toon_requested: bool) -> OutputFormat {
+    if toon_requested {
+        OutputFormat::Toon
     } else {
-        OutputMode::EnvelopeJson
+        OutputFormat::Json
     }
 }
 
 fn apply_copy_request(
     result: Result<CommandOutput, CommandError>,
     copy_requested: bool,
-    mode: OutputMode,
+    format: OutputFormat,
 ) -> Result<CommandOutput, CommandError> {
     if !copy_requested {
         return result;
     }
 
     let payload = match &result {
-        Ok(output) => render_copy_payload(output, mode)?,
+        Ok(output) => render_copy_payload(output, format)?,
         Err(err) => return Err(err.clone()),
     };
 
@@ -918,16 +934,20 @@ fn apply_copy_request(
     result
 }
 
-fn render_copy_payload(output: &CommandOutput, mode: OutputMode) -> Result<String, CommandError> {
-    match mode {
-        OutputMode::EnvelopeJson => render_json_copy_payload(output),
-        OutputMode::Text => render_text_copy_payload(output),
-    }
-}
-
-fn render_json_copy_payload(output: &CommandOutput) -> Result<String, CommandError> {
+fn render_copy_payload(
+    output: &CommandOutput,
+    format: OutputFormat,
+) -> Result<String, CommandError> {
     let payload = output.clipboard.json.as_ref().unwrap_or(&output.data);
-    serde_json::to_string_pretty(payload).map_err(|error| {
+    match format {
+        OutputFormat::Json => {
+            serde_json::to_string_pretty(payload).map_err(|error| error.to_string())
+        }
+        OutputFormat::Toon => {
+            toon_format::encode_default(payload).map_err(|error| error.to_string())
+        }
+    }
+    .map_err(|error| {
         CommandError::runtime(
             "INTERNAL_ERROR",
             format!("failed to serialize command payload for clipboard copy: {error}"),
@@ -936,92 +956,21 @@ fn render_json_copy_payload(output: &CommandOutput) -> Result<String, CommandErr
     })
 }
 
-fn render_text_copy_payload(output: &CommandOutput) -> Result<String, CommandError> {
-    if let Some(text) = &output.clipboard.text {
-        return Ok(text.clone());
+fn print_help(path: &[&str]) -> i32 {
+    let mut command = Cli::command();
+    for name in path {
+        let Some(subcommand) = command.find_subcommand_mut(name) else {
+            eprintln!("failed to render help for `{}`", path.join(" "));
+            return 1;
+        };
+        command = subcommand.clone();
     }
-
-    render_text_payload(output)
-}
-
-fn render_text_payload(output: &CommandOutput) -> Result<String, CommandError> {
-    if let Some(text) = &output.text {
-        return Ok(text.clone());
+    if let Err(error) = command.print_help() {
+        eprintln!("failed to render help: {error}");
+        return 1;
     }
-
-    serde_json::to_string_pretty(&output.data).map_err(|error| {
-        CommandError::runtime(
-            "INTERNAL_ERROR",
-            format!("failed to render text output: {error}"),
-            "report this bug",
-        )
-    })
-}
-
-fn emit(
-    result: &Result<CommandOutput, CommandError>,
-    tool: &str,
-    elapsed: u64,
-    mode: OutputMode,
-) -> i32 {
-    match mode {
-        OutputMode::EnvelopeJson => emit_json(result, tool, elapsed),
-        OutputMode::Text => emit_text(result),
-    }
-}
-
-fn emit_json(result: &Result<CommandOutput, CommandError>, tool: &str, elapsed: u64) -> i32 {
-    match result {
-        Ok(output) => {
-            let meta = Meta::new(tool, elapsed)
-                .with_count(output.meta.count)
-                .with_total(output.meta.total)
-                .with_has_more(output.meta.has_more);
-            let envelope = SuccessEnvelope::new(output.data.clone(), meta);
-            println!(
-                "{}",
-                serde_json::to_string(&envelope).expect("success envelope serialization failed")
-            );
-            0
-        }
-        Err(err) => {
-            let envelope = ErrorEnvelope::new(
-                ErrorPayload::new(
-                    err.code.clone(),
-                    err.message.clone(),
-                    err.hint.clone(),
-                    err.details.clone(),
-                ),
-                Meta::new(tool, elapsed),
-            );
-            println!(
-                "{}",
-                serde_json::to_string(&envelope).expect("error envelope serialization failed")
-            );
-            err.exit_code
-        }
-    }
-}
-
-fn emit_text(result: &Result<CommandOutput, CommandError>) -> i32 {
-    match result {
-        Ok(output) => match render_text_payload(output) {
-            Ok(text) => {
-                println!("{text}");
-                0
-            }
-            Err(err) => {
-                eprintln!("{}: {}", err.code, err.message);
-                eprintln!("hint: {}", err.hint);
-                err.exit_code
-            }
-        },
-        Err(err) => {
-            eprintln!("{}: {}", err.code, err.message);
-            eprintln!("hint: {}", err.hint);
-            err.exit_code
-        }
-    }
+    println!();
+    0
 }
 
 #[cfg(test)]
@@ -1036,6 +985,7 @@ mod tests {
                 let error = result.expect_err("expected unsupported command error");
                 assert_eq!(error.code, "UNSUPPORTED_COMMAND");
             }
+            super::DispatchOutcome::Help { .. } => panic!("expected local error outcome"),
         }
     }
 }

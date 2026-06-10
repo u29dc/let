@@ -37,8 +37,7 @@ pub fn run(shared: &SharedArgs) -> CommandResult {
         Ok(CommandOutput::new(json!({
             "status": "exited",
             "code": 0,
-        }))
-        .with_text("tui session ended"))
+        })))
     } else {
         Err(CommandError::new(
             "START_ERROR",

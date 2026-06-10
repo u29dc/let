@@ -130,13 +130,7 @@ pub fn diff(shared: &SharedArgs, ids_raw: &str) -> CommandResult {
     }))
     .with_count(input_ids.len())
     .with_total(input_ids.len())
-    .with_has_more(false)
-    .with_text(format!(
-        "{} ids checked: {} new, {} known",
-        input_ids.len(),
-        input_ids.len().saturating_sub(known.len()),
-        known.len()
-    )))
+    .with_has_more(false))
 }
 
 pub fn resolve(location: &str) -> CommandResult {
@@ -209,8 +203,7 @@ pub fn resolve(location: &str) -> CommandResult {
         "query": location,
         "locations": locations,
     }))
-    .with_count(locations.len())
-    .with_text(format!("resolved {} location result(s)", locations.len())))
+    .with_count(locations.len()))
 }
 
 pub fn discover(shared: &SharedArgs, params: &DiscoverParams) -> CommandResult {
@@ -287,12 +280,7 @@ pub fn discover(shared: &SharedArgs, params: &DiscoverParams) -> CommandResult {
     }))
     .with_count(deduped.len())
     .with_total(deduped.len())
-    .with_has_more(any_truncated)
-    .with_text(format!(
-        "discovered {} listing id(s) across {} location(s)",
-        deduped.len(),
-        locations.len()
-    )))
+    .with_has_more(any_truncated))
 }
 
 fn discover_location(

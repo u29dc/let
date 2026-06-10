@@ -131,6 +131,65 @@ fn tools_json_returns_catalog() {
     assert_eq!(json["data"]["version"], env!("CARGO_PKG_VERSION"));
     assert!(json["data"]["tools"].as_array().is_some());
     assert!(json["data"]["globalFlags"].as_array().is_some());
+    assert_eq!(
+        json["data"]["outputFormats"],
+        serde_json::json!(["json", "toon"])
+    );
+    assert_eq!(json["data"]["defaultOutputFormat"], "json");
+    let global_flags = json["data"]["globalFlags"]
+        .as_array()
+        .expect("global flags array");
+    assert!(global_flags.iter().any(|flag| flag["name"] == "--toon"));
+    assert!(!global_flags.iter().any(|flag| flag["name"] == "--text"));
+}
+
+#[test]
+fn tools_toon_returns_decodable_catalog() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["tools", "--toon"])
+        .output()
+        .expect("run tools toon");
+    assert_eq!(output.status.code(), Some(0));
+
+    let value = assert_single_toon_envelope(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["meta"]["tool"], "tools");
+    assert_eq!(
+        value["data"]["outputFormats"],
+        serde_json::json!(["json", "toon"])
+    );
+    assert!(value["data"]["tools"].as_array().is_some());
+}
+
+#[test]
+fn bare_invocation_prints_root_help() {
+    let fixture = Fixture::new();
+    let output = fixture.cmd().output().expect("run bare let");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    assert!(stdout.contains("Usage:"));
+    assert!(stdout.contains("Commands:"));
+}
+
+#[test]
+fn group_invocation_prints_group_help() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["view"])
+        .output()
+        .expect("run view group");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    assert!(stdout.contains("Usage:"));
+    assert!(stdout.contains("list"));
+    assert!(stdout.contains("detail"));
 }
 
 #[test]
@@ -149,31 +208,20 @@ fn view_list_json_reads_seeded_listing() {
 }
 
 #[test]
-fn view_list_text_renders_readable_rows() {
+fn text_flag_is_rejected() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
         .args(["view", "list", "--text"])
         .output()
-        .expect("run view list text");
-    assert_eq!(output.status.code(), Some(0));
+        .expect("run view list with removed text flag");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
 
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf-8");
     assert!(
-        stdout.contains("Showing 1 of 1 listings"),
-        "expected summary line, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("165432101"),
-        "expected id in text table, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("10 Example Street, Manchester"),
-        "expected address in text table, got: {stdout}"
-    );
-    assert!(
-        !stdout.contains("\"listings\""),
-        "text mode should not dump JSON keys, got: {stdout}"
+        stderr.contains("--text"),
+        "expected --text error, got: {stderr}"
     );
 }
 
@@ -214,7 +262,7 @@ fn view_list_copy_keeps_json_stdout_and_copies_payload_json() {
 
 #[cfg(unix)]
 #[test]
-fn view_list_text_copy_copies_rendered_table() {
+fn view_list_copy_with_toon_copies_payload_toon() {
     let fixture = Fixture::new();
     let script_dir = TempDir::new().expect("script tempdir");
     let script_path = script_dir.path().join("clipboard-mock.sh");
@@ -225,17 +273,28 @@ fn view_list_text_copy_copies_rendered_table() {
         .cmd()
         .env("LET_CLIPBOARD_BIN", &script_path)
         .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
-        .args(["view", "list", "--text", "--copy"])
+        .args(["view", "list", "--copy", "--toon"])
         .output()
-        .expect("run view list text copy");
+        .expect("run view list copy toon");
     assert_eq!(output.status.code(), Some(0));
 
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
+    let json = assert_single_toon_envelope(&output);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["data"]["filtered"], 1);
+
     let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
-    assert_eq!(capture, stdout.trim_end_matches('\n'));
     assert!(
-        capture.contains("Showing 1 of 1 listings"),
-        "expected rendered table in clipboard capture, got: {capture}"
+        serde_json::from_str::<serde_json::Value>(&capture).is_err(),
+        "toon clipboard payload should not be raw JSON"
+    );
+    let copied: serde_json::Value =
+        toon_format::decode_default(&capture).expect("decode copied Toon payload");
+    assert_eq!(copied["filtered"], 1);
+    assert_eq!(copied["total"], 1);
+    assert_eq!(copied["listings"].as_array().map(Vec::len), Some(1));
+    assert!(
+        copied.get("meta").is_none(),
+        "clipboard should contain data payload, not envelope: {copied:?}"
     );
 }
 
@@ -270,39 +329,19 @@ fn view_list_copy_empty_result_copies_valid_empty_payload() {
 }
 
 #[test]
-fn view_detail_text_renders_human_summary() {
+fn view_detail_json_renders_listing_payload() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
-        .args(["view", "detail", "165432101", "--text"])
+        .args(["view", "detail", "165432101"])
         .output()
-        .expect("run view detail text");
+        .expect("run view detail");
     assert_eq!(output.status.code(), Some(0));
 
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
-    assert!(
-        stdout.contains("10 Example Street, Manchester"),
-        "expected address in detail text, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("£1,450 pcm | 2 bed | 1 bath | Flat"),
-        "expected headline summary, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("Property"),
-        "expected property section, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("Area"),
-        "expected area section, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("Links"),
-        "expected links section, got: {stdout}"
-    );
-    assert!(
-        !stdout.contains("loaded listing"),
-        "placeholder text should be gone, got: {stdout}"
+    let json = assert_single_json_envelope(&output);
+    assert_eq!(
+        json["data"]["listing"]["address"],
+        "10 Example Street, Manchester"
     );
 }
 
@@ -372,33 +411,6 @@ fn view_detail_copy_keeps_json_stdout_and_copies_listing_json() {
 
 #[cfg(unix)]
 #[test]
-fn view_detail_text_copy_copies_rendered_text() {
-    let fixture = Fixture::new();
-    let script_dir = TempDir::new().expect("script tempdir");
-    let script_path = script_dir.path().join("clipboard-mock.sh");
-    let capture_path = script_dir.path().join("clipboard.txt");
-    write_clipboard_capture_script(&script_path);
-
-    let output = fixture
-        .cmd()
-        .env("LET_CLIPBOARD_BIN", &script_path)
-        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
-        .args(["view", "detail", "165432101", "--text", "--copy"])
-        .output()
-        .expect("run view detail text copy");
-    assert_eq!(output.status.code(), Some(0));
-
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
-    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
-    assert_eq!(capture, stdout.trim_end_matches('\n'));
-    assert!(
-        capture.contains("10 Example Street, Manchester"),
-        "expected rendered text in clipboard capture, got: {capture}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn view_detail_copy_not_found_preserves_error_and_skips_clipboard_write() {
     let fixture = Fixture::new();
     let script_dir = TempDir::new().expect("script tempdir");
@@ -417,7 +429,7 @@ fn view_detail_copy_not_found_preserves_error_and_skips_clipboard_write() {
 
     let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "NOT_FOUND");
+    assert_eq!(json["error"]["code"], "not_found");
     assert!(
         !capture_path.exists(),
         "clipboard helper should not run when detail lookup fails"
@@ -539,7 +551,7 @@ Manchester = 70
 
     let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "INVALID_INPUT");
+    assert_eq!(json["error"]["code"], "invalid_input");
     assert_eq!(
         json["error"]["hint"],
         "rename fetch.useApi to search.useApi"
@@ -593,7 +605,7 @@ fn unsupported_group_subcommands_return_json_envelope() {
         let json = assert_single_json_envelope(&output);
         assert_eq!(json["ok"], false);
         assert_eq!(json["meta"]["tool"], "external");
-        assert_eq!(json["error"]["code"], "UNSUPPORTED_COMMAND");
+        assert_eq!(json["error"]["code"], "unsupported_command");
         assert_eq!(
             json["error"]["message"],
             format!("{group} command is not supported: nope")
@@ -615,7 +627,7 @@ fn search_diff_preserves_schema_mismatch_error_contract() {
 
     let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "SCHEMA_MISMATCH");
+    assert_eq!(json["error"]["code"], "schema_mismatch");
     assert!(
         json["error"]["message"]
             .as_str()
@@ -771,7 +783,7 @@ fn fetch_with_empty_ids_returns_validation_error() {
 
     let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+    assert_eq!(json["error"]["code"], "validation_error");
 }
 
 #[test]
@@ -792,7 +804,7 @@ fn assess_submit_invalid_payload_returns_error_envelope() {
 
     let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+    assert_eq!(json["error"]["code"], "validation_error");
 
     let details = json["error"]["details"]
         .as_array()
@@ -938,34 +950,20 @@ fn build_sources_list_returns_single_line_json_envelope_by_default() {
 }
 
 #[test]
-fn explicit_text_flag_switches_to_human_readable_output() {
+fn toon_flag_switches_to_toon_envelope() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
-        .args(["--text", "build", "sources", "list"])
+        .args(["--toon", "build", "sources", "list"])
         .output()
-        .expect("run build sources list with text mode");
+        .expect("run build sources list with toon mode");
 
     assert_eq!(output.status.code(), Some(0));
-    assert!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).is_err(),
-        "text mode should not emit a raw JSON envelope"
-    );
 
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
-    assert!(
-        stdout.contains("available sources listed"),
-        "expected human-readable summary output, got: {stdout}"
-    );
-    assert!(
-        !stdout.contains("\"sources\""),
-        "text mode should choose one representation, got: {stdout}"
-    );
-    assert_eq!(
-        stdout.trim_end_matches('\n').lines().count(),
-        1,
-        "text mode should emit a single summary line"
-    );
+    let value = assert_single_toon_envelope(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["meta"]["tool"], "build.sources");
+    assert!(value["data"]["sources"].as_array().is_some());
 }
 
 #[cfg(unix)]
@@ -1042,7 +1040,7 @@ fn prune_requires_force_in_non_interactive_mode() {
     assert_eq!(output.status.code(), Some(1));
     let json = assert_single_json_envelope(&output);
     assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "VALIDATION_ERROR");
+    assert_eq!(json["error"]["code"], "validation_error");
 }
 
 #[test]
@@ -1066,6 +1064,15 @@ fn json_envelope_helper_rejects_extra_blank_stdout_lines() {
 fn assert_single_json_envelope(output: &Output) -> serde_json::Value {
     let stdout = String::from_utf8(output.stdout.clone()).expect("stdout utf-8");
     assert_single_json_envelope_stdout(&stdout)
+}
+
+fn assert_single_toon_envelope(output: &Output) -> serde_json::Value {
+    let stdout = String::from_utf8(output.stdout.clone()).expect("stdout utf-8");
+    let Some(line) = stdout.strip_suffix('\n') else {
+        panic!("expected Toon envelope stdout to end with one newline, got: {stdout:?}");
+    };
+    assert!(!line.is_empty(), "expected Toon envelope on stdout");
+    toon_format::decode_default(line).expect("decode Toon envelope")
 }
 
 fn assert_single_json_envelope_stdout(stdout: &str) -> serde_json::Value {

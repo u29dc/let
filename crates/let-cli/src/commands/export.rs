@@ -75,8 +75,7 @@ pub fn export_json(shared: &SharedArgs, output: Option<PathBuf>) -> CommandResul
         "path": output_path.display().to_string(),
         "count": data.listings.len(),
     }))
-    .with_count(data.listings.len())
-    .with_text(format!("json export saved: {}", output_path.display())))
+    .with_count(data.listings.len()))
 }
 
 pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResult {
@@ -98,7 +97,7 @@ pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResul
             total: 0,
             dry_run: params.dry_run,
         };
-        return Ok(CommandOutput::new(to_camel_json(&payload)).with_text("no listings to export"));
+        return Ok(CommandOutput::new(to_camel_json(&payload)));
     }
 
     let selected = select_listing_indices(&data.listings, params);
@@ -114,8 +113,7 @@ pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResul
         return Ok(CommandOutput::new(to_camel_json(&payload))
             .with_count(selected.len())
             .with_total(selected.len())
-            .with_has_more(false)
-            .with_text(format!("dry run: {} listing(s) selected", selected.len())));
+            .with_has_more(false));
     }
 
     let mut created = 0usize;
@@ -173,11 +171,7 @@ pub fn export_notion(shared: &SharedArgs, params: &NotionParams) -> CommandResul
     Ok(CommandOutput::new(to_camel_json(&payload))
         .with_count(payload.total)
         .with_total(payload.total)
-        .with_has_more(false)
-        .with_text(format!(
-            "notion export complete: {} created, {} updated, {} skipped, {} failed",
-            payload.created, payload.updated, payload.skipped, payload.failed
-        )))
+        .with_has_more(false))
 }
 
 fn build_runtime() -> Result<tokio::runtime::Runtime, CommandError> {

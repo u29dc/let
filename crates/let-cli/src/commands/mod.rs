@@ -32,13 +32,11 @@ pub struct MetaOptions {
 #[derive(Debug, Clone, Default)]
 pub struct ClipboardOptions {
     pub json: Option<Value>,
-    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
     pub data: Value,
-    pub text: Option<String>,
     pub meta: MetaOptions,
     pub clipboard: ClipboardOptions,
 }
@@ -47,15 +45,9 @@ impl CommandOutput {
     pub fn new(data: Value) -> Self {
         Self {
             data,
-            text: None,
             meta: MetaOptions::default(),
             clipboard: ClipboardOptions::default(),
         }
-    }
-
-    pub fn with_text(mut self, text: impl Into<String>) -> Self {
-        self.text = Some(text.into());
-        self
     }
 
     pub fn with_count(mut self, count: usize) -> Self {
@@ -75,11 +67,6 @@ impl CommandOutput {
 
     pub fn with_copy_json(mut self, value: Value) -> Self {
         self.clipboard.json = Some(value);
-        self
-    }
-
-    pub fn with_copy_text(mut self, text: impl Into<String>) -> Self {
-        self.clipboard.text = Some(text.into());
         self
     }
 }

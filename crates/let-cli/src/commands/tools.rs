@@ -11,6 +11,8 @@ use crate::registry::{GlobalFlag, ToolMetadata, find_tool, global_flags, tool_re
 struct ToolsCatalog<'a> {
     pub version: &'static str,
     pub global_flags: &'a [GlobalFlag],
+    pub output_formats: [&'static str; 2],
+    pub default_output_format: &'static str,
     pub tools: &'a [ToolMetadata],
 }
 
@@ -25,6 +27,8 @@ fn catalog() -> CommandResult {
     let payload = ToolsCatalog {
         version: env!("CARGO_PKG_VERSION"),
         global_flags: global_flags(),
+        output_formats: ["json", "toon"],
+        default_output_format: "json",
         tools: tool_registry(),
     };
     let tool_count = payload.tools.len();
@@ -33,8 +37,7 @@ fn catalog() -> CommandResult {
     Ok(CommandOutput::new(data)
         .with_count(tool_count)
         .with_total(tool_count)
-        .with_has_more(false)
-        .with_text(format!("{} tools available", tool_count)))
+        .with_has_more(false))
 }
 
 fn detail(name: &str) -> CommandResult {
@@ -47,7 +50,7 @@ fn detail(name: &str) -> CommandResult {
     };
 
     let data = json!({ "tool": tool });
-    Ok(CommandOutput::new(data).with_text(format!("{} -> {}", tool.name, tool.command)))
+    Ok(CommandOutput::new(data))
 }
 
 #[cfg(test)]
@@ -62,6 +65,8 @@ mod tests {
         assert!(data.get("version").is_some());
         assert!(data.get("globalFlags").is_some());
         assert!(data.get("tools").is_some());
+        assert_eq!(data["outputFormats"], serde_json::json!(["json", "toon"]));
+        assert_eq!(data["defaultOutputFormat"], serde_json::json!("json"));
         assert_eq!(
             data["version"],
             serde_json::Value::String(env!("CARGO_PKG_VERSION").to_owned())
@@ -71,8 +76,14 @@ mod tests {
         assert!(
             global_flags
                 .iter()
+                .any(|flag| flag["name"] == serde_json::Value::String("--toon".to_owned())),
+            "expected --toon global flag in catalog"
+        );
+        assert!(
+            !global_flags
+                .iter()
                 .any(|flag| flag["name"] == serde_json::Value::String("--text".to_owned())),
-            "expected --text global flag in catalog"
+            "did not expect --text global flag in catalog"
         );
 
         let tools = data["tools"].as_array().expect("tools array");

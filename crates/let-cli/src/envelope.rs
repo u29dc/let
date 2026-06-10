@@ -2,7 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::ErrorDetail;
+use crate::commands::{CommandError, CommandOutput, ErrorDetail};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    Json,
+    Toon,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -95,12 +101,106 @@ impl ErrorPayload {
         details: Option<Vec<ErrorDetail>>,
     ) -> Self {
         Self {
-            code: code.into(),
+            code: normalize_error_code(&code.into()),
             message: message.into(),
             hint: hint.into(),
             details,
         }
     }
+}
+
+pub fn emit_result(
+    result: &Result<CommandOutput, CommandError>,
+    tool: &str,
+    elapsed: u64,
+    format: OutputFormat,
+) -> i32 {
+    match result {
+        Ok(output) => {
+            let meta = Meta::new(tool, elapsed)
+                .with_count(output.meta.count)
+                .with_total(output.meta.total)
+                .with_has_more(output.meta.has_more);
+            let envelope = SuccessEnvelope::new(output.data.clone(), meta);
+            match render(&envelope, format) {
+                Ok(text) => {
+                    println!("{text}");
+                    0
+                }
+                Err(error) => emit_serialization_error(tool, elapsed, format, error),
+            }
+        }
+        Err(err) => {
+            let envelope = ErrorEnvelope::new(
+                ErrorPayload::new(
+                    err.code.clone(),
+                    err.message.clone(),
+                    err.hint.clone(),
+                    err.details.clone(),
+                ),
+                Meta::new(tool, elapsed),
+            );
+            match render(&envelope, format) {
+                Ok(text) => println!("{text}"),
+                Err(error) => {
+                    return emit_serialization_error(tool, elapsed, format, error);
+                }
+            }
+            err.exit_code
+        }
+    }
+}
+
+fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, String> {
+    match format {
+        OutputFormat::Json => serde_json::to_string(value).map_err(|error| error.to_string()),
+        OutputFormat::Toon => toon_format::encode_default(value).map_err(|error| error.to_string()),
+    }
+}
+
+fn emit_serialization_error(tool: &str, elapsed: u64, format: OutputFormat, error: String) -> i32 {
+    let envelope = ErrorEnvelope::new(
+        ErrorPayload::new(
+            "serialization_error",
+            format!("failed to serialize CLI envelope: {error}"),
+            "report this bug",
+            None,
+        ),
+        Meta::new(tool, elapsed),
+    );
+    match render(&envelope, format) {
+        Ok(text) => println!("{text}"),
+        Err(_) => println!(
+            "{}",
+            serde_json::to_string(&envelope)
+                .expect("serialization error envelope should serialize")
+        ),
+    }
+    1
+}
+
+fn normalize_error_code(code: &str) -> String {
+    match code {
+        "INTERNAL" | "INTERNAL_ERROR" => return "internal_error".to_owned(),
+        "RUNTIME_ERROR" => return "runtime_error".to_owned(),
+        "SERIALIZATION_ERROR" => return "serialization_error".to_owned(),
+        _ => {}
+    }
+
+    let mut normalized = String::with_capacity(code.len());
+    let mut previous_was_underscore = false;
+    for ch in code.chars() {
+        if ch == '-' || ch == '_' || ch.is_whitespace() {
+            if !previous_was_underscore && !normalized.is_empty() {
+                normalized.push('_');
+                previous_was_underscore = true;
+            }
+        } else {
+            normalized.extend(ch.to_lowercase());
+            previous_was_underscore = false;
+        }
+    }
+    normalized.trim_matches('_').to_owned()
 }
 
 #[cfg(test)]
@@ -143,7 +243,7 @@ mod tests {
         let value = serde_json::to_value(envelope).expect("serialize error envelope");
 
         assert_eq!(value["ok"], json!(false));
-        assert_eq!(value["error"]["code"], json!("NO_CONFIG"));
+        assert_eq!(value["error"]["code"], json!("no_config"));
         assert_eq!(value["error"]["message"], json!("missing config"));
         assert_eq!(value["error"]["hint"], json!("create let.config.toml"));
         assert_eq!(value["meta"]["tool"], json!("config.validate"));

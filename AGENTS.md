@@ -34,7 +34,7 @@
 | Layer | Choice | Notes |
 | --- | --- | --- |
 | Runtime | Rust 2024 workspace | three crates: SDK, CLI, TUI; `unsafe` forbidden |
-| CLI | `clap` + JSON envelopes | default stdout is machine-facing; `--text` switches to human output |
+| CLI | `clap` + JSON/Toon envelopes | default stdout is JSON; `--toon` emits the same envelope as Toon |
 | TUI | `ratatui` + `crossterm` | launched by the CLI and pointed at the same runtime dirs |
 | Storage | SQLite via `rusqlite` | one listings DB plus one DB per enrichment source |
 | HTTP / Parsing | `reqwest`, `serde_json`, `csv`, `zip`, `calamine`, `image` | Rightmove fetch, EPC/Mapbox/Notion, source ingests, media normalization |
@@ -54,13 +54,13 @@
 
 ## 5. Architecture
 
-- [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs) parses flags, resolves path overrides, dispatches commands, and emits envelopes or text
+- [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs) parses flags, resolves path overrides, dispatches commands, and emits structured envelopes
 - [`crates/let-cli/src/commands/`](crates/let-cli/src/commands/) should stay thin; persistence, parsing, enrichment, and scoring belong in `let-sdk`
 - [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs) turns Rightmove HTML `PAGE_MODEL` data into listings and classifies active vs let-agreed vs removed pages
 - [`crates/let-sdk/src/pipeline/enrich.rs`](crates/let-sdk/src/pipeline/enrich.rs) joins local postcode, IMD, census, population, income, flood, crime, NaPTAN, and UPRN data; missing source DBs degrade the report instead of aborting most workflows
 - [`crates/let-sdk/src/pipeline/score.rs`](crates/let-sdk/src/pipeline/score.rs) computes percentile-relative scores across the current DB, persists factor context, and derives `assessedScore` from saved assessments
 - [`crates/let-cli/src/commands/start.rs`](crates/let-cli/src/commands/start.rs) launches `let-tui` as a sibling binary or via `LET_TUI_BIN` and forwards runtime dirs through `LET_*_DIR` env vars
-- Default stdout is exactly one JSON envelope per command. Human text, progress, warnings, and confirmation prompts go to stderr or require `--text`. There is no supported `--json` flag.
+- Default stdout is exactly one JSON envelope per structured command. `--toon` emits the same envelope as Toon. Progress, warnings, and confirmation prompts go to stderr. There is no supported `--json` or `--text` flag.
 
 ## 6. Runtime and State
 
@@ -82,14 +82,14 @@
 - Batch `fetch` runs apply `fetch.minScore` before the heavy media stage; single-ID fetches skip that threshold unless `--min-score` is passed explicitly
 - `fetch --override-postcode` and `--override-address` are single-ID correction tools; they update address-derived URLs and can trigger postcode or Mapbox-based coordinate re-resolution before enrichment and scoring
 - `ops patch` re-enriches from source DBs by default, then reapplies the explicit patch so manual values win in that invocation; use `--skip-re-enrich` when you need a pure manual override
-- `view ... --copy` copies pretty JSON in default mode and rendered text in `--text`; on non-macOS platforms you must provide `LET_CLIPBOARD_BIN`
+- `view ... --copy` copies the structured payload as pretty JSON; on non-macOS platforms you must provide `LET_CLIPBOARD_BIN`
 
 ## 8. Constraints
 
 - Never hand-edit [`crates/let-sdk/src/db/schema.sql`](crates/let-sdk/src/db/schema.sql)-backed runtime DB files, source DBs, or cache assets; use CLI commands or source builders instead
 - High-risk files are [`crates/let-sdk/src/db/schema.sql`](crates/let-sdk/src/db/schema.sql), [`crates/let-sdk/src/db/repository.rs`](crates/let-sdk/src/db/repository.rs), [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs), [`crates/let-sdk/src/pipeline/epc.rs`](crates/let-sdk/src/pipeline/epc.rs), [`crates/let-sdk/src/sources/`](crates/let-sdk/src/sources/), and [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs)
 - DB writes create `.bak` snapshots unless `LET_SKIP_DB_BACKUP=1` is set; do not disable backups in normal development or runtime repair work
-- `ops prune` is destructive and interactive in text mode; non-interactive automation must use `--dry-run` first and `--force` only when the selection is already understood
+- `ops prune` is destructive and prompts unless `--force` is used; non-interactive automation must use `--dry-run` first and `--force` only when the selection is already understood
 - `ops verify` mutates stored listing status unless `--dry-run` is set
 - Rightmove, EPC, Mapbox, Notion, and public source datasets are unstable dependencies. Expect API fallback, removed listings, header/schema drift, and partial enrichment.
 - Do not commit `$LET_HOME/data/.env`, exported listing snapshots, cached media, test-generated DBs, or personal search context
@@ -97,8 +97,8 @@
 ## 9. Validation
 
 - Required local gate: `bun run util:check`
-- CLI surface, envelope, clipboard, `--text`, or tool-registry changes: `cargo test -p let-cli --test cli_integration`
+- CLI surface, envelope, clipboard, `--toon`, or tool-registry changes: `cargo test -p let-cli --test cli_integration`
 - DB schema or repository changes: `cargo test -p let-sdk --test db_tests`
 - Discovery, fetch, enrichment, source-build, or scoring changes: run the relevant crate tests plus at least one targeted manual smoke flow
 - Manual smoke for runtime-path or workflow changes: `cargo run -q -p let-cli -- tools`, `health`, `config show`, `search discover`, `fetch <id> --skip-images`, `view list`, `score explain <id>`, `export json`, `build sources list`
-- If you touch [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs), [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs), or [`crates/let-cli/src/envelope.rs`](crates/let-cli/src/envelope.rs), verify default JSON mode still emits one stdout line and `--text` still produces readable output
+- If you touch [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs), [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs), or [`crates/let-cli/src/envelope.rs`](crates/let-cli/src/envelope.rs), verify default JSON mode still emits one stdout line and `--toon` decodes to the same envelope shape

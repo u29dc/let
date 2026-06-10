@@ -576,12 +576,7 @@ pub fn run(shared: &SharedArgs, params: &FetchParams) -> CommandResult {
     Ok(CommandOutput::new(crate::commands::to_camel_json(&payload))
         .with_count(payload.fetched.len())
         .with_total(payload.total)
-        .with_has_more(!payload.failed.is_empty())
-        .with_text(format!(
-            "fetched {} of {} listing(s)",
-            payload.fetched.len(),
-            payload.total
-        )))
+        .with_has_more(!payload.failed.is_empty()))
 }
 
 fn effective_min_score(

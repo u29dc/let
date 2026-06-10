@@ -19,9 +19,7 @@ pub fn show(shared: &SharedArgs) -> CommandResult {
         "config": config,
     });
 
-    Ok(CommandOutput::new(data)
-        .with_count(location_count)
-        .with_text(format!("config loaded from {}", path.display())))
+    Ok(CommandOutput::new(data).with_count(location_count))
 }
 
 pub fn validate(shared: &SharedArgs) -> CommandResult {
@@ -37,5 +35,5 @@ pub fn validate(shared: &SharedArgs) -> CommandResult {
         "valid": true,
         "errors": [],
     });
-    Ok(CommandOutput::new(data).with_text(format!("config valid: {}", path.display())))
+    Ok(CommandOutput::new(data))
 }

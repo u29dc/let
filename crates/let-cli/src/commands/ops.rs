@@ -141,8 +141,7 @@ pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
             "remaining": 0,
             "mode": "none",
             "dryRun": params.dry_run,
-        }))
-        .with_text("no listings to prune"));
+        })));
     }
 
     let (to_remove_ids, mode) = select_prune_ids(&data.listings, params)?;
@@ -152,8 +151,7 @@ pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
             "remaining": data.listings.len(),
             "mode": mode,
             "dryRun": params.dry_run,
-        }))
-        .with_text("nothing to prune"));
+        })));
     }
 
     let remaining = data.listings.len().saturating_sub(to_remove_ids.len());
@@ -164,11 +162,7 @@ pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
             "remaining": remaining,
             "mode": mode,
             "dryRun": true,
-        }))
-        .with_text(format!(
-            "dry run: would remove {} listing(s)",
-            to_remove_ids.len()
-        )));
+        })));
     }
 
     if !params.force && !confirm_delete(to_remove_ids.len())? {
@@ -178,8 +172,7 @@ pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
             "mode": mode,
             "dryRun": false,
             "aborted": true,
-        }))
-        .with_text("prune aborted"));
+        })));
     }
 
     delete_listing_ids(&db_path, &to_remove_ids)?;
@@ -189,12 +182,7 @@ pub fn prune(shared: &SharedArgs, params: &PruneParams) -> CommandResult {
         "remaining": remaining,
         "mode": mode,
         "dryRun": false,
-    }))
-    .with_text(format!(
-        "pruned {} listing(s); {} remaining",
-        to_remove_ids.len(),
-        remaining
-    )))
+    })))
 }
 
 pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
@@ -277,8 +265,7 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
             "warnings": warnings,
             "skipReEnrich": params.skip_re_enrich,
             "skipImages": params.skip_images,
-        }))
-        .with_text("no changes needed"));
+        })));
     }
 
     let mut re_enriched = Vec::new();
@@ -344,12 +331,7 @@ pub fn patch(shared: &SharedArgs, params: &PatchParams) -> CommandResult {
         "warnings": warnings,
         "skipReEnrich": params.skip_re_enrich,
         "skipImages": params.skip_images,
-    }))
-    .with_text(format!(
-        "patch applied for {} and rescored {} listings",
-        params.id,
-        rescored.len()
-    )))
+    })))
 }
 
 fn parse_patch_json(raw_json: &str) -> Result<JsonPatchParse, CommandError> {
@@ -1885,8 +1867,7 @@ pub fn verify(shared: &SharedArgs, params: &VerifyParams) -> CommandResult {
             "errors": 0,
             "dryRun": params.dry_run,
             "results": [],
-        }))
-        .with_text("no listings to verify"));
+        })));
     }
 
     let patterns = params
@@ -1922,8 +1903,7 @@ pub fn verify(shared: &SharedArgs, params: &VerifyParams) -> CommandResult {
             "errors": 0,
             "dryRun": params.dry_run,
             "results": [],
-        }))
-        .with_text("no listings matched verify filter"));
+        })));
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1985,11 +1965,7 @@ pub fn verify(shared: &SharedArgs, params: &VerifyParams) -> CommandResult {
     }))
     .with_count(checked)
     .with_total(checked)
-    .with_has_more(false)
-    .with_text(format!(
-        "verified {checked} listing(s): {} inactive, {} errors",
-        summary.inactive, summary.errors
-    )))
+    .with_has_more(false))
 }
 
 fn summarize_verify_results(results: &[VerifyResult]) -> VerifySummary {

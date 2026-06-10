@@ -85,13 +85,7 @@ pub fn candidates(shared: &SharedArgs, params: &CandidatesParams) -> CommandResu
     }))
     .with_count(shortlist.len())
     .with_total(total)
-    .with_has_more(shortlist.len() < total)
-    .with_text(format!(
-        "{} candidates ({} unassessed of {} total)",
-        shortlist.len(),
-        total.saturating_sub(assessed),
-        total
-    )))
+    .with_has_more(shortlist.len() < total))
 }
 
 pub fn context(shared: &SharedArgs, id: &str) -> CommandResult {
@@ -127,7 +121,7 @@ pub fn context(shared: &SharedArgs, id: &str) -> CommandResult {
         "notes": listing.notes,
     });
 
-    Ok(CommandOutput::new(data).with_text(format!("context ready for {id}")))
+    Ok(CommandOutput::new(data))
 }
 
 pub fn submit(shared: &SharedArgs, id: &str, assessment_raw: &str) -> CommandResult {
@@ -184,10 +178,7 @@ pub fn submit(shared: &SharedArgs, id: &str, assessment_raw: &str) -> CommandRes
         "scoreAdjustment": assessment.score_adjustment,
     });
 
-    Ok(CommandOutput::new(data).with_text(format!(
-        "assessment saved for {id}: assessed={assessed_score:.1} (algo={algo_score:.1} + adj={:.1})",
-        assessment.score_adjustment
-    )))
+    Ok(CommandOutput::new(data))
 }
 
 fn score_breakdown_json(listing: &Listing) -> Value {

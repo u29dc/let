@@ -369,7 +369,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             name: "--force",
                             param_type: "bool",
                             required: false,
-                            description: "Skip confirmation prompt in text mode.",
+                            description: "Skip confirmation prompt.",
                         },
                     ],
                     vec!["removed", "remaining", "mode", "dryRun"],
@@ -780,7 +780,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     "view.list",
                     "let view list",
                     "view",
-                    "Ranked listing table with filters and sorting.",
+                    "Ranked listing view with filters and sorting.",
                     vec![
                         ToolParameter {
                             name: "--top",
@@ -822,7 +822,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             name: "--copy",
                             param_type: "bool",
                             required: false,
-                            description: "Copy rendered list output to the clipboard. Copies human text in `--text` mode and pretty command JSON otherwise.",
+                            description: "Copy the structured list payload to the clipboard as pretty JSON.",
                         },
                     ],
                     vec!["listings", "total", "filtered"],
@@ -845,12 +845,12 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                             name: "--copy",
                             param_type: "bool",
                             required: false,
-                            description: "Copy rendered detail output to the clipboard. Copies human text in `--text` mode and pretty listing JSON otherwise.",
+                            description: "Copy the structured listing payload to the clipboard as pretty JSON.",
                         },
                     ],
                     vec!["listing"],
                     true,
-                    "let view detail 170448131 --text",
+                    "let view detail 170448131",
                 ),
                 tool(
                     "config.show",
@@ -941,9 +941,9 @@ pub fn global_flags() -> &'static [GlobalFlag] {
             description: "Override sources directory.",
         },
         GlobalFlag {
-            name: "--text",
+            name: "--toon",
             flag_type: "bool",
-            description: "Emit human-readable output instead of JSON envelopes.",
+            description: "Emit Toon instead of the default JSON envelope.",
         },
     ];
     &FLAGS

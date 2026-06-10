@@ -35,7 +35,7 @@ Autonomous UK rental property search, triage, and neighborhood assessment via th
 Hard rules:
 
 - If `"$HOME/.tools/let/let"` is missing or not executable, return a blocked prerequisite and stop.
-- All non-interactive commands emit JSON envelopes on stdout by default. Treat stderr as logs/progress only unless `--text` is requested.
+- All non-interactive commands emit JSON envelopes on stdout by default. Use `--toon` only when Toon is explicitly useful; treat stderr as logs/progress.
 - Read stdout as the contract. Treat stderr as logs only.
 - Bare `"$HOME/.tools/let/let"` prints clap help; it does not emit JSON.
 - Do not run repo build commands from this skill.

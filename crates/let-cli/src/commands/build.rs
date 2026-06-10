@@ -266,8 +266,7 @@ pub fn run_sources(
         }))
         .with_count(SourceTarget::all_sources().len())
         .with_total(SourceTarget::all_sources().len())
-        .with_has_more(false)
-        .with_text("available sources listed"));
+        .with_has_more(false));
     }
 
     let started = Instant::now();
@@ -297,12 +296,7 @@ pub fn run_sources(
         "durationMs": payload.duration_ms,
         "status": payload.status,
         "sources": source_results,
-    }))
-    .with_text(format!(
-        "build sources {} completed in {}ms",
-        target.as_str(),
-        elapsed
-    )))
+    })))
 }
 
 fn run_all_sources(

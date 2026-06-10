@@ -25,8 +25,7 @@ pub fn compute(shared: &SharedArgs) -> CommandResult {
             "avgConfidence": 0,
             "enriched": 0,
             "stillMissingEnrichment": 0,
-        }))
-        .with_text("no listings to score"));
+        })));
     }
 
     let source_enricher = SourceEnricher::open(&paths.resolved.sources)?;
@@ -81,7 +80,7 @@ pub fn compute(shared: &SharedArgs) -> CommandResult {
         &data.locations,
     )?;
 
-    Ok(CommandOutput::new(stats).with_text(format!("rescored {total} listings")))
+    Ok(CommandOutput::new(stats))
 }
 
 pub fn explain(shared: &SharedArgs, id: &str) -> CommandResult {
@@ -148,7 +147,7 @@ pub fn explain(shared: &SharedArgs, id: &str) -> CommandResult {
         "penalties": scores.penalties,
     });
 
-    Ok(CommandOutput::new(data).with_text(format!("score breakdown ready for {id}")))
+    Ok(CommandOutput::new(data))
 }
 
 fn round_to(value: f64, decimals: usize) -> f64 {
