@@ -5,7 +5,7 @@ use let_sdk::intelligence::{
 };
 use let_sdk::paths::resolve_paths;
 
-use crate::commands::{CommandOutput, CommandResult, SharedArgs, to_camel_json};
+use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs, to_camel_json};
 
 #[derive(Debug, Clone)]
 pub struct VerifyCommandParams {
@@ -15,11 +15,12 @@ pub struct VerifyCommandParams {
 }
 
 pub fn run(shared: &SharedArgs, params: VerifyCommandParams) -> CommandResult {
+    let claim = VerifyClaim::parse(&params.claim)?;
     let paths = resolve_paths(Some(shared.overrides.clone()));
-    let sections = sections_for_claim(&params.claim);
+    let sections = sections_for_claim(claim);
     let response = let_sdk::intelligence::verify(VerifyParams {
         id: params.id.clone(),
-        claim: params.claim,
+        claim: claim.as_str().to_owned(),
         refresh: params.refresh,
         inspect: InspectParams {
             id_or_url: params.id,
@@ -37,39 +38,78 @@ pub fn run(shared: &SharedArgs, params: VerifyCommandParams) -> CommandResult {
     Ok(CommandOutput::new(to_camel_json(&response)))
 }
 
-fn sections_for_claim(claim: &str) -> Vec<EvidenceSection> {
-    match claim.trim().to_ascii_lowercase().as_str() {
-        "media" => vec![
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyClaim {
+    All,
+    Media,
+    Epc,
+    Address,
+    Description,
+    Broadband,
+}
+
+impl VerifyClaim {
+    fn parse(value: &str) -> Result<Self, CommandError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "all" => Ok(Self::All),
+            "media" => Ok(Self::Media),
+            "epc" => Ok(Self::Epc),
+            "address" => Ok(Self::Address),
+            "description" => Ok(Self::Description),
+            "broadband" => Ok(Self::Broadband),
+            _ => Err(CommandError::runtime(
+                "VALIDATION_ERROR",
+                format!("unsupported verify claim `{}`", value.trim()),
+                "use one of all, address, broadband, epc, media, or description",
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Media => "media",
+            Self::Epc => "epc",
+            Self::Address => "address",
+            Self::Description => "description",
+            Self::Broadband => "broadband",
+        }
+    }
+}
+
+fn sections_for_claim(claim: VerifyClaim) -> Vec<EvidenceSection> {
+    match claim {
+        VerifyClaim::Media => vec![
             EvidenceSection::Rightmove,
             EvidenceSection::Media,
             EvidenceSection::Verifications,
         ],
-        "epc" => vec![
+        VerifyClaim::Epc => vec![
             EvidenceSection::Rightmove,
             EvidenceSection::Description,
             EvidenceSection::Claims,
             EvidenceSection::Epc,
             EvidenceSection::Verifications,
         ],
-        "address" => vec![
+        VerifyClaim::Address => vec![
             EvidenceSection::Rightmove,
             EvidenceSection::Address,
             EvidenceSection::Verifications,
         ],
-        "description" => vec![
+        VerifyClaim::Description => vec![
             EvidenceSection::Rightmove,
             EvidenceSection::Description,
             EvidenceSection::Claims,
             EvidenceSection::Verifications,
         ],
-        "broadband" => vec![
+        VerifyClaim::Broadband => vec![
             EvidenceSection::Rightmove,
             EvidenceSection::Description,
             EvidenceSection::Claims,
             EvidenceSection::Broadband,
             EvidenceSection::Verifications,
         ],
-        _ => vec![
+        VerifyClaim::All => vec![
             EvidenceSection::Rightmove,
             EvidenceSection::Description,
             EvidenceSection::Address,
@@ -85,11 +125,11 @@ fn sections_for_claim(claim: &str) -> Vec<EvidenceSection> {
 mod tests {
     use let_sdk::intelligence::EvidenceSection;
 
-    use super::sections_for_claim;
+    use super::{VerifyClaim, sections_for_claim};
 
     #[test]
     fn broadband_verify_refresh_excludes_media() {
-        let sections = sections_for_claim("broadband");
+        let sections = sections_for_claim(VerifyClaim::Broadband);
 
         assert!(sections.contains(&EvidenceSection::Broadband));
         assert!(sections.contains(&EvidenceSection::Claims));
@@ -98,7 +138,7 @@ mod tests {
 
     #[test]
     fn media_verify_refresh_includes_media() {
-        let sections = sections_for_claim("media");
+        let sections = sections_for_claim(VerifyClaim::Media);
 
         assert_eq!(
             sections,
@@ -108,5 +148,12 @@ mod tests {
                 EvidenceSection::Verifications,
             ]
         );
+    }
+
+    #[test]
+    fn verify_claim_rejects_unknown_values() {
+        let error = VerifyClaim::parse("broadbnd").expect_err("claim should be rejected");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
     }
 }

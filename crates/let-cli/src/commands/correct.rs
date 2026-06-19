@@ -99,6 +99,24 @@ pub fn epc(shared: &SharedArgs, params: EpcCorrectionParams) -> CommandResult {
             "pass --certificate-url, --lmk-key, --uprn, --rating, or --floor-area-sqm",
         ));
     }
+    if params
+        .certificate_url
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+        && params
+            .lmk_key
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        && params
+            .uprn
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(validation_error(
+            "EPC correction requires --certificate-url, --lmk-key, or --uprn",
+            "include a certificate identifier; --rating and --floor-area-sqm can refine that evidence",
+        ));
+    }
     let mut payload = serde_json::Map::new();
     insert_string(&mut payload, "certificateUrl", params.certificate_url);
     insert_string(&mut payload, "lmkKey", params.lmk_key);

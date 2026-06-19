@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -14,6 +15,7 @@ use crate::intelligence::types::{
 use crate::utils::time::now_iso;
 
 const INTELLIGENCE_SCHEMA_VERSION: i32 = 1;
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 pub struct IntelligenceDb {
     connection: Connection,
@@ -36,6 +38,7 @@ impl IntelligenceDb {
             fs::create_dir_all(parent)?;
         }
         let connection = Connection::open(path)?;
+        connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         let version = read_user_version(&connection)?;
         if version == INTELLIGENCE_SCHEMA_VERSION {
             ensure_additive_schema(&connection)?;
@@ -51,6 +54,7 @@ impl IntelligenceDb {
     pub fn open_readonly(path: impl AsRef<Path>) -> Result<Self> {
         let connection =
             Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         validate_schema(&connection)?;
         Ok(Self { connection })
     }

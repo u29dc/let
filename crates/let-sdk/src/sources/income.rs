@@ -180,21 +180,21 @@ fn insert_income_proxy_lsoa(tx: &rusqlite::Transaction<'_>, csv_path: &Path) -> 
             "verify income proxy source format",
         )
     })?;
-    let idaci_score_idx = find_column_index(&headers, &["idaci", "score"]).ok_or_else(|| {
+    let idaci_score_idx = find_header(&headers, &["idaci", "score"]).ok_or_else(|| {
         LetError::new(
             ErrorCode::Parse,
             "missing idaci score column in IMD income CSV".to_owned(),
             "verify income proxy source format",
         )
     })?;
-    let idaci_rank_idx = find_column_index(&headers, &["idaci", "rank"]).ok_or_else(|| {
+    let idaci_rank_idx = find_header(&headers, &["idaci", "rank"]).ok_or_else(|| {
         LetError::new(
             ErrorCode::Parse,
             "missing idaci rank column in IMD income CSV".to_owned(),
             "verify income proxy source format",
         )
     })?;
-    let idaci_decile_idx = find_column_index(&headers, &["idaci", "decile"]).ok_or_else(|| {
+    let idaci_decile_idx = find_header(&headers, &["idaci", "decile"]).ok_or_else(|| {
         LetError::new(
             ErrorCode::Parse,
             "missing idaci decile column in IMD income CSV".to_owned(),
@@ -285,6 +285,8 @@ struct Columns {
     msoa_name: Option<usize>,
     before_housing: usize,
     after_housing: usize,
+    before_housing_multiplier: f64,
+    after_housing_multiplier: f64,
 }
 
 type IncomeRow = (String, Option<String>, Option<f64>, Option<f64>);
@@ -338,6 +340,8 @@ fn resolve_columns(headers: Vec<String>) -> Result<Columns> {
         msoa_name,
         before_housing,
         after_housing,
+        before_housing_multiplier: income_unit_multiplier(&headers[before_housing]),
+        after_housing_multiplier: income_unit_multiplier(&headers[after_housing]),
     })
 }
 
@@ -351,8 +355,14 @@ fn parse_row(row: &[Data], columns: &Columns) -> Option<IncomeRow> {
         .msoa_name
         .and_then(|idx| row.get(idx))
         .map(string_cell);
-    let income_bhc = row.get(columns.before_housing).and_then(number_cell);
-    let income_ahc = row.get(columns.after_housing).and_then(number_cell);
+    let income_bhc = row
+        .get(columns.before_housing)
+        .and_then(number_cell)
+        .map(|value| value * columns.before_housing_multiplier);
+    let income_ahc = row
+        .get(columns.after_housing)
+        .and_then(number_cell)
+        .map(|value| value * columns.after_housing_multiplier);
 
     Some((
         msoa_code,
@@ -391,6 +401,15 @@ fn number_cell(cell: &Data) -> Option<f64> {
         Data::Int(value) => Some(*value as f64),
         Data::String(value) => value.trim().parse::<f64>().ok(),
         _ => None,
+    }
+}
+
+fn income_unit_multiplier(header: &str) -> f64 {
+    let normalized = header.to_lowercase();
+    if normalized.contains("thousand") || normalized.contains("000") {
+        1000.0
+    } else {
+        1.0
     }
 }
 
@@ -437,7 +456,9 @@ fn csv_err(error: csv::Error) -> LetError {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_header, find_header_excluding};
+    use calamine::Data;
+
+    use super::{find_header, find_header_excluding, parse_row, resolve_columns};
 
     #[test]
     fn finds_expected_income_headers() {
@@ -454,5 +475,38 @@ mod tests {
             find_header_excluding(&headers, &["income"], &["after housing"]),
             Some(1)
         );
+    }
+
+    #[test]
+    fn idaci_proxy_headers_require_all_tokens() {
+        let headers = vec![
+            "IDACI score".to_owned(),
+            "IDACI rank (where 1 is most deprived)".to_owned(),
+            "IDACI decile (where 1 is most deprived 10% of LSOAs)".to_owned(),
+        ];
+
+        assert_eq!(find_header(&headers, &["idaci", "score"]), Some(0));
+        assert_eq!(find_header(&headers, &["idaci", "rank"]), Some(1));
+        assert_eq!(find_header(&headers, &["idaci", "decile"]), Some(2));
+    }
+
+    #[test]
+    fn income_rows_convert_thousands_to_pounds() {
+        let headers = vec![
+            "AREACD".to_owned(),
+            "Disposable (net) annual income before housing costs (£ thousands)".to_owned(),
+            "Disposable (net) annual income after housing costs (£ thousands)".to_owned(),
+        ];
+        let columns = resolve_columns(headers).expect("resolve columns");
+        let row = vec![
+            Data::String("E02000001".to_owned()),
+            Data::Float(41.2),
+            Data::Float(37.5),
+        ];
+
+        let (_code, _name, before, after) = parse_row(&row, &columns).expect("parse row");
+
+        assert_eq!(before, Some(41_200.0));
+        assert_eq!(after, Some(37_500.0));
     }
 }

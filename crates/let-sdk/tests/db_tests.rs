@@ -328,6 +328,15 @@ fn targeted_listing_writes_update_graph_scores_and_notion_id() {
             .overall,
         81.0
     );
+    assert_eq!(
+        refreshed
+            .scores
+            .as_ref()
+            .expect("scores are present")
+            .context
+            .config_hash,
+        "score-config-v2"
+    );
     assert_eq!(refreshed.assessed_score, Some(82.5));
     assert_eq!(refreshed.notion_page_id.as_deref(), Some("notion-page-1"));
 }

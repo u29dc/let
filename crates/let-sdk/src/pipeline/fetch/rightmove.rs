@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -100,7 +100,13 @@ pub fn capture_page_model(
     html: &str,
 ) -> std::result::Result<RightmovePageCapture, String> {
     let page_status = classify_listing_page(html)?;
-    let page_model = extract_page_model(html)?;
+    let page_model = match extract_page_model(html) {
+        Ok(page_model) => page_model,
+        Err(_) if page_status == RightmoveListingPageStatus::Removed => {
+            removed_listing_page_model()
+        }
+        Err(error) => return Err(error),
+    };
     Ok(RightmovePageCapture {
         rightmove_id: rightmove_id.to_owned(),
         url: rightmove_url(rightmove_id),
@@ -108,6 +114,20 @@ pub fn capture_page_model(
         page_status: page_status.as_str().to_owned(),
         content_hash: sha256_hex(html),
         page_model,
+    })
+}
+
+fn removed_listing_page_model() -> Value {
+    json!({
+        "propertyData": {
+            "heading": "Removed Rightmove listing",
+            "text": {
+                "description": "This property has been removed from the market."
+            },
+            "images": [],
+            "floorplans": [],
+            "epcGraphs": []
+        }
     })
 }
 
@@ -925,8 +945,8 @@ pub fn build_google_maps_street_view_url(lat: f64, lng: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RightmoveListingPageStatus, classify_listing_page, extract_page_model, find_json_end,
-        parse_price,
+        RightmoveListingPageStatus, capture_page_model, classify_listing_page, extract_page_model,
+        extract_property_evidence, find_json_end, parse_price,
     };
 
     #[test]
@@ -1010,6 +1030,21 @@ mod tests {
         let html = "<html><body>This property has been removed from the market.</body></html>";
         let status = classify_listing_page(html).expect("page status should classify");
         assert_eq!(status, RightmoveListingPageStatus::Removed);
+    }
+
+    #[test]
+    fn removed_listing_without_page_model_captures_tombstone() {
+        let html = "<html><body>This property has been removed from the market.</body></html>";
+
+        let capture = capture_page_model("170448131", html).expect("removed page should capture");
+        let extracted = extract_property_evidence(&capture).expect("tombstone should extract");
+
+        assert_eq!(capture.page_status, "removed");
+        assert_eq!(extracted.page_status, "removed");
+        assert_eq!(
+            extracted.title.as_deref(),
+            Some("Removed Rightmove listing")
+        );
     }
 
     #[test]

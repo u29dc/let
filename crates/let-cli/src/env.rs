@@ -51,24 +51,30 @@ fn parse_env_line(line: &str) -> Option<(&str, String)> {
 }
 
 fn parse_env_value(raw: &str) -> String {
-    if raw.len() >= 2 {
-        let starts_single = raw.starts_with('\'');
-        let starts_double = raw.starts_with('"');
-        if (starts_single && raw.ends_with('\'')) || (starts_double && raw.ends_with('"')) {
-            return raw[1..raw.len() - 1].to_owned();
-        }
-    }
-
     let mut output = String::with_capacity(raw.len());
     let mut prev_was_whitespace = true;
-    for ch in raw.chars() {
-        if ch == '#' && prev_was_whitespace {
-            break;
+    let mut active_quote = raw.chars().next().filter(|ch| *ch == '\'' || *ch == '"');
+    for (index, ch) in raw.char_indices() {
+        match active_quote {
+            Some(quote) if ch == quote && index != 0 => active_quote = None,
+            None if ch == '#' && prev_was_whitespace => break,
+            _ => {}
         }
+
         output.push(ch);
         prev_was_whitespace = ch.is_whitespace();
     }
-    output.trim_end().to_owned()
+
+    let trimmed = output.trim_end();
+    if trimmed.len() >= 2 {
+        let starts_single = trimmed.starts_with('\'');
+        let starts_double = trimmed.starts_with('"');
+        if (starts_single && trimmed.ends_with('\'')) || (starts_double && trimmed.ends_with('"')) {
+            return trimmed[1..trimmed.len() - 1].to_owned();
+        }
+    }
+
+    trimmed.to_owned()
 }
 
 #[cfg(test)]
@@ -93,7 +99,10 @@ mod tests {
     fn parse_env_value_handles_quotes_and_inline_comments() {
         assert_eq!(parse_env_value("'abc 123'"), "abc 123");
         assert_eq!(parse_env_value("\"abc 123\""), "abc 123");
+        assert_eq!(parse_env_value("'abc 123' # note"), "abc 123");
+        assert_eq!(parse_env_value("\"abc 123\" # note"), "abc 123");
         assert_eq!(parse_env_value("abc # note"), "abc");
         assert_eq!(parse_env_value("abc#def"), "abc#def");
+        assert_eq!(parse_env_value("can't # note"), "can't");
     }
 }

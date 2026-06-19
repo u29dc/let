@@ -89,7 +89,7 @@ enum Command {
     Verify {
         /// Rightmove id or entity id.
         id: String,
-        /// Claim type to verify.
+        /// Claim type to verify: all, address, broadband, epc, media, or description.
         #[arg(long, default_value = "all")]
         claim: String,
         /// Refresh policy before verification.
@@ -217,10 +217,10 @@ enum CorrectCommand {
         /// EPC UPRN.
         #[arg(long)]
         uprn: Option<String>,
-        /// Corrected EPC rating.
+        /// Corrected EPC rating; requires --certificate-url, --lmk-key, or --uprn.
         #[arg(long)]
         rating: Option<String>,
-        /// Corrected floor area in square metres.
+        /// Corrected floor area in square metres; requires --certificate-url, --lmk-key, or --uprn.
         #[arg(long = "floor-area-sqm")]
         floor_area_sqm: Option<f64>,
         /// Correction provenance note.

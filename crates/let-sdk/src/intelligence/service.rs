@@ -143,6 +143,7 @@ pub fn inspect(params: InspectParams) -> Result<EvidenceBundle> {
     })?;
     let client = reqwest::Client::builder()
         .user_agent("let-rust/0.0.1")
+        .timeout(Duration::from_millis(fetch_config.media_timeout_ms))
         .build()
         .map_err(|error| {
             LetError::new(
@@ -438,11 +439,15 @@ fn correction_string(
     corrections
         .iter()
         .rev()
-        .find(|correction| correction.active && correction.kind == kind)
-        .and_then(|correction| correction.payload.get(key))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|correction| correction.active && correction.kind == kind)
+        .find_map(|correction| {
+            correction
+                .payload
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
         .map(ToOwned::to_owned)
 }
 
@@ -454,9 +459,9 @@ fn correction_f64(
     corrections
         .iter()
         .rev()
-        .find(|correction| correction.active && correction.kind == kind)
-        .and_then(|correction| correction.payload.get(key))
-        .and_then(Value::as_f64)
+        .filter(|correction| correction.active && correction.kind == kind)
+        .filter_map(|correction| correction.payload.get(key))
+        .find_map(Value::as_f64)
 }
 
 fn address_candidates_from_corrections(
@@ -1737,7 +1742,10 @@ mod media_tests {
 
     use crate::intelligence::types::{CorrectionKind, CorrectionRecord};
 
-    use super::{address_candidates_from_corrections, epc_from_correction, media_item};
+    use super::{
+        address_candidates_from_corrections, correction_f64, correction_string,
+        epc_from_correction, media_item,
+    };
 
     #[test]
     fn missing_local_media_path_stays_remote() {
@@ -1811,5 +1819,47 @@ mod media_tests {
         assert_eq!(epc.floor_area_sqm, Some(92.5));
         assert_eq!(epc.uprn.as_deref(), Some("1001"));
         assert_eq!(epc.uprn_source.as_deref(), Some("manualCorrection"));
+    }
+
+    #[test]
+    fn correction_lookup_skips_newer_records_without_requested_field() {
+        let corrections = vec![
+            CorrectionRecord {
+                id: "correction-1".to_owned(),
+                entity_id: "rightmove:1".to_owned(),
+                kind: CorrectionKind::Address,
+                payload: serde_json::json!({
+                    "postcode": "YO1 7HH"
+                }),
+                note: None,
+                active: true,
+                created_at: "2026-06-18T00:00:00Z".to_owned(),
+                cleared_at: None,
+                affected_sections: vec!["address".to_owned()],
+            },
+            CorrectionRecord {
+                id: "correction-2".to_owned(),
+                entity_id: "rightmove:1".to_owned(),
+                kind: CorrectionKind::Address,
+                payload: serde_json::json!({
+                    "lat": 53.959,
+                    "lng": -1.0815
+                }),
+                note: None,
+                active: true,
+                created_at: "2026-06-18T01:00:00Z".to_owned(),
+                cleared_at: None,
+                affected_sections: vec!["address".to_owned()],
+            },
+        ];
+
+        assert_eq!(
+            correction_string(&corrections, CorrectionKind::Address, "postcode").as_deref(),
+            Some("YO1 7HH")
+        );
+        assert_eq!(
+            correction_f64(&corrections, CorrectionKind::Address, "lat"),
+            Some(53.959)
+        );
     }
 }

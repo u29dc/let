@@ -90,9 +90,13 @@ pub async fn populate_listing_media(
     };
 
     let profile_hash = config.profile_hash();
+    let media_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| client.clone());
 
     process_listing_images(
-        client,
+        &media_client,
         listing,
         &listing_dir,
         &profile_hash,
@@ -104,7 +108,7 @@ pub async fn populate_listing_media(
     let listing_snapshot = listing.clone();
     if config.download_floorplan {
         process_single_asset(
-            client,
+            &media_client,
             &listing_snapshot,
             &listing_dir,
             &profile_hash,
@@ -120,7 +124,7 @@ pub async fn populate_listing_media(
 
     if config.download_epc_asset {
         process_single_asset(
-            client,
+            &media_client,
             &listing_snapshot,
             &listing_dir,
             &profile_hash,
@@ -194,7 +198,7 @@ async fn process_listing_images(
         let output_path = listing_dir.join(&filename);
         let local = local_asset_path(listing, &filename);
 
-        if output_path.exists() {
+        if cached_image_is_valid(&output_path) {
             stats.photos_skipped += 1;
             if let Some(slot) = listing.images.get_mut(index) {
                 slot.local = Some(local);
@@ -225,7 +229,8 @@ async fn process_listing_images(
                 .await
                 .map_err(|_| AssetProcessError::ProcessFailed)??;
 
-            std::fs::write(&output_path, normalized).map_err(|_| AssetProcessError::WriteFailed)?;
+            write_atomically(&output_path, &normalized)
+                .map_err(|_| AssetProcessError::WriteFailed)?;
 
             Ok::<AssetProcessSuccess, AssetProcessError>(AssetProcessSuccess { index, local })
         });
@@ -267,7 +272,7 @@ async fn process_single_asset(
     let output_path = listing_dir.join(&filename);
     let local = local_asset_path(listing, &filename);
 
-    if output_path.exists() {
+    if cached_image_is_valid(&output_path) {
         asset.local = Some(local);
         *skipped += 1;
         return;
@@ -291,7 +296,7 @@ async fn process_single_asset(
         }
     };
 
-    if std::fs::write(&output_path, normalized).is_err() {
+    if write_atomically(&output_path, &normalized).is_err() {
         *failed += 1;
         return;
     }
@@ -305,6 +310,10 @@ async fn download_with_retries(
     url: &str,
     config: &MediaNormalizationConfig,
 ) -> Option<Vec<u8>> {
+    if !is_allowed_remote_media_url(url) {
+        return None;
+    }
+
     let max_retries = config.max_retries.max(1);
     for attempt in 1..=max_retries {
         let response = client
@@ -340,6 +349,42 @@ async fn download_with_retries(
     }
 
     None
+}
+
+fn is_allowed_remote_media_url(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    if url.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    host == "media.rightmove.co.uk" || host.ends_with(".media.rightmove.co.uk")
+}
+
+fn cached_image_is_valid(path: &Path) -> bool {
+    path.is_file() && image::open(path).is_ok()
+}
+
+fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "asset".into());
+    let temp_path = path.with_file_name(format!("{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        std::fs::write(&temp_path, bytes)?;
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        std::fs::rename(&temp_path, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
 }
 
 fn normalize_photo(
@@ -447,7 +492,10 @@ enum AssetProcessError {
 mod tests {
     use image::{ImageBuffer, Rgb};
 
-    use super::{MediaNormalizationConfig, normalize_contain, normalize_cover};
+    use super::{
+        MediaNormalizationConfig, cached_image_is_valid, is_allowed_remote_media_url,
+        normalize_contain, normalize_cover,
+    };
 
     #[test]
     fn cover_resizes_to_exact_dimensions() {
@@ -474,6 +522,31 @@ mod tests {
         config.photo_quality = 90;
         let second = config.profile_hash();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn media_url_allowlist_rejects_local_and_non_https_urls() {
+        assert!(is_allowed_remote_media_url(
+            "https://media.rightmove.co.uk/dir/photo.jpg"
+        ));
+        assert!(!is_allowed_remote_media_url("http://127.0.0.1/probe.jpg"));
+        assert!(!is_allowed_remote_media_url(
+            "https://example.com/photo.jpg"
+        ));
+    }
+
+    #[test]
+    fn cached_image_validation_rejects_empty_files() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let empty = temp.path().join("empty.jpg");
+        std::fs::write(&empty, []).expect("write empty file");
+        assert!(!cached_image_is_valid(&empty));
+
+        let valid = temp.path().join("valid.jpg");
+        image::DynamicImage::ImageRgb8(ImageBuffer::from_pixel(4, 4, Rgb([0, 0, 0])))
+            .save(&valid)
+            .expect("write valid image");
+        assert!(cached_image_is_valid(&valid));
     }
 
     fn sample_config() -> MediaNormalizationConfig {

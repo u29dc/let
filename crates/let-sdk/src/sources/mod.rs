@@ -194,7 +194,7 @@ fn source_inputs(name: &str) -> Vec<SourceInputDescriptor> {
         "crime" => vec![SourceInputDescriptor {
             source_id: "data-police-latest",
             source_url: Some(CRIME_ZIP_URL),
-            override_envs: &["CRIME_ARCHIVE_PATH"],
+            override_envs: &["CRIME_ARCHIVE_PATH", "CRIME_ARCHIVE_URL"],
             declared_version: None,
             notes: Some("Police data monthly archive"),
         }],

@@ -67,17 +67,19 @@ fn env_or_default(key: &str, fallback: PathBuf) -> PathBuf {
 
 fn default_home() -> PathBuf {
     if let Some(let_home) = std::env::var_os("LET_HOME") {
-        return PathBuf::from(let_home);
+        return make_absolute(PathBuf::from(let_home));
     }
 
     if let Some(tools_home) = std::env::var_os("TOOLS_HOME") {
-        return PathBuf::from(tools_home).join("let");
+        return make_absolute(PathBuf::from(tools_home).join("let"));
     }
 
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".tools")
-        .join("let")
+    make_absolute(
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join(".tools")
+            .join("let"),
+    )
 }
 
 fn build_derived(resolved: &ResolvedPaths) -> DerivedPaths {

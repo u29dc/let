@@ -170,37 +170,50 @@ fn check_epc_credentials(env_file: &Path) -> HealthCheck {
         fix: json!([
             format!(
                 "echo 'EPC_API_BEARER_TOKEN=your-bearer-token' >> {}",
-                env_file.display()
+                shell_quote_path(env_file)
             ),
             format!(
                 "echo 'EPC_API_EMAIL=your-email@example.com' >> {}",
-                env_file.display()
+                shell_quote_path(env_file)
             ),
-            format!("echo 'EPC_API_KEY=your-api-key' >> {}", env_file.display()),
+            format!(
+                "echo 'EPC_API_KEY=your-api-key' >> {}",
+                shell_quote_path(env_file)
+            ),
             "prefer EPC_API_BEARER_TOKEN for Get Energy Performance Data; legacy email/key only works during the Open Data Communities transition"
         ]),
     }
 }
 
 fn check_config_file(path: &Path) -> HealthCheck {
-    if path.exists() {
-        HealthCheck {
-            id: "config".to_owned(),
-            label: "Configuration".to_owned(),
-            status: "ok".to_owned(),
-            severity: "info".to_owned(),
-            detail: path.display().to_string(),
-            fix: Value::Null,
-        }
-    } else {
-        HealthCheck {
+    if !path.exists() {
+        return HealthCheck {
             id: "config".to_owned(),
             label: "Configuration".to_owned(),
             status: "missing".to_owned(),
             severity: "blocking".to_owned(),
             detail: format!("missing {}", path.display()),
             fix: json!([format!("create {}", path.display())]),
-        }
+        };
+    }
+
+    match let_sdk::config::load_config(Some(path)) {
+        Ok(_) => HealthCheck {
+            id: "config".to_owned(),
+            label: "Configuration".to_owned(),
+            status: "ok".to_owned(),
+            severity: "info".to_owned(),
+            detail: path.display().to_string(),
+            fix: Value::Null,
+        },
+        Err(error) => HealthCheck {
+            id: "config".to_owned(),
+            label: "Configuration".to_owned(),
+            status: "error".to_owned(),
+            severity: "blocking".to_owned(),
+            detail: format!("{} ({})", path.display(), error.message),
+            fix: json!([format!("edit {}", path.display())]),
+        },
     }
 }
 
@@ -307,7 +320,10 @@ fn check_env_key(key: &str, id: &str, label: &str, env_file: &Path, example: &st
         status: "missing".to_owned(),
         severity: "degraded".to_owned(),
         detail: format!("{key} not set"),
-        fix: json!([format!("echo '{key}={example}' >> {}", env_file.display())]),
+        fix: json!([format!(
+            "echo '{key}={example}' >> {}",
+            shell_quote_path(env_file)
+        )]),
     }
 }
 
@@ -349,16 +365,26 @@ fn check_writable_dir(id: &str, label: &str, path: &Path) -> HealthCheck {
 }
 
 fn probe_write(path: &Path) -> std::io::Result<()> {
-    let probe = path.join(".let-cli-healthcheck.tmp");
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&probe)?;
-    file.write_all(b"ok")?;
-    drop(file);
+    let probe = path.join(format!(
+        ".let-cli-healthcheck-{}-{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&probe)?;
+        file.write_all(b"ok")?;
+        file.flush()
+    })();
     let _ = fs::remove_file(&probe);
-    Ok(())
+    result
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    format!("'{}'", raw.replace('\'', "'\\''"))
 }
 
 struct Summary {

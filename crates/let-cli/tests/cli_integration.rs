@@ -138,6 +138,14 @@ fn tools_detail_returns_inspect_contract() {
 #[test]
 fn tools_toon_returns_decodable_catalog() {
     let fixture = Fixture::new();
+    let json_output = fixture
+        .cmd()
+        .args(["tools"])
+        .output()
+        .expect("run tools json");
+    assert_eq!(json_output.status.code(), Some(0));
+    let json_envelope = assert_single_json_envelope(&json_output);
+
     let output = fixture
         .cmd()
         .args(["tools", "--toon"])
@@ -148,6 +156,7 @@ fn tools_toon_returns_decodable_catalog() {
     let envelope = assert_single_toon_envelope(&output);
     assert_eq!(envelope["ok"], true);
     assert_eq!(envelope["meta"]["tool"], "tools");
+    assert_eq!(envelope["data"], json_envelope["data"]);
 }
 
 #[test]
@@ -243,6 +252,46 @@ fn health_marks_schema_mismatch_as_blocking() {
 }
 
 #[test]
+fn health_marks_invalid_config_as_blocking() {
+    let fixture = Fixture::new();
+    let invalid_config = sample_config().replace(
+        r#"[[search.locations]]
+id = "REGION^87490"
+name = "Manchester"
+
+"#,
+        "",
+    );
+    fs::write(fixture.config_dir.join("let.config.toml"), invalid_config)
+        .expect("write invalid config");
+
+    let output = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(output.status.code(), Some(0));
+    let envelope = assert_single_json_envelope(&output);
+    let config = find_check(&envelope, "config");
+    assert_eq!(config["status"], "error");
+    assert_eq!(config["severity"], "blocking");
+    assert!(
+        config["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("invalid config") || detail.contains("location"))
+    );
+}
+
+#[test]
+fn health_write_probe_does_not_remove_existing_file() {
+    let fixture = Fixture::new();
+    let sentinel = fixture.data_dir.join(".let-cli-healthcheck.tmp");
+    fs::write(&sentinel, "keep me").expect("write sentinel");
+
+    let output = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(output.status.code(), Some(0));
+
+    let contents = fs::read_to_string(&sentinel).expect("read sentinel");
+    assert_eq!(contents, "keep me");
+}
+
+#[test]
 fn sources_list_and_status_use_new_surface() {
     let fixture = Fixture::new();
     let list = fixture
@@ -317,6 +366,26 @@ fn verify_reads_seeded_verifications_without_refresh() {
     let envelope = assert_single_json_envelope(&output);
     assert_eq!(envelope["meta"]["tool"], "verify");
     assert_eq!(envelope["data"]["verifications"][0]["status"], "supported");
+}
+
+#[test]
+fn verify_rejects_unknown_claims() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["verify", "170448131", "--claim", "broadbnd"])
+        .output()
+        .expect("run verify");
+    assert_eq!(output.status.code(), Some(1));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "validation_error");
+    assert!(
+        envelope["error"]["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("broadband"))
+    );
 }
 
 #[test]
@@ -442,6 +511,26 @@ fn correct_address_persists_and_clear_disables_correction() {
 }
 
 #[test]
+fn correct_epc_requires_certificate_anchor() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["correct", "epc", "170448131", "--rating", "C"])
+        .output()
+        .expect("run correct epc");
+    assert_eq!(output.status.code(), Some(1));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "validation_error");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("--lmk-key"))
+    );
+}
+
+#[test]
 fn inspect_rejects_non_rightmove_ids_with_json_envelope() {
     let fixture = Fixture::new();
     let output = fixture
@@ -473,7 +562,7 @@ fn unsupported_group_subcommands_return_json_envelope() {
 
 #[cfg(unix)]
 #[test]
-fn start_launches_tui_binary_with_runtime_paths() {
+fn start_rejects_captured_stdio_before_launching_tui() {
     use std::os::unix::fs::PermissionsExt;
 
     let fixture = Fixture::new();
@@ -497,28 +586,15 @@ fn start_launches_tui_binary_with_runtime_paths() {
         .args(["start", "--id", "170448131", "--section", "media,address"])
         .output()
         .expect("run start");
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.status.code(), Some(1));
 
     let envelope = assert_single_json_envelope(&output);
     assert_eq!(envelope["meta"]["tool"], "start");
-    assert_eq!(envelope["data"]["status"], "exited");
-    assert_eq!(envelope["data"]["id"], "170448131");
-    assert_eq!(envelope["data"]["sections"], "media,address");
-
-    let captured = fs::read_to_string(capture).expect("capture env");
-    let lines = captured.lines().collect::<Vec<_>>();
-    assert_eq!(lines[0], fixture.data_dir.to_str().expect("data dir str"));
-    assert_eq!(
-        lines[1],
-        fixture.config_dir.to_str().expect("config dir str")
+    assert_eq!(envelope["error"]["code"], "start_requires_tty");
+    assert!(
+        !capture.exists(),
+        "TUI subprocess must not run when stdio is captured"
     );
-    assert_eq!(lines[2], fixture.cache_dir.to_str().expect("cache dir str"));
-    assert_eq!(
-        lines[3],
-        fixture.sources_dir.to_str().expect("sources dir str")
-    );
-    assert_eq!(lines[4], "170448131");
-    assert_eq!(lines[5], "media,address");
 }
 
 #[test]

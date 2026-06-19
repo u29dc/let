@@ -106,7 +106,7 @@ async fn fetch_one_map(
     let output_path = listing_dir.join(&filename);
     let local = local_asset_path(listing, &filename);
 
-    if output_path.exists() {
+    if cached_image_is_valid(&output_path) {
         stats.skipped += 1;
         return Some(RemoteLocalAsset {
             remote: Some(public_url),
@@ -150,7 +150,7 @@ async fn fetch_one_map(
         });
     }
 
-    if std::fs::write(&output_path, &encoded).is_err() {
+    if write_atomically(&output_path, &encoded).is_err() {
         stats.failed += 1;
         return Some(RemoteLocalAsset {
             remote: Some(public_url),
@@ -163,6 +163,29 @@ async fn fetch_one_map(
         remote: Some(public_url),
         local: Some(local),
     })
+}
+
+fn cached_image_is_valid(path: &Path) -> bool {
+    path.is_file() && image::open(path).is_ok()
+}
+
+fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_else(|| "asset".into());
+    let temp_path = path.with_file_name(format!("{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        std::fs::write(&temp_path, bytes)?;
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        std::fs::rename(&temp_path, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
 }
 
 async fn download_with_retries(

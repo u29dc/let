@@ -413,7 +413,10 @@ impl SourceEnricher {
         let Some(connection) = self.postcodes.as_ref() else {
             return Ok(None);
         };
-        query_postcode_coordinates(connection, postcode)
+        let Some(postcode_key) = normalize_non_empty_postcode(postcode) else {
+            return Ok(None);
+        };
+        query_postcode_coordinates(connection, &postcode_key)
     }
 
     pub fn lookup_uprn_candidates(
@@ -1233,7 +1236,7 @@ mod tests {
         let enricher = SourceEnricher::open(temp.path()).expect("open enricher");
 
         let result = enricher
-            .lookup_postcode_coordinates("AA11AA")
+            .lookup_postcode_coordinates("aa1 1aa")
             .expect("query should succeed");
 
         let coords = result.expect("should find coordinates");

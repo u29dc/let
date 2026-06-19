@@ -319,7 +319,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     "infra",
                     "List all available tools or return one tool metadata record.",
                     vec![param("name", "string", false, "Tool name for detail mode.")],
-                    vec!["version", "tools", "globalFlags"],
+                    vec!["version", "globalFlags", "outputFormats", "defaultOutputFormat", "tools"],
                     TOOLS_INPUT,
                     TOOLS_OUTPUT,
                     true,
@@ -437,9 +437,9 @@ const TOOLS_INPUT: &str =
     r#"{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"}}}"#;
 const INSPECT_INPUT: &str = r#"{"type":"object","required":["idOrUrl"],"properties":{"idOrUrl":{"type":"string"},"depth":{"enum":["quick","standard","deep"]},"refresh":{"enum":["none","stale","all"]},"section":{"type":"array","items":{"enum":["rightmove","description","address","facts","claims","broadband","epc","media","verifications","assessment"]}}}}"#;
 const EVIDENCE_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"section":{"type":"array","items":{"type":"string"}}}}"#;
-const VERIFY_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"claim":{"type":"string","default":"all"},"refresh":{"enum":["none","stale","all"]}}}"#;
+const VERIFY_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"claim":{"enum":["all","address","broadband","epc","media","description"],"default":"all"},"refresh":{"enum":["none","stale","all"]}}}"#;
 const CORRECT_ADDRESS_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"address":{"type":"string"},"postcode":{"type":"string"},"lat":{"type":"number"},"lng":{"type":"number"},"note":{"type":"string"}}}"#;
-const CORRECT_EPC_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"certificateUrl":{"type":"string"},"lmkKey":{"type":"string"},"uprn":{"type":"string"},"rating":{"type":"string"},"floorAreaSqm":{"type":"number"},"note":{"type":"string"}}}"#;
+const CORRECT_EPC_INPUT: &str = r#"{"type":"object","required":["id"],"anyOf":[{"required":["certificateUrl"]},{"required":["lmkKey"]},{"required":["uprn"]}],"properties":{"id":{"type":"string"},"certificateUrl":{"type":"string"},"lmkKey":{"type":"string"},"uprn":{"type":"string"},"rating":{"type":"string"},"floorAreaSqm":{"type":"number"},"note":{"type":"string"}}}"#;
 const CORRECT_MEDIA_INPUT: &str = r#"{"type":"object","required":["id","mapLat","mapLng"],"properties":{"id":{"type":"string"},"mapLat":{"type":"number"},"mapLng":{"type":"number"},"note":{"type":"string"}}}"#;
 const CORRECT_CLEAR_INPUT: &str = r#"{"type":"object","required":["id","kind","correctionId"],"properties":{"id":{"type":"string"},"kind":{"enum":["address","epc","media"]},"correctionId":{"type":"string"}}}"#;
 const ASSESS_SAVE_INPUT: &str = r#"{"type":"object","required":["id","assessment"],"properties":{"id":{"type":"string"},"assessment":{"type":"object"}}}"#;
@@ -451,7 +451,7 @@ const SEARCH_DISCOVER_INPUT: &str = r#"{"type":"object","properties":{"region":{
 const SOURCES_BUILD_INPUT: &str = r#"{"type":"object","required":["target"],"properties":{"target":{"type":"string"},"jobs":{"type":"integer","default":3},"progress":{"enum":["auto","plain","off"]}}}"#;
 const START_INPUT: &str = r#"{"type":"object","additionalProperties":false,"properties":{"id":{"type":"string"},"section":{"type":"array","items":{"enum":["rightmove","description","address","facts","claims","broadband","epc","media","verifications","assessment"]}}}}"#;
 
-const TOOLS_OUTPUT: &str = r#"{"type":"object","required":["version","globalFlags","tools"],"properties":{"tools":{"type":"array"}}}"#;
+const TOOLS_OUTPUT: &str = r#"{"type":"object","required":["version","globalFlags","outputFormats","defaultOutputFormat","tools"],"properties":{"globalFlags":{"type":"array"},"outputFormats":{"type":"array","items":{"enum":["json","toon"]}},"defaultOutputFormat":{"enum":["json"]},"tools":{"type":"array"}}}"#;
 const HEALTH_OUTPUT: &str = r#"{"type":"object","required":["status","paths","checks","summary"],"properties":{"status":{"enum":["ready","degraded","blocked"]},"checks":{"type":"array"}}}"#;
 const CONFIG_OUTPUT: &str = r#"{"type":"object","required":["path","config"],"properties":{"path":{"type":"string"},"config":{"type":"object"}}}"#;
 const EVIDENCE_BUNDLE_OUTPUT: &str = r#"{"type":"object","required":["entityId","rightmoveId","sections","rightmove","address","facts","claims","verifications","media"],"properties":{"sections":{"type":"object"},"facts":{"type":"array"},"claims":{"type":"array"},"verifications":{"type":"array"}}}"#;

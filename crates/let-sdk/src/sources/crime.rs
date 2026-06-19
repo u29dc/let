@@ -261,12 +261,8 @@ fn resolve_archive_path() -> Result<(PathBuf, Option<tempfile::TempDir>)> {
 
     let temp = with_temp_dir()?;
     let zip_path = temp.path().join("crime-latest.zip");
-    download_file_checked(
-        CRIME_ZIP_URL,
-        &zip_path,
-        &["CRIME_ARCHIVE_SHA256"],
-        "crime archive",
-    )?;
+    let url = env::var("CRIME_ARCHIVE_URL").unwrap_or_else(|_| CRIME_ZIP_URL.to_owned());
+    download_file_checked(&url, &zip_path, &["CRIME_ARCHIVE_SHA256"], "crime archive")?;
     Ok((zip_path, Some(temp)))
 }
 
