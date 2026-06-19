@@ -1,12 +1,13 @@
 #![forbid(unsafe_code)]
 
+use image::imageops::FilterType;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
 };
-use ratatui_image::Image as PreviewImage;
+use ratatui_image::{Resize as RatatuiResize, StatefulImage as PreviewImage};
 
 use crate::{
     app::{App, FocusPane},
@@ -104,10 +105,16 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
     .style(theme.section_heading)
     .height(1);
 
+    let visible_limit = 300usize;
+    let selected_index = app.selected_index();
+    let visible_start = selected_index
+        .saturating_add(1)
+        .saturating_sub(visible_limit);
     let rows = app
         .listings()
         .iter()
-        .take(300)
+        .skip(visible_start)
+        .take(visible_limit)
         .map(|listing| {
             let id = listing
                 .portal_ids
@@ -283,7 +290,7 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
 
     let mut state = ratatui::widgets::TableState::default();
     if !app.listings().is_empty() {
-        state.select(Some(app.selected_index()));
+        state.select(Some(selected_index.saturating_sub(visible_start)));
     }
     frame.render_stateful_widget(table, area, &mut state);
 }
@@ -547,8 +554,14 @@ fn render_preview_panel(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme:
     frame.render_widget(block, area);
     frame.render_widget(Clear, inner);
 
-    if let Some(protocol) = preview.protocol {
-        frame.render_widget(PreviewImage::new(protocol), inner);
+    if preview.ready
+        && let Some(protocol) = app.preview_protocol_mut()
+    {
+        frame.render_stateful_widget(
+            PreviewImage::new().resize(RatatuiResize::Scale(Some(FilterType::CatmullRom))),
+            inner,
+            protocol,
+        );
         return;
     }
 

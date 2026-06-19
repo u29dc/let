@@ -3,6 +3,8 @@
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use let_sdk::intelligence::{EvidenceBundle, IntelligenceDb};
@@ -12,6 +14,7 @@ use let_sdk::schema::listing::{
     ListingStatus, MapViews, PortalIds, RemoteLocalAsset,
 };
 use ratatui::layout::Rect;
+use ratatui_image::thread::ThreadProtocol;
 
 use crate::preview::{PreviewAssetKind, PreviewController, PreviewTarget, PreviewView};
 use crate::theme::{HEADER_CONTRACT, HeaderContract};
@@ -98,7 +101,13 @@ pub(crate) struct App {
     palette_actions: Vec<PaletteAction>,
     palette_filtered: Vec<usize>,
     source_status: Vec<SourceStatus>,
+    source_build: Option<SourceBuildJob>,
     preview: PreviewController,
+}
+
+struct SourceBuildJob {
+    target: String,
+    receiver: Receiver<String>,
 }
 
 impl App {
@@ -130,6 +139,7 @@ impl App {
             palette_actions: Vec::new(),
             palette_filtered: Vec::new(),
             source_status: collect_source_status(),
+            source_build: None,
             preview,
         };
         app.rebuild_context_cache(true);
@@ -142,6 +152,7 @@ impl App {
 
     pub(crate) fn tick(&mut self) {
         self.preview.tick();
+        self.poll_source_build();
     }
 
     pub(crate) fn poll_timeout_ms(&self) -> u64 {
@@ -256,8 +267,12 @@ impl App {
         self.preview.sync(target, area, empty_message);
     }
 
-    pub(crate) fn preview_view(&self) -> PreviewView<'_> {
+    pub(crate) fn preview_view(&self) -> PreviewView {
         self.preview.view()
+    }
+
+    pub(crate) fn preview_protocol_mut(&mut self) -> Option<&mut ThreadProtocol> {
+        self.preview.protocol_mut()
     }
 
     pub(crate) fn on_key(&mut self, key: KeyEvent) {
@@ -586,21 +601,44 @@ impl App {
     }
 
     fn build_sources(&mut self, target: &str) {
-        let mut command = Command::new("cargo");
-        command
-            .args([
-                "run", "-q", "-p", "let-cli", "--", "sources", "build", target, "--jobs", "3",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        if let Some(job) = &self.source_build {
+            self.status = format!("sources build {} already running", job.target);
+            return;
+        }
 
-        let status = command.status();
-        self.status = match status {
-            Ok(exit) if exit.success() => format!("sources build {target} completed"),
-            Ok(exit) => format!("sources build {target} failed (exit {:?})", exit.code()),
-            Err(error) => format!("sources build {target} failed ({error})"),
+        let binary = resolve_cli_binary();
+        let target = target.to_owned();
+        let (sender, receiver) = mpsc::channel();
+        self.status = format!("sources build {target} started via {}", binary.display());
+        self.source_build = Some(SourceBuildJob {
+            target: target.clone(),
+            receiver,
+        });
+
+        thread::spawn(move || {
+            let status = run_source_build(&binary, &target);
+            let _ = sender.send(status);
+        });
+    }
+
+    fn poll_source_build(&mut self) {
+        let completed = match self.source_build.as_ref() {
+            Some(job) => match job.receiver.try_recv() {
+                Ok(status) => Some(status),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(format!(
+                    "sources build {} failed (worker disconnected)",
+                    job.target
+                )),
+            },
+            None => None,
         };
-        self.refresh_sources();
+
+        if let Some(status) = completed {
+            self.source_build = None;
+            self.status = status;
+            self.refresh_sources();
+        }
     }
 
     fn select_next(&mut self) {
@@ -1105,6 +1143,49 @@ fn collect_source_status() -> Vec<SourceStatus> {
         .collect()
 }
 
+fn resolve_cli_binary() -> PathBuf {
+    if let Ok(path) = env::var("LET_CLI_BIN") {
+        let candidate = PathBuf::from(path);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+
+    if let Ok(current_exe) = env::current_exe()
+        && let Some(parent) = current_exe.parent()
+    {
+        let sibling = parent.join(cli_binary_name());
+        if sibling.is_file() {
+            return sibling;
+        }
+
+        let unix_sibling = parent.join("let");
+        if unix_sibling.is_file() {
+            return unix_sibling;
+        }
+    }
+
+    PathBuf::from("let")
+}
+
+fn cli_binary_name() -> &'static str {
+    if cfg!(windows) { "let.exe" } else { "let" }
+}
+
+fn run_source_build(binary: &Path, target: &str) -> String {
+    let status = Command::new(binary)
+        .args(["sources", "build", target, "--jobs", "3"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match status {
+        Ok(exit) if exit.success() => format!("sources build {target} completed"),
+        Ok(exit) => format!("sources build {target} failed (exit {:?})", exit.code()),
+        Err(error) => format!("sources build {target} failed ({error})"),
+    }
+}
+
 fn fs_size_mb(path: &Path) -> Option<f64> {
     std::fs::metadata(path)
         .ok()
@@ -1194,10 +1275,103 @@ fn reveal_in_finder(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
 
-    use super::App;
-    use crate::preview::PreviewController;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use let_sdk::schema::listing::{
+        Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingStatus,
+        MapViews, PortalIds, RemoteLocalAsset,
+    };
+
+    use super::{App, ContextMediaItem, FocusPane};
+    use crate::preview::{PreviewAssetKind, PreviewController};
+
+    fn down_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)
+    }
+
+    fn up_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)
+    }
+
+    fn sample_listing(index: usize) -> Listing {
+        let rightmove_id = format!("900{index:03}");
+        Listing {
+            id: format!("rightmove:{rightmove_id}"),
+            portal_ids: PortalIds {
+                rightmove: Some(rightmove_id.clone()),
+                ..PortalIds::default()
+            },
+            uprn: None,
+            uprn_source: None,
+            uprn_confidence: None,
+            url: format!("https://www.rightmove.co.uk/properties/{rightmove_id}"),
+            location: GeoLocation {
+                lat: 51.0,
+                lng: -0.1,
+                pin_type: None,
+            },
+            postcode: "SW1A 1AA".to_owned(),
+            address: format!("{index} Test Street"),
+            region: Some("test".to_owned()),
+            google_maps_url: String::new(),
+            google_maps_street_view_url: String::new(),
+            area: AreaMetrics::default(),
+            price: 1200 + index as i64,
+            price_display: format!("£{}", 1200 + index as i64),
+            bedrooms: 2,
+            bathrooms: 1,
+            property_type: "Flat".to_owned(),
+            description: String::new(),
+            notes: Vec::new(),
+            images: Vec::new(),
+            floorplan: RemoteLocalAsset::default(),
+            epc: RemoteLocalAsset::default(),
+            map_views: MapViews::default(),
+            epc_rating: None,
+            floor_area_sqm: None,
+            epc_lodgement_date: None,
+            epc_address_match: None,
+            epc_search_url: None,
+            nearest_stations: Vec::new(),
+            gigabit_availability: None,
+            listed_date: None,
+            lettings: Lettings::default(),
+            agent: Agent::default(),
+            assessment: None,
+            assessed_at: None,
+            assessed_score: None,
+            scores: None,
+            fetched_at: "2026-06-19T00:00:00Z".to_owned(),
+            extraction_status: ExtractionStatus::Success,
+            status: ListingStatus::Active,
+            notion_page_id: None,
+        }
+    }
+
+    fn app_with_listings(count: usize) -> App {
+        let mut app = App::with_preview(PreviewController::disabled("test preview"));
+        app.listings = (0..count).map(sample_listing).collect();
+        app.selected = 0;
+        app.rebuild_context_cache(true);
+        app
+    }
+
+    fn app_with_context_media(count: usize) -> App {
+        let mut app = App::with_preview(PreviewController::disabled("test preview"));
+        app.focus = FocusPane::Context;
+        app.context_items = (0..count)
+            .map(|index| ContextMediaItem {
+                kind: format!("img_{index:02}"),
+                asset: format!("asset-{index:02}.jpg"),
+                path: PathBuf::from(format!("/tmp/asset-{index:02}.jpg")),
+                asset_kind: PreviewAssetKind::Photo,
+            })
+            .collect();
+        app.context_selected = 0;
+        app.context_offset = 0;
+        app
+    }
 
     #[test]
     fn quits_on_q_keypress() {
@@ -1213,10 +1387,40 @@ mod tests {
         app.selected = 0;
         app.rebuild_context_cache(true);
 
-        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.on_key(down_key());
         assert_eq!(app.selected_index(), 0);
-        app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        app.on_key(up_key());
         assert_eq!(app.selected_index(), 0);
+    }
+
+    #[test]
+    fn holding_down_arrow_advances_listing_selection() {
+        let mut app = app_with_listings(30);
+
+        for _ in 0..200 {
+            app.on_key(down_key());
+        }
+        assert_eq!(app.selected_index(), 29);
+
+        for _ in 0..200 {
+            app.on_key(up_key());
+        }
+        assert_eq!(app.selected_index(), 0);
+    }
+
+    #[test]
+    fn holding_down_arrow_advances_context_media_selection() {
+        let mut app = app_with_context_media(14);
+
+        for _ in 0..100 {
+            app.on_key(down_key());
+        }
+        assert_eq!(app.context_selected_index(), 13);
+
+        for _ in 0..100 {
+            app.on_key(up_key());
+        }
+        assert_eq!(app.context_selected_index(), 0);
     }
 
     #[test]

@@ -49,11 +49,14 @@ struct TerminalGuard {
 
 impl TerminalGuard {
     fn new() -> AppResult<Self> {
-        terminal::enable_raw_mode()?;
+        let mut setup = TerminalSetupGuard::default();
+        setup.enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, Hide)?;
+        setup.enter_alternate_screen(&mut stdout)?;
+        setup.hide_cursor(&mut stdout)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
+        setup.disarm();
 
         Ok(Self { terminal })
     }
@@ -63,5 +66,52 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
         let _ = execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen);
+    }
+}
+
+#[derive(Default)]
+struct TerminalSetupGuard {
+    raw_mode: bool,
+    alternate_screen: bool,
+    cursor_hidden: bool,
+}
+
+impl TerminalSetupGuard {
+    fn enable_raw_mode(&mut self) -> AppResult<()> {
+        terminal::enable_raw_mode()?;
+        self.raw_mode = true;
+        Ok(())
+    }
+
+    fn enter_alternate_screen(&mut self, stdout: &mut Stdout) -> AppResult<()> {
+        execute!(stdout, EnterAlternateScreen)?;
+        self.alternate_screen = true;
+        Ok(())
+    }
+
+    fn hide_cursor(&mut self, stdout: &mut Stdout) -> AppResult<()> {
+        execute!(stdout, Hide)?;
+        self.cursor_hidden = true;
+        Ok(())
+    }
+
+    fn disarm(&mut self) {
+        self.raw_mode = false;
+        self.alternate_screen = false;
+        self.cursor_hidden = false;
+    }
+}
+
+impl Drop for TerminalSetupGuard {
+    fn drop(&mut self) {
+        if self.cursor_hidden || self.alternate_screen {
+            let _ = execute!(io::stdout(), Show);
+        }
+        if self.alternate_screen {
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        }
+        if self.raw_mode {
+            let _ = terminal::disable_raw_mode();
+        }
     }
 }
