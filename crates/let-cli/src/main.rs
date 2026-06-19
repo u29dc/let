@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use let_sdk::intelligence::{CorrectionKind, EvidenceSection, InspectDepth, RefreshPolicy};
 use let_sdk::paths::PathOverrides;
 
-mod clipboard;
 mod commands;
 mod env;
 mod envelope;
@@ -17,7 +17,11 @@ use commands::{CommandError, CommandOutput, SharedArgs};
 use envelope::{OutputFormat, emit_result};
 
 #[derive(Debug, Parser)]
-#[command(name = "let", version, about = "Agent-native rental CLI")]
+#[command(
+    name = "let",
+    version,
+    about = "Agent-native UK rental intelligence CLI"
+)]
 struct Cli {
     /// Override data directory path.
     #[arg(long, value_name = "DIR", global = true)]
@@ -44,79 +48,77 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
-#[allow(clippy::large_enum_variant)]
 enum Command {
     /// List tools metadata or show one tool by name.
     Tools { name: Option<String> },
     /// Report runtime health checks.
     Health,
-    /// Inspect or validate configuration.
+    /// Inspect configuration.
     Config {
         #[command(subcommand)]
         command: Option<ConfigCommand>,
     },
-    /// Start the terminal UI.
-    Start,
-    /// Score listing datasets.
-    Score {
-        #[command(subcommand)]
-        command: Option<ScoreCommand>,
-    },
-    /// View listing lists or details.
-    View {
-        #[command(subcommand)]
-        command: Option<ViewCommand>,
-    },
-    /// Assessment workflow commands.
-    Assess {
-        #[command(subcommand)]
-        command: Option<AssessCommand>,
-    },
-    /// Search discovery command group.
+    /// Resolve locations or discover Rightmove listing ids.
     Search {
         #[command(subcommand)]
         command: Option<SearchCommand>,
     },
-    /// Operational maintenance command group.
-    Ops {
-        #[command(subcommand)]
-        command: Option<OpsCommand>,
+    /// Gather and persist property evidence for one Rightmove listing.
+    Inspect {
+        /// Rightmove portal id or listing URL.
+        id_or_url: String,
+        /// Evidence depth.
+        #[arg(long, value_enum, default_value_t = CliInspectDepth::Standard)]
+        depth: CliInspectDepth,
+        /// Refresh policy for network/source reads.
+        #[arg(long, value_enum, default_value_t = CliRefreshPolicy::Stale)]
+        refresh: CliRefreshPolicy,
+        /// Restrict sections; repeat or comma-separate values.
+        #[arg(long, value_enum, value_delimiter = ',')]
+        section: Vec<CliEvidenceSection>,
     },
-    /// Export commands.
-    Export {
-        #[command(subcommand)]
-        command: Option<ExportCommand>,
+    /// Read a stored evidence bundle.
+    Evidence {
+        /// Rightmove id or entity id.
+        id: String,
+        /// Restrict sections; repeat or comma-separate values.
+        #[arg(long, value_enum, value_delimiter = ',')]
+        section: Vec<CliEvidenceSection>,
     },
-    /// Build source databases.
-    Build {
-        #[command(subcommand)]
-        command: Option<BuildCommand>,
+    /// Verify extracted claims against available sources.
+    Verify {
+        /// Rightmove id or entity id.
+        id: String,
+        /// Claim type to verify.
+        #[arg(long, default_value = "all")]
+        claim: String,
+        /// Refresh policy before verification.
+        #[arg(long, value_enum, default_value_t = CliRefreshPolicy::None)]
+        refresh: CliRefreshPolicy,
     },
-    /// Fetch listings by portal ids.
-    Fetch {
-        /// Comma-separated portal ids.
-        ids: String,
-        /// Region name override for fetched listings.
+    /// Save or read AI-authored assessments.
+    Assess {
+        #[command(subcommand)]
+        command: Option<AssessCommand>,
+    },
+    /// Record manual evidence corrections without mutating source snapshots.
+    Correct {
+        #[command(subcommand)]
+        command: Option<CorrectCommand>,
+    },
+    /// Manage local enrichment source databases.
+    Sources {
+        #[command(subcommand)]
+        command: Option<SourcesCommand>,
+    },
+    /// Launch the local TUI browser.
+    Start {
+        /// Optional Rightmove id or entity id to focus when supported by the TUI.
         #[arg(long)]
-        region: Option<String>,
-        /// Optional postcode override used instead of scraped postcode.
-        #[arg(long = "override-postcode")]
-        override_postcode: Option<String>,
-        /// Optional full address override used instead of scraped address.
-        #[arg(long = "override-address")]
-        override_address: Option<String>,
-        /// Skip image and map downloads.
-        #[arg(long, default_value_t = false)]
-        skip_images: bool,
-        /// Skip EPC asset download during media stage.
-        #[arg(long, default_value_t = false)]
-        skip_epc: bool,
-        /// Override min-score threshold used before heavy media stage.
-        #[arg(long)]
-        min_score: Option<f64>,
-        /// Keep new below-threshold listings instead of dropping them.
-        #[arg(long, default_value_t = false)]
-        keep_below_min: bool,
+        id: Option<String>,
+        /// Restrict starting sections; repeat or comma-separate values.
+        #[arg(long, value_enum, value_delimiter = ',')]
+        section: Vec<CliEvidenceSection>,
     },
     /// Capture unknown top-level commands.
     #[command(external_subcommand)]
@@ -127,120 +129,7 @@ enum Command {
 enum ConfigCommand {
     /// Show parsed config.
     Show,
-    /// Validate config and report issues.
-    Validate,
     /// Capture unknown config subcommands.
-    #[command(external_subcommand)]
-    External(Vec<String>),
-}
-
-#[derive(Debug, Subcommand)]
-enum BuildCommand {
-    /// Build source databases.
-    Sources {
-        /// Source target to build.
-        #[arg(value_enum)]
-        target: BuildSourceTarget,
-        /// Parallel jobs for `all` target.
-        #[arg(long, default_value_t = 3)]
-        jobs: usize,
-        /// Progress output mode.
-        #[arg(long, value_enum, default_value_t = BuildProgressMode::Auto)]
-        progress: BuildProgressMode,
-    },
-    /// Capture unknown build subcommands.
-    #[command(external_subcommand)]
-    External(Vec<String>),
-}
-
-#[derive(Debug, Clone, Args)]
-struct ViewCopyArgs {
-    /// Copy rendered output to the clipboard.
-    #[arg(long, short = 'c', default_value_t = false)]
-    copy: bool,
-}
-
-#[derive(Debug, Subcommand)]
-enum ViewCommand {
-    /// Ranked listing list.
-    List {
-        #[arg(long, default_value_t = 20)]
-        top: usize,
-        #[arg(long)]
-        min_score: Option<f64>,
-        #[arg(long, default_value = "score")]
-        sort: String,
-        #[arg(long, default_value_t = false)]
-        asc: bool,
-        #[arg(long)]
-        region: Option<String>,
-        #[arg(long = "type")]
-        property_type: Option<String>,
-        #[command(flatten)]
-        copy: ViewCopyArgs,
-    },
-    /// Full listing details by id.
-    Detail {
-        /// Listing UUID or portal id.
-        id: String,
-        #[command(flatten)]
-        copy: ViewCopyArgs,
-    },
-    /// Capture unknown view subcommands.
-    #[command(external_subcommand)]
-    External(Vec<String>),
-}
-
-#[derive(Debug, Subcommand)]
-enum AssessCommand {
-    /// Unassessed listings ranked by score.
-    Candidates {
-        #[arg(long, default_value_t = 10)]
-        top: usize,
-        #[arg(long)]
-        region: Option<String>,
-        #[arg(long)]
-        min_score: Option<f64>,
-    },
-    /// Assessment context bundle for listing id.
-    Context {
-        /// Listing UUID or portal id.
-        id: String,
-    },
-    /// Submit assessment payload for listing id.
-    Submit {
-        /// Listing UUID or portal id.
-        id: String,
-        /// Assessment JSON payload string.
-        assessment: String,
-    },
-    /// Capture unknown assess subcommands.
-    #[command(external_subcommand)]
-    External(Vec<String>),
-}
-
-#[derive(Debug, Subcommand)]
-enum ExportCommand {
-    /// Export database snapshot to JSON.
-    Json {
-        /// Output path (defaults to data/let.db.json).
-        #[arg(long, value_name = "FILE")]
-        output: Option<PathBuf>,
-    },
-    /// Export listings to Notion.
-    Notion {
-        #[arg(long)]
-        top: Option<usize>,
-        #[arg(long)]
-        min_score: Option<f64>,
-        #[arg(long)]
-        region: Option<String>,
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        #[arg(long, default_value_t = false)]
-        force: bool,
-    },
-    /// Capture unknown export subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -269,150 +158,212 @@ enum SearchCommand {
         #[arg(long)]
         limit: Option<usize>,
     },
-    /// Compare ids with known listings.
-    Diff {
-        /// Comma-separated portal ids.
-        ids: String,
-    },
     /// Capture unknown search subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
 
 #[derive(Debug, Subcommand)]
-#[allow(clippy::large_enum_variant)]
-enum OpsCommand {
-    /// Patch listing fields and rescore.
-    Patch {
+enum AssessCommand {
+    /// Save an AI-authored assessment JSON object.
+    Save {
+        /// Rightmove id or entity id.
         id: String,
-        #[arg(long)]
-        address: Option<String>,
-        #[arg(long)]
-        postcode: Option<String>,
-        #[arg(long)]
-        lat: Option<f64>,
-        #[arg(long)]
-        lng: Option<f64>,
-        #[arg(long)]
-        region: Option<String>,
-        #[arg(long = "epc-rating")]
-        epc_rating: Option<String>,
-        #[arg(long = "floor-area")]
-        floor_area: Option<f64>,
-        #[arg(long = "gigabit-availability")]
-        gigabit_availability: Option<f64>,
-        #[arg(long = "crime-rate-per-1k")]
-        crime_rate_per_1k: Option<f64>,
-        #[arg(long = "crime-count-12m")]
-        crime_count_12m: Option<i64>,
-        #[arg(long = "crime-violent-12m")]
-        crime_violent_12m: Option<i64>,
-        #[arg(long = "crime-burglary-12m")]
-        crime_burglary_12m: Option<i64>,
-        #[arg(long = "crime-robbery-12m")]
-        crime_robbery_12m: Option<i64>,
-        #[arg(long = "imd-decile")]
-        imd_decile: Option<i64>,
-        #[arg(long = "imd-rank")]
-        imd_rank: Option<i64>,
-        #[arg(long = "imd-score")]
-        imd_score: Option<f64>,
-        #[arg(long = "lsoa-code")]
-        lsoa_code: Option<String>,
-        #[arg(long = "lsoa-name")]
-        lsoa_name: Option<String>,
-        #[arg(long = "msoa-code")]
-        msoa_code: Option<String>,
-        #[arg(long = "msoa-name")]
-        msoa_name: Option<String>,
-        #[arg(long = "income-bhc")]
-        income_bhc: Option<f64>,
-        #[arg(long = "income-ahc")]
-        income_ahc: Option<f64>,
-        #[arg(long = "social-housing-pct")]
-        social_housing_pct: Option<f64>,
-        #[arg(long)]
-        population: Option<i64>,
-        #[arg(long = "flood-risk-level")]
-        flood_risk_level: Option<String>,
-        #[arg(long = "flood-risk-source")]
-        flood_risk_source: Option<String>,
-        #[arg(long = "crime-band")]
-        crime_band: Option<String>,
-        #[arg(long = "crime-trend")]
-        crime_trend: Option<String>,
-        #[arg(long = "crime-updated-at")]
-        crime_updated_at: Option<String>,
-        #[arg(long = "patch-json")]
-        patch_json: Option<String>,
-        #[arg(long, default_value_t = false)]
-        skip_re_enrich: bool,
-        #[arg(long, default_value_t = false)]
-        skip_images: bool,
+        /// Assessment JSON object.
+        assessment: String,
     },
-    /// Prune listings by score, region, or inactive status.
-    #[command(long_about = "Prune selector rules:\n\
-                      - No selector defaults to score < 50.\n\
-                      - --region alone prunes all listings matching the region filter.\n\
-                      - --region can be combined with --min-score or --bottom.\n\
-                      - --inactive can be combined only with optional --region.\n\
-                      - --bottom and --min-score are mutually exclusive.")]
-    Prune {
-        /// Prune listings with score lower than this threshold.
-        /// When no selector flags are set, default behavior is `score < 50`.
-        #[arg(long)]
-        min_score: Option<f64>,
-        /// Prune bottom N percent by score (1-100). Cannot be combined with `--min-score`.
-        #[arg(long)]
-        bottom: Option<u8>,
-        /// Limit selection to region patterns (comma-separated).
-        /// With no other selectors, all matched regions are pruned.
-        #[arg(long)]
-        region: Option<String>,
-        /// Prune inactive listings only.
-        /// Can be combined with `--region` but not with score selectors.
-        #[arg(long, default_value_t = false)]
-        inactive: bool,
-        /// Preview selected rows without deleting.
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// Skip confirmation prompt.
-        #[arg(long, default_value_t = false)]
-        force: bool,
+    /// Read a saved assessment.
+    Get {
+        /// Rightmove id or entity id.
+        id: String,
     },
-    /// Verify listing activity status against portal pages.
-    Verify {
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        #[arg(long)]
-        region: Option<String>,
-        #[arg(long)]
-        limit: Option<usize>,
-        #[arg(long, default_value_t = 3000)]
-        delay: u64,
-    },
-    /// Capture unknown ops subcommands.
+    /// Capture unknown assess subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
 
 #[derive(Debug, Subcommand)]
-enum ScoreCommand {
-    /// Recompute scores for all listings.
-    Compute,
-    /// Explain score breakdown for a listing id.
-    Explain {
-        /// Listing UUID or portal id.
+enum CorrectCommand {
+    /// Record a manual address, postcode, or coordinate correction.
+    Address {
+        /// Rightmove id or entity id.
         id: String,
+        /// Corrected address text.
+        #[arg(long)]
+        address: Option<String>,
+        /// Corrected postcode.
+        #[arg(long)]
+        postcode: Option<String>,
+        /// Corrected latitude.
+        #[arg(long, allow_hyphen_values = true)]
+        lat: Option<f64>,
+        /// Corrected longitude.
+        #[arg(long, allow_hyphen_values = true)]
+        lng: Option<f64>,
+        /// Correction provenance note.
+        #[arg(long)]
+        note: Option<String>,
     },
-    /// Capture unknown score subcommands.
+    /// Record a manual EPC certificate correction.
+    Epc {
+        /// Rightmove id or entity id.
+        id: String,
+        /// Exact EPC certificate URL.
+        #[arg(long = "certificate-url")]
+        certificate_url: Option<String>,
+        /// EPC LMK key.
+        #[arg(long = "lmk-key")]
+        lmk_key: Option<String>,
+        /// EPC UPRN.
+        #[arg(long)]
+        uprn: Option<String>,
+        /// Corrected EPC rating.
+        #[arg(long)]
+        rating: Option<String>,
+        /// Corrected floor area in square metres.
+        #[arg(long = "floor-area-sqm")]
+        floor_area_sqm: Option<f64>,
+        /// Correction provenance note.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Record manual media correction inputs, currently map coordinates.
+    Media {
+        /// Rightmove id or entity id.
+        id: String,
+        /// Corrected map latitude.
+        #[arg(long = "map-lat", allow_hyphen_values = true)]
+        map_lat: Option<f64>,
+        /// Corrected map longitude.
+        #[arg(long = "map-lng", allow_hyphen_values = true)]
+        map_lng: Option<f64>,
+        /// Correction provenance note.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Disable an active correction without deleting its audit record.
+    Clear {
+        /// Rightmove id or entity id.
+        id: String,
+        /// Correction kind to clear.
+        #[arg(long, value_enum)]
+        kind: CliCorrectionKind,
+        /// Exact correction id to clear.
+        #[arg(long = "correction-id")]
+        correction_id: String,
+    },
+    /// Capture unknown correct subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum SourcesCommand {
+    /// List supported source databases.
+    List,
+    /// Report which source databases are present locally.
+    Status,
+    /// Build one or all source databases.
+    Build {
+        /// Source target to build.
+        #[arg(value_enum)]
+        target: CliSourceTarget,
+        /// Parallel jobs for `all`.
+        #[arg(long, default_value_t = 3)]
+        jobs: usize,
+        /// Progress output mode.
+        #[arg(long, value_enum, default_value_t = CliProgressMode::Auto)]
+        progress: CliProgressMode,
+    },
+    /// Capture unknown source subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum BuildSourceTarget {
-    List,
+enum CliInspectDepth {
+    Quick,
+    Standard,
+    Deep,
+}
+
+impl From<CliInspectDepth> for InspectDepth {
+    fn from(value: CliInspectDepth) -> Self {
+        match value {
+            CliInspectDepth::Quick => Self::Quick,
+            CliInspectDepth::Standard => Self::Standard,
+            CliInspectDepth::Deep => Self::Deep,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliRefreshPolicy {
+    None,
+    Stale,
+    All,
+}
+
+impl From<CliRefreshPolicy> for RefreshPolicy {
+    fn from(value: CliRefreshPolicy) -> Self {
+        match value {
+            CliRefreshPolicy::None => Self::None,
+            CliRefreshPolicy::Stale => Self::Stale,
+            CliRefreshPolicy::All => Self::All,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliEvidenceSection {
+    Rightmove,
+    Description,
+    Address,
+    Facts,
+    Claims,
+    Broadband,
+    Epc,
+    Media,
+    Verifications,
+    Assessment,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliCorrectionKind {
+    Address,
+    Epc,
+    Media,
+}
+
+impl From<CliCorrectionKind> for CorrectionKind {
+    fn from(value: CliCorrectionKind) -> Self {
+        match value {
+            CliCorrectionKind::Address => Self::Address,
+            CliCorrectionKind::Epc => Self::Epc,
+            CliCorrectionKind::Media => Self::Media,
+        }
+    }
+}
+
+impl From<CliEvidenceSection> for EvidenceSection {
+    fn from(value: CliEvidenceSection) -> Self {
+        match value {
+            CliEvidenceSection::Rightmove => Self::Rightmove,
+            CliEvidenceSection::Description => Self::Description,
+            CliEvidenceSection::Address => Self::Address,
+            CliEvidenceSection::Facts => Self::Facts,
+            CliEvidenceSection::Claims => Self::Claims,
+            CliEvidenceSection::Broadband => Self::Broadband,
+            CliEvidenceSection::Epc => Self::Epc,
+            CliEvidenceSection::Media => Self::Media,
+            CliEvidenceSection::Verifications => Self::Verifications,
+            CliEvidenceSection::Assessment => Self::Assessment,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSourceTarget {
     All,
     Broadband,
     Postcodes,
@@ -426,40 +377,37 @@ enum BuildSourceTarget {
     Crime,
 }
 
+impl From<CliSourceTarget> for commands::sources::SourceTarget {
+    fn from(value: CliSourceTarget) -> Self {
+        match value {
+            CliSourceTarget::All => Self::All,
+            CliSourceTarget::Broadband => Self::Broadband,
+            CliSourceTarget::Postcodes => Self::Postcodes,
+            CliSourceTarget::Deprivation => Self::Deprivation,
+            CliSourceTarget::Census => Self::Census,
+            CliSourceTarget::Population => Self::Population,
+            CliSourceTarget::Income => Self::Income,
+            CliSourceTarget::Flood => Self::Flood,
+            CliSourceTarget::Naptan => Self::Naptan,
+            CliSourceTarget::Uprn => Self::Uprn,
+            CliSourceTarget::Crime => Self::Crime,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum BuildProgressMode {
+enum CliProgressMode {
     Auto,
     Plain,
     Off,
 }
 
-impl From<BuildSourceTarget> for commands::build::SourceTarget {
-    fn from(value: BuildSourceTarget) -> Self {
-        use commands::build::SourceTarget;
+impl From<CliProgressMode> for commands::sources::ProgressMode {
+    fn from(value: CliProgressMode) -> Self {
         match value {
-            BuildSourceTarget::List => SourceTarget::List,
-            BuildSourceTarget::All => SourceTarget::All,
-            BuildSourceTarget::Broadband => SourceTarget::Broadband,
-            BuildSourceTarget::Postcodes => SourceTarget::Postcodes,
-            BuildSourceTarget::Deprivation => SourceTarget::Deprivation,
-            BuildSourceTarget::Census => SourceTarget::Census,
-            BuildSourceTarget::Population => SourceTarget::Population,
-            BuildSourceTarget::Income => SourceTarget::Income,
-            BuildSourceTarget::Flood => SourceTarget::Flood,
-            BuildSourceTarget::Naptan => SourceTarget::Naptan,
-            BuildSourceTarget::Uprn => SourceTarget::Uprn,
-            BuildSourceTarget::Crime => SourceTarget::Crime,
-        }
-    }
-}
-
-impl From<BuildProgressMode> for commands::build::ProgressMode {
-    fn from(value: BuildProgressMode) -> Self {
-        use commands::build::ProgressMode;
-        match value {
-            BuildProgressMode::Auto => ProgressMode::Auto,
-            BuildProgressMode::Plain => ProgressMode::Plain,
-            BuildProgressMode::Off => ProgressMode::Off,
+            CliProgressMode::Auto => Self::Auto,
+            CliProgressMode::Plain => Self::Plain,
+            CliProgressMode::Off => Self::Off,
         }
     }
 }
@@ -467,7 +415,6 @@ impl From<BuildProgressMode> for commands::build::ProgressMode {
 enum DispatchOutcome {
     Local {
         tool: &'static str,
-        copy_requested: bool,
         result: Result<CommandOutput, CommandError>,
     },
     Help {
@@ -477,23 +424,7 @@ enum DispatchOutcome {
 
 impl DispatchOutcome {
     fn local(tool: &'static str, result: Result<CommandOutput, CommandError>) -> Self {
-        Self::Local {
-            tool,
-            copy_requested: false,
-            result,
-        }
-    }
-
-    fn local_with_copy(
-        tool: &'static str,
-        copy_requested: bool,
-        result: Result<CommandOutput, CommandError>,
-    ) -> Self {
-        Self::Local {
-            tool,
-            copy_requested,
-            result,
-        }
+        Self::Local { tool, result }
     }
 
     fn help(path: &'static [&'static str]) -> Self {
@@ -521,14 +452,9 @@ fn main() {
     let outcome = dispatch(command, &shared);
 
     match outcome {
-        DispatchOutcome::Local {
-            tool,
-            copy_requested,
-            result,
-        } => {
+        DispatchOutcome::Local { tool, result } => {
             let elapsed = started.elapsed().as_millis() as u64;
             let format = output_format(cli.toon);
-            let result = apply_copy_request(result, copy_requested, format);
             let exit_code = emit_result(&result, tool, elapsed, format);
             process::exit(exit_code);
         }
@@ -548,91 +474,9 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             command: Some(ConfigCommand::Show),
         } => DispatchOutcome::local("config.show", commands::config::show(shared)),
         Command::Config {
-            command: Some(ConfigCommand::Validate),
-        } => DispatchOutcome::local("config.validate", commands::config::validate(shared)),
-        Command::Config {
             command: Some(ConfigCommand::External(args)),
-        } => unsupported_external("config", args),
+        } => unsupported_external_group("config", args),
         Command::Config { command: None } => DispatchOutcome::help(&["config"]),
-        Command::Start => DispatchOutcome::local("start", commands::start::run(shared)),
-        Command::Score {
-            command: Some(ScoreCommand::Compute),
-        } => DispatchOutcome::local("score.compute", commands::score::compute(shared)),
-        Command::Score {
-            command: Some(ScoreCommand::Explain { id }),
-        } => DispatchOutcome::local("score.explain", commands::score::explain(shared, id)),
-        Command::Score {
-            command: Some(ScoreCommand::External(args)),
-        } => unsupported_external("score", args),
-        Command::Score { command: None } => DispatchOutcome::help(&["score"]),
-        Command::View {
-            command:
-                Some(ViewCommand::List {
-                    top,
-                    min_score,
-                    sort,
-                    asc,
-                    region,
-                    property_type,
-                    copy,
-                }),
-        } => DispatchOutcome::local_with_copy(
-            "view.list",
-            copy.copy,
-            commands::view::list(
-                shared,
-                &commands::view::ViewListParams {
-                    top: if *top == 0 { 20 } else { *top },
-                    min_score: *min_score,
-                    sort: commands::view::SortField::parse(sort.as_str()),
-                    asc: *asc,
-                    region: region.clone(),
-                    property_type: property_type.clone(),
-                },
-            ),
-        ),
-        Command::View {
-            command: Some(ViewCommand::Detail { id, copy }),
-        } => DispatchOutcome::local_with_copy(
-            "view.detail",
-            copy.copy,
-            commands::view::detail(shared, id),
-        ),
-        Command::View {
-            command: Some(ViewCommand::External(args)),
-        } => unsupported_external("view", args),
-        Command::View { command: None } => DispatchOutcome::help(&["view"]),
-        Command::Assess {
-            command:
-                Some(AssessCommand::Candidates {
-                    top,
-                    region,
-                    min_score,
-                }),
-        } => DispatchOutcome::local(
-            "assess.candidates",
-            commands::assess::candidates(
-                shared,
-                &commands::assess::CandidatesParams {
-                    top: if *top == 0 { 10 } else { *top },
-                    region: region.clone(),
-                    min_score: *min_score,
-                },
-            ),
-        ),
-        Command::Assess {
-            command: Some(AssessCommand::Context { id }),
-        } => DispatchOutcome::local("assess.context", commands::assess::context(shared, id)),
-        Command::Assess {
-            command: Some(AssessCommand::Submit { id, assessment }),
-        } => DispatchOutcome::local(
-            "assess.submit",
-            commands::assess::submit(shared, id, assessment),
-        ),
-        Command::Assess {
-            command: Some(AssessCommand::External(args)),
-        } => unsupported_external("assess", args),
-        Command::Assess { command: None } => DispatchOutcome::help(&["assess"]),
         Command::Search {
             command: Some(SearchCommand::Resolve { location }),
         } => DispatchOutcome::local("search.resolve", commands::search::resolve(location)),
@@ -662,236 +506,215 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                 },
             ),
         ),
-        Command::Search {
-            command: Some(SearchCommand::Diff { ids }),
-        } => DispatchOutcome::local("search.diff", commands::search::diff(shared, ids)),
+        Command::Search { command: None } => DispatchOutcome::help(&["search"]),
         Command::Search {
             command: Some(SearchCommand::External(args)),
-        } => unsupported_external("search", args),
-        Command::Search { command: None } => DispatchOutcome::help(&["search"]),
-        Command::Ops {
+        } => unsupported_external_group("search", args),
+        Command::Inspect {
+            id_or_url,
+            depth,
+            refresh,
+            section,
+        } => DispatchOutcome::local(
+            "inspect",
+            commands::inspect::run(
+                shared,
+                commands::inspect::InspectCommandParams {
+                    id_or_url: id_or_url.clone(),
+                    depth: (*depth).into(),
+                    refresh: (*refresh).into(),
+                    sections: map_sections(section),
+                },
+            ),
+        ),
+        Command::Evidence { id, section } => DispatchOutcome::local(
+            "evidence",
+            commands::evidence::run(
+                shared,
+                commands::evidence::EvidenceCommandParams {
+                    id: id.clone(),
+                    sections: map_sections(section),
+                },
+            ),
+        ),
+        Command::Verify { id, claim, refresh } => DispatchOutcome::local(
+            "verify",
+            commands::verify::run(
+                shared,
+                commands::verify::VerifyCommandParams {
+                    id: id.clone(),
+                    claim: claim.clone(),
+                    refresh: (*refresh).into(),
+                },
+            ),
+        ),
+        Command::Assess {
+            command: Some(AssessCommand::Save { id, assessment }),
+        } => DispatchOutcome::local(
+            "assess.save",
+            commands::agent_assess::save(shared, id, assessment),
+        ),
+        Command::Assess {
+            command: Some(AssessCommand::Get { id }),
+        } => DispatchOutcome::local("assess.get", commands::agent_assess::get(shared, id)),
+        Command::Assess { command: None } => DispatchOutcome::help(&["assess"]),
+        Command::Assess {
+            command: Some(AssessCommand::External(args)),
+        } => unsupported_external_group("assess", args),
+        Command::Correct {
             command:
-                Some(OpsCommand::Patch {
+                Some(CorrectCommand::Address {
                     id,
                     address,
                     postcode,
                     lat,
                     lng,
-                    region,
-                    epc_rating,
-                    floor_area,
-                    gigabit_availability,
-                    crime_rate_per_1k,
-                    crime_count_12m,
-                    crime_violent_12m,
-                    crime_burglary_12m,
-                    crime_robbery_12m,
-                    imd_decile,
-                    imd_rank,
-                    imd_score,
-                    lsoa_code,
-                    lsoa_name,
-                    msoa_code,
-                    msoa_name,
-                    income_bhc,
-                    income_ahc,
-                    social_housing_pct,
-                    population,
-                    flood_risk_level,
-                    flood_risk_source,
-                    crime_band,
-                    crime_trend,
-                    crime_updated_at,
-                    patch_json,
-                    skip_re_enrich,
-                    skip_images,
+                    note,
                 }),
         } => DispatchOutcome::local(
-            "ops.patch",
-            commands::ops::patch(
+            "correct.address",
+            commands::correct::address(
                 shared,
-                &commands::ops::PatchParams {
+                commands::correct::AddressCorrectionParams {
                     id: id.clone(),
                     address: address.clone(),
                     postcode: postcode.clone(),
                     lat: *lat,
                     lng: *lng,
-                    region: region.clone(),
-                    epc_rating: epc_rating.clone(),
-                    floor_area: *floor_area,
-                    gigabit_availability: *gigabit_availability,
-                    crime_rate_per_1k: *crime_rate_per_1k,
-                    crime_count_12m: *crime_count_12m,
-                    crime_violent_12m: *crime_violent_12m,
-                    crime_burglary_12m: *crime_burglary_12m,
-                    crime_robbery_12m: *crime_robbery_12m,
-                    imd_decile: *imd_decile,
-                    imd_rank: *imd_rank,
-                    imd_score: *imd_score,
-                    lsoa_code: lsoa_code.clone(),
-                    lsoa_name: lsoa_name.clone(),
-                    msoa_code: msoa_code.clone(),
-                    msoa_name: msoa_name.clone(),
-                    income_bhc: *income_bhc,
-                    income_ahc: *income_ahc,
-                    social_housing_pct: *social_housing_pct,
-                    population: *population,
-                    flood_risk_level: flood_risk_level.clone(),
-                    flood_risk_source: flood_risk_source.clone(),
-                    crime_band: crime_band.clone(),
-                    crime_trend: crime_trend.clone(),
-                    crime_updated_at: crime_updated_at.clone(),
-                    patch_json: patch_json.clone(),
-                    skip_re_enrich: *skip_re_enrich,
-                    skip_images: *skip_images,
+                    note: note.clone(),
                 },
             ),
         ),
-        Command::Ops {
+        Command::Correct {
             command:
-                Some(OpsCommand::Prune {
-                    min_score,
-                    bottom,
-                    region,
-                    inactive,
-                    dry_run,
-                    force,
+                Some(CorrectCommand::Epc {
+                    id,
+                    certificate_url,
+                    lmk_key,
+                    uprn,
+                    rating,
+                    floor_area_sqm,
+                    note,
                 }),
         } => DispatchOutcome::local(
-            "ops.prune",
-            commands::ops::prune(
+            "correct.epc",
+            commands::correct::epc(
                 shared,
-                &commands::ops::PruneParams {
-                    min_score: *min_score,
-                    bottom_percent: *bottom,
-                    region: region.clone(),
-                    inactive_only: *inactive,
-                    dry_run: *dry_run,
-                    force: *force,
+                commands::correct::EpcCorrectionParams {
+                    id: id.clone(),
+                    certificate_url: certificate_url.clone(),
+                    lmk_key: lmk_key.clone(),
+                    uprn: uprn.clone(),
+                    rating: rating.clone(),
+                    floor_area_sqm: *floor_area_sqm,
+                    note: note.clone(),
                 },
             ),
         ),
-        Command::Ops {
+        Command::Correct {
             command:
-                Some(OpsCommand::Verify {
-                    dry_run,
-                    region,
-                    limit,
-                    delay,
+                Some(CorrectCommand::Media {
+                    id,
+                    map_lat,
+                    map_lng,
+                    note,
                 }),
         } => DispatchOutcome::local(
-            "ops.verify",
-            commands::ops::verify(
+            "correct.media",
+            commands::correct::media(
                 shared,
-                &commands::ops::VerifyParams {
-                    dry_run: *dry_run,
-                    region: region.clone(),
-                    limit: *limit,
-                    delay_ms: *delay,
+                commands::correct::MediaCorrectionParams {
+                    id: id.clone(),
+                    map_lat: *map_lat,
+                    map_lng: *map_lng,
+                    note: note.clone(),
                 },
             ),
         ),
-        Command::Ops {
-            command: Some(OpsCommand::External(args)),
-        } => unsupported_external("ops", args),
-        Command::Ops { command: None } => DispatchOutcome::help(&["ops"]),
-        Command::Export {
-            command: Some(ExportCommand::Json { output }),
-        } => DispatchOutcome::local(
-            "export.json",
-            commands::export::export_json(shared, output.clone()),
-        ),
-        Command::Export {
+        Command::Correct {
             command:
-                Some(ExportCommand::Notion {
-                    top,
-                    min_score,
-                    region,
-                    dry_run,
-                    force,
+                Some(CorrectCommand::Clear {
+                    id,
+                    kind,
+                    correction_id,
                 }),
         } => DispatchOutcome::local(
-            "export.notion",
-            commands::export::export_notion(
+            "correct.clear",
+            commands::correct::clear(
                 shared,
-                &commands::export::NotionParams {
-                    top: *top,
-                    min_score: *min_score,
-                    region: region.clone(),
-                    dry_run: *dry_run,
-                    force: *force,
+                commands::correct::ClearCorrectionParams {
+                    id: id.clone(),
+                    kind: (*kind).into(),
+                    correction_id: correction_id.clone(),
                 },
             ),
         ),
-        Command::Export {
-            command: Some(ExportCommand::External(args)),
-        } => unsupported_external("export", args),
-        Command::Export { command: None } => DispatchOutcome::help(&["export"]),
-        Command::Build {
+        Command::Correct { command: None } => DispatchOutcome::help(&["correct"]),
+        Command::Correct {
+            command: Some(CorrectCommand::External(args)),
+        } => unsupported_external_group("correct", args),
+        Command::Sources {
+            command: Some(SourcesCommand::List),
+        } => DispatchOutcome::local("sources.list", commands::sources::list()),
+        Command::Sources {
+            command: Some(SourcesCommand::Status),
+        } => DispatchOutcome::local("sources.status", commands::sources::status(shared)),
+        Command::Sources {
             command:
-                Some(BuildCommand::Sources {
+                Some(SourcesCommand::Build {
                     target,
                     jobs,
                     progress,
                 }),
         } => DispatchOutcome::local(
-            "build.sources",
-            commands::build::run_sources((*target).into(), *jobs, shared, (*progress).into()),
+            "sources.build",
+            commands::sources::build(shared, (*target).into(), *jobs, (*progress).into()),
         ),
-        Command::Build {
-            command: Some(BuildCommand::External(args)),
-        } => unsupported_external("build", args),
-        Command::Build { command: None } => DispatchOutcome::help(&["build"]),
-        Command::Fetch {
-            ids,
-            region,
-            override_postcode,
-            override_address,
-            skip_images,
-            skip_epc,
-            min_score,
-            keep_below_min,
-        } => DispatchOutcome::local(
-            "fetch",
-            commands::fetch::run(
+        Command::Sources { command: None } => DispatchOutcome::help(&["sources"]),
+        Command::Sources {
+            command: Some(SourcesCommand::External(args)),
+        } => unsupported_external_group("sources", args),
+        Command::Start { id, section } => DispatchOutcome::local(
+            "start",
+            commands::start::run(
                 shared,
-                &commands::fetch::FetchParams {
-                    ids: ids.clone(),
-                    region: region.clone(),
-                    override_postcode: override_postcode.clone(),
-                    override_address: override_address.clone(),
-                    skip_images: *skip_images,
-                    skip_epc: *skip_epc,
-                    min_score: *min_score,
-                    keep_below_min: *keep_below_min,
+                commands::start::StartParams {
+                    id: id.clone(),
+                    sections: map_sections(section),
                 },
             ),
         ),
-        Command::External(args) => {
-            if args.is_empty() {
-                DispatchOutcome::local(
-                    "external",
-                    Err(CommandError::runtime(
-                        "VALIDATION_ERROR",
-                        "missing command",
-                        "run `let tools` to list available commands",
-                    )),
-                )
-            } else {
-                DispatchOutcome::local(
-                    "external",
-                    Err(CommandError::runtime(
-                        "UNSUPPORTED_COMMAND",
-                        format!("unsupported command: {}", args.join(" ")),
-                        "run `let tools` to list available commands",
-                    )),
-                )
-            }
-        }
+        Command::External(args) => unsupported_external(args),
     }
 }
 
-fn unsupported_external(group: &str, args: &[String]) -> DispatchOutcome {
+fn map_sections(values: &[CliEvidenceSection]) -> Vec<EvidenceSection> {
+    values.iter().copied().map(Into::into).collect()
+}
+
+fn unsupported_external(args: &[String]) -> DispatchOutcome {
+    if args.is_empty() {
+        return DispatchOutcome::local(
+            "external",
+            Err(CommandError::runtime(
+                "VALIDATION_ERROR",
+                "missing command",
+                "run `let tools` to list available commands",
+            )),
+        );
+    }
+
+    DispatchOutcome::local(
+        "external",
+        Err(CommandError::runtime(
+            "UNSUPPORTED_COMMAND",
+            format!("unsupported command: {}", args.join(" ")),
+            "run `let tools` to list available commands",
+        )),
+    )
+}
+
+fn unsupported_external_group(group: &str, args: &[String]) -> DispatchOutcome {
     let detail = if args.is_empty() {
         format!("{group} command is not supported")
     } else {
@@ -914,46 +737,6 @@ fn output_format(toon_requested: bool) -> OutputFormat {
     } else {
         OutputFormat::Json
     }
-}
-
-fn apply_copy_request(
-    result: Result<CommandOutput, CommandError>,
-    copy_requested: bool,
-    format: OutputFormat,
-) -> Result<CommandOutput, CommandError> {
-    if !copy_requested {
-        return result;
-    }
-
-    let payload = match &result {
-        Ok(output) => render_copy_payload(output, format)?,
-        Err(err) => return Err(err.clone()),
-    };
-
-    clipboard::copy_text(&payload)?;
-    result
-}
-
-fn render_copy_payload(
-    output: &CommandOutput,
-    format: OutputFormat,
-) -> Result<String, CommandError> {
-    let payload = output.clipboard.json.as_ref().unwrap_or(&output.data);
-    match format {
-        OutputFormat::Json => {
-            serde_json::to_string_pretty(payload).map_err(|error| error.to_string())
-        }
-        OutputFormat::Toon => {
-            toon_format::encode_default(payload).map_err(|error| error.to_string())
-        }
-    }
-    .map_err(|error| {
-        CommandError::runtime(
-            "INTERNAL_ERROR",
-            format!("failed to serialize command payload for clipboard copy: {error}"),
-            "report this bug",
-        )
-    })
 }
 
 fn print_help(path: &[&str]) -> i32 {
@@ -979,7 +762,7 @@ mod tests {
 
     #[test]
     fn unsupported_external_returns_error() {
-        let result = unsupported_external("search", &[String::from("legacy-subcommand")]);
+        let result = unsupported_external(&[String::from("legacy-subcommand")]);
         match result {
             super::DispatchOutcome::Local { result, .. } => {
                 let error = result.expect_err("expected unsupported command error");

@@ -22,6 +22,7 @@ pub fn show(shared: &SharedArgs) -> CommandResult {
     Ok(CommandOutput::new(data).with_count(location_count))
 }
 
+#[allow(dead_code)]
 pub fn validate(shared: &SharedArgs) -> CommandResult {
     let path = resolve_paths(Some(shared.overrides.clone()))
         .derived

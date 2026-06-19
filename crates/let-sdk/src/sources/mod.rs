@@ -56,7 +56,7 @@ pub fn build_source(sources_dir: &Path, name: &str) -> Result<SourceBuildReport>
         return Err(LetError::new(
             ErrorCode::InvalidInput,
             format!("unknown source: {name}"),
-            "run `let build sources list` for supported source names",
+            "run `let sources list` for supported source names",
         ));
     }
 

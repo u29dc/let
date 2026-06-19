@@ -1,29 +1,28 @@
 ---
 name: let
 description: >-
-    Autonomous UK rental property search workflow powered by the `let` CLI toolbelt.
-    Use this skill to discover Rightmove listings, enrich and score them, assess top
-    candidates (photos/maps + neighborhood research), produce shortlists and
+    Autonomous UK rental property intelligence workflow powered by the `let` CLI toolbelt.
+    Use this skill to discover Rightmove listings, gather evidence bundles, verify
+    claims, assess top candidates (photos/maps + neighborhood research), produce shortlists and
     region comparisons for a family's preferences, and coordinate viewing admin
     when the user explicitly allows email or calendar access.
 argument-hint: [search request or location]
 compatibility: >-
     Designed for Claude Code with Bash access. Requires an already-installed
     CLI binary at $HOME/.tools/let/let. Network
-    access for Rightmove; optional EPC/Mapbox/Notion keys enable richer
-    enrichment and exports.
+    access for Rightmove; optional EPC and Mapbox keys enable richer evidence.
 allowed-tools: Bash Read Write WebSearch WebFetch
 ---
 
 # Let
 
-Autonomous UK rental property search, triage, and neighborhood assessment via the `let` CLI.
+Autonomous UK rental property discovery, evidence gathering, verification, and neighborhood assessment via the `let` CLI.
 
 ## How to Use
 
 - Use when the user wants new rental listings, a region comparison, or a deeper review of shortlisted homes.
 - Use when the user wants an existing `let` setup initialized, repaired, or explained.
-- Use when the user wants listing assessments written back into the local `let` database.
+- Use when the user wants listing assessments written back into the local `let` intelligence database.
 - Use when the user wants viewing admin tied to a listing, such as checking confirmation emails or creating calendar events.
 
 ## Invocation
@@ -45,11 +44,11 @@ Hard rules:
 - Read `$HOME/.tools/let/data/let.context.md` first. It contains the human context behind the config.
 - Treat config as the baseline. Use one-off CLI overrides for ad-hoc searches; do not edit config unless explicitly asked.
 - Record every override in the final report.
-- Treat scores as advisory. Use photos, floorplans, maps, and neighborhood research to override shallow algorithmic conclusions.
-- Use repeated small loops: discover, diff, fetch 5-10, triage, assess, repeat.
+- Treat deterministic scores as optional context only. The AI agent owns the final assessment.
+- Use repeated small loops: discover ids, inspect selected listings, read evidence, verify claims, assess, repeat.
 - Continue on partial failures. Missing listings, missing media, or missing enrichment are normal.
-- Never guess cache paths. Use paths returned by `assess context`.
-- Search/fetch subagents run sequentially by location because they can contend on the same DB and cache.
+- Never guess cache paths. Use URLs and local paths returned in evidence bundles.
+- Search/inspect subagents run sequentially by location when they can contend on the same DB and cache.
 - Assessment-only subagents may run in parallel only when each subagent owns disjoint listing IDs.
 - Treat inbox and calendar access as opt-in and sensitive. Use `gog` only when the user explicitly asks for or clearly allows email or calendar work.
 
@@ -58,6 +57,7 @@ Hard rules:
 - `$HOME/.tools/let/data/let.context.md`: prose summary of the family's situation, priorities, tradeoffs, and what "100/100" means.
 - `$HOME/.tools/let/data/let.config.toml`: baseline search config.
 - `$HOME/.tools/let/data/.env`: EPC, Mapbox, and optional Notion credentials.
+- `$HOME/.tools/let/data/let.db`: intelligence DB containing entities, source snapshots, facts, claims, verifications, evidence bundles, and assessments.
 - `.claude/skills/let/templates/let.config.toml`: config template for first-run setup.
 - `$HOME/.tools/let/sources/`: local enrichment databases for broadband, IMD, crime, flood, census, and income.
 
@@ -117,15 +117,15 @@ Config notes:
 - Core sections: `[search]`, `[search.filters]`, `[fetch]`, `[scoring]`, `[scoring.regionPriority]`.
 - `search.useApi` controls only Rightmove discovery transport:
   `true` = API first with HTML fallback, `false` = HTML-only discovery.
-- `search.useApi` does not affect EPC enrichment. EPC API usage is still controlled by credentials and `fetch --skip-epc`.
+- `search.useApi` does not affect EPC evidence. EPC API usage is controlled by credentials and the requested evidence sections.
 - Region priority scores are `0-100`. Higher values increase ranking preference for that area.
 
 ### API Keys
 
 - `EPC_API_BEARER_TOKEN` in `$HOME/.tools/let/data/.env`: preferred for live EPC rating, floor area, and EPC-derived UPRN enrichment on the new Get Energy Performance Data service.
 - Legacy transition fallback: `EPC_API_EMAIL` and `EPC_API_KEY` still work only while Open Data Communities remains available.
-- `MAPBOX_ACCESS_TOKEN`: optional, enables cached satellite and street map views.
-- `NOTION_API_KEY` and `NOTION_DATABASE_ID`: optional, only required for Notion export.
+- `MAPBOX_ACCESS_TOKEN`: optional, enables external address geocoding.
+- `NOTION_API_KEY` and `NOTION_DATABASE_ID`: optional and not part of the current core assessment loop.
 - If credentials are missing, continue unless the requested task specifically depends on them.
 
 ### Source Databases
@@ -135,7 +135,7 @@ Config notes:
 - To build sources locally:
 
 ```bash
-"$HOME/.tools/let/let" build sources all --jobs 3
+"$HOME/.tools/let/let" sources build all --jobs 3
 ```
 
 - Optional integrity guard: set matching `*_SHA256` env vars (for example `POSTCODES_ZIP_SHA256`) before running source builds to enforce SHA-256 verification.
@@ -207,83 +207,80 @@ Run `"$HOME/.tools/let/let" tools` again whenever command shape or parameters ar
 
 ```bash
 "$HOME/.tools/let/let" search discover
-"$HOME/.tools/let/let" search diff <comma-separated-ids>
 ```
 
 Rules:
 
-- Treat new listings as portal IDs not yet present in the SQLite DB.
-- Use `idsByLocation` from `search discover` to batch `fetch` calls by region.
+- Treat discovered listings as Rightmove portal IDs.
+- Use `idsByLocation` from `search discover` to choose focused inspection batches.
 - If `truncated` is true or a location reports a `truncationReason`, treat that region as partial coverage and say so.
-- If the DB is empty, `diff.new` may be almost everything. Start with a small calibration batch.
 - Prefer repeated small loops over one giant run.
 
-Example region-batched fetch:
+### Phase 2: Inspect
 
 ```bash
-"$HOME/.tools/let/let" fetch <sheffield-ids> --region Sheffield
-"$HOME/.tools/let/let" fetch <stamford-ids> --region Stamford
-```
-
-### Phase 2: Acquire
-
-```bash
-"$HOME/.tools/let/let" fetch <new-ids>
-"$HOME/.tools/let/let" fetch <single-id> --override-postcode "SY2 5WP" --override-address "Flat 2, Example House, SY2 5WP"
-"$HOME/.tools/let/let" fetch <new-ids> --min-score 70
+"$HOME/.tools/let/let" inspect <rightmove-id> --depth standard
+"$HOME/.tools/let/let" inspect <rightmove-id> --depth deep --section rightmove,address,broadband,epc,media,verifications
 ```
 
 Rules:
 
-- Start with batches of 5-10 IDs.
-- Increase to 10-15 only once the run is stable.
+- Start with 2-5 promising IDs.
+- Use `--depth quick` for fast Rightmove-only triage, `standard` for normal evidence, and `deep` when EPC or extra verification is warranted.
 - If rate limited, increase delay and retry once. Do not spam.
 - Treat removed listings as normal; skip after one clear failure.
-- `--override-postcode` and `--override-address` are optional and only for known-bad source data.
-- Use fetch overrides with exactly one listing ID.
-- Fetch overrides are early-stage corrections: downstream enrichment and scoring use the overridden values.
-- `fetch` runs in stages: light fetch/enrich/score first, then media download for listings above the min-score threshold.
-- Default threshold comes from config `fetch.minScore` (default 70); use `--min-score` to override for one run.
-- Single-ID fetch runs full media stage by default unless `--skip-images` is set.
-- Low-scoring new listings are dropped by default when thresholding is active; use `--keep-below-min` to keep them.
-- `--skip-images` skips heavy media stage (images/floorplans/maps), not core fetch/enrichment/scoring.
+- Missing source DBs, EPC credentials, or Mapbox token should degrade only the relevant evidence sections.
 
-### Phase 3: Triage
+### Phase 3: Read and Verify
 
 ```bash
-"$HOME/.tools/let/let" view list --top 30
+"$HOME/.tools/let/let" evidence <rightmove-id>
+"$HOME/.tools/let/let" verify <rightmove-id> --claim broadband
 ```
 
-Suggested triage tiers:
+Rules:
 
-- `>= 80`: must assess
-- `65-79`: assess if time permits
-- `< 65`: usually skip unless a specific feature is compelling
+- Use `sections` to understand confidence and missing evidence.
+- If a description mentions gigabit or full fibre, read broadband verification before treating the claim as true.
+- Treat `supported`, `contradicted`, `unknown`, and `insufficientEvidence` distinctly.
+- Prefer 2-5 deep assessments over 30 shallow reviews.
 
-Prefer 2-5 deep assessments over 30 shallow reviews.
+### Phase 3A: Correct Known Source Errors
+
+Use corrections when Rightmove or another source is wrong and the user or agent has better evidence.
+
+```bash
+"$HOME/.tools/let/let" correct address <rightmove-id> --postcode '<postcode>' --note '<why this is trusted>'
+"$HOME/.tools/let/let" correct address <rightmove-id> --address '<exact address>' --lat <lat> --lng <lng> --note '<why this is trusted>'
+"$HOME/.tools/let/let" correct epc <rightmove-id> --lmk-key '<key>' --rating C --note '<matched EPC source>'
+"$HOME/.tools/let/let" correct media <rightmove-id> --map-lat <lat> --map-lng <lng> --note '<manual map pin>'
+"$HOME/.tools/let/let" correct clear <rightmove-id> --kind address --correction-id <id>
+```
+
+Rules:
+
+- Corrections are append-only evidence records. They do not overwrite Rightmove snapshots.
+- Use `correct address` for wrong postcodes, vague display addresses, incorrect map pins, or multiple-flat ambiguity when a better address/postcode/coordinate is known.
+- Use `correct epc` when the exact certificate URL, LMK key, UPRN, rating, or floor area is known.
+- Use `correct media` for map-coordinate corrections that should regenerate map media.
+- After any correction, run the suggested `nextCommands` from the correction response or run `inspect <id> --refresh all --section <affected-sections>`.
+- Re-read `evidence <id>` and confirm the `corrections` array appears before relying on corrected conclusions.
 
 ### Phase 4: Assess
 
-Queue and context:
+Save the agent's assessment:
 
 ```bash
-"$HOME/.tools/let/let" assess candidates
-"$HOME/.tools/let/let" assess context <id>
-```
-
-Submission:
-
-```bash
-"$HOME/.tools/let/let" assess submit <id> '<assessment-json>'
+"$HOME/.tools/let/let" assess save <rightmove-id> '<assessment-json>'
+"$HOME/.tools/let/let" assess get <rightmove-id>
 ```
 
 Assessment rules:
 
-- Use the assessment schema returned by the CLI as the submission contract.
-- Use `media.*` paths from `assess context`; do not guess directories.
-- Invalid submissions fail with `VALIDATION_ERROR`; use `error.details` to fix the payload and retry.
+- Store a JSON object. The CLI does not enforce a scoring rubric.
+- Include recommendation, reasoning, evidence gaps, red flags, and any viewing priority when useful.
+- Invalid non-object submissions fail with `VALIDATION_ERROR`.
 - Keep conclusions evidence-based.
-- Explain any score adjustment in 1-2 sentences.
 - If media is missing, say so and lower confidence rather than guessing.
 
 What to evaluate:
@@ -299,9 +296,9 @@ What to evaluate:
 Useful commands:
 
 ```bash
-"$HOME/.tools/let/let" view list --top 20
-"$HOME/.tools/let/let" view detail <id>
-"$HOME/.tools/let/let" score explain <id>
+"$HOME/.tools/let/let" evidence <rightmove-id>
+"$HOME/.tools/let/let" verify <rightmove-id> --claim all
+"$HOME/.tools/let/let" assess get <rightmove-id>
 ```
 
 Report structure:
@@ -315,13 +312,13 @@ Report structure:
 Recommended comparison columns:
 
 ```text
-| # | Address | pcm | Beds | Type | Score | Crime/1k | IMD | EPC | Broadband | Station | Link |
+| # | Address | pcm | Beds | Type | EPC | Broadband | Crime/1k | IMD | Evidence status | Link |
 ```
 
 If comparing regions, include:
 
 - sample size per region
-- average score by region
+- average evidence quality and fit by region
 - one or two best-value examples
 - a short verdict per region covering fit and tradeoffs
 
@@ -330,39 +327,18 @@ If comparing regions, include:
 Use these to verify and prune the working set:
 
 ```bash
-"$HOME/.tools/let/let" ops verify --dry-run --limit 20
-"$HOME/.tools/let/let" ops prune --dry-run
-"$HOME/.tools/let/let" ops patch <id> --patch-json '{"crimeRatePer1k": 12.3}'
-"$HOME/.tools/let/let" score compute
+"$HOME/.tools/let/let" health
+"$HOME/.tools/let/let" sources status
+"$HOME/.tools/let/let" inspect <rightmove-id> --refresh all
+"$HOME/.tools/let/let" start --id <rightmove-id>
 ```
 
 Verification notes:
 
-- Treat `ops verify` rows with `status: "error"` as unresolved checks, not active listings.
-- Only `status: "inactive"` rows are safe prune/deactivate candidates without another fetch.
-
-Prune selector rules:
-
-- No selector defaults to `score < 50`.
-- `--region` alone prunes all listings in that region.
-- `--region` can be combined with `--min-score` or `--bottom`.
-- `--inactive` can be combined only with optional `--region`.
-- `--bottom` and `--min-score` are mutually exclusive.
-
-Patch and rescore rules:
-
-- Use `ops patch` for post-run data correction when enrichment is missing or wrong (for example broadband/crime/IMD/flood/income fields).
-- Prefer `--patch-json` for structured updates; if validation fails, read `error.details` and retry with corrected field paths/values.
-- Run `score compute` after patching batches to rescore stored listings without refetching.
-
-Examples:
-
-```bash
-"$HOME/.tools/let/let" ops prune --dry-run
-"$HOME/.tools/let/let" ops prune --region Sheffield --dry-run
-"$HOME/.tools/let/let" ops prune --region Sheffield --min-score 60 --dry-run
-"$HOME/.tools/let/let" ops prune --inactive --region Sheffield --dry-run
-```
+- Use `--refresh all` when a listing's external evidence may have changed.
+- Rebuild sources when `health` or `sources status` reports missing DBs that matter to the current decision.
+- Preserve evidence gaps in the final report instead of patching unverified values into the DB.
+- Use `start` for local browsing only after evidence has been inspected; it launches the TUI against the existing intelligence DB and cache.
 
 ## Viewing Coordination With `gog`
 
@@ -374,7 +350,7 @@ Rules:
 - Never hardcode account emails, calendar IDs, or private naming conventions into this skill.
 - If the user wants a calendar event and has not named a calendar, ask which calendar to use.
 - If the user wants you to match an existing viewing-event convention, inspect nearby events on the chosen calendar first.
-- Verify the listing identity before touching Gmail or Calendar. Prefer the Rightmove portal ID; if the request is ambiguous, resolve it from `let view detail <id>` or the recent email context.
+- Verify the listing identity before touching Gmail or Calendar. Prefer the Rightmove portal ID; if the request is ambiguous, resolve it from `let evidence <id>` or the recent email context.
 
 Suggested workflow:
 
@@ -407,7 +383,7 @@ Rightmove: <listing-url>
 Listing: <portal-id> | <property type> | <beds> bed | <baths> bath | <rent> pcm | Available <date-or-now>
 Agent: <agent name> | <agent phone>
 Area: <postcode> | <nearest station> <distance> | EPC <rating> | <floor area> sqm | Gigabit <pct>% | Crime <rate>/1k | IMD <decile> | Flood <level> | Social housing <pct>
-Stored assessment: <recommendation> | Family fit <familySuitability> | Assessed <assessedScore> (algo <algoScore>, adj <scoreAdjustment>)
+Stored assessment: <recommendation> | Confidence <confidence> | Priority <priority>
 Booking: Confirmed by <contact name> for <weekday> <D Mon YYYY> at <time>
 Exact EPC: <full address> | Cert <certificate-number> | Valid until <date>
 Summary: <one-line verdict>
@@ -424,12 +400,12 @@ gog calendar create <calendar-id> \
   --visibility private \
   --source-title 'Rightmove listing' \
   --source-url '<listing-url>' \
-  --description $'Viewing confirmed by <agent or sender> email on <DD Mon YYYY>.\n\nRightmove: <listing-url>\nListing: <portal-id> | <property type> | <beds> bed | <baths> bath | <rent> pcm | Available <date-or-now>\nAgent: <agent name> | <agent phone>\nArea: <postcode> | <nearest station> <distance> | EPC <rating> | <floor area> sqm | Gigabit <pct>% | Crime <rate>/1k | IMD <decile> | Flood <level> | Social housing <pct>\nStored assessment: <recommendation> | Family fit <familySuitability> | Assessed <assessedScore> (algo <algoScore>, adj <scoreAdjustment>)\nBooking: Confirmed by <contact name> for <weekday> <D Mon YYYY> at <time>\nExact EPC: <full address> | Cert <certificate-number> | Valid until <date>\nSummary: <one-line verdict>'
+  --description $'Viewing confirmed by <agent or sender> email on <DD Mon YYYY>.\n\nRightmove: <listing-url>\nListing: <portal-id> | <property type> | <beds> bed | <baths> bath | <rent> pcm | Available <date-or-now>\nAgent: <agent name> | <agent phone>\nArea: <postcode> | <nearest station> <distance> | EPC <rating> | <floor area> sqm | Gigabit <pct>% | Crime <rate>/1k | IMD <decile> | Flood <level> | Social housing <pct>\nStored assessment: <recommendation> | Confidence <confidence> | Priority <priority>\nBooking: Confirmed by <contact name> for <weekday> <D Mon YYYY> at <time>\nExact EPC: <full address> | Cert <certificate-number> | Valid until <date>\nSummary: <one-line verdict>'
 ```
 
 ## Postcode and Neighborhood Research
 
-When a fetched listing includes a usable UK postcode, fetch these postcode sources with WebFetch as a standard part of shortlist assessment:
+When an evidence bundle includes a usable UK postcode, fetch these postcode sources with WebFetch as a standard part of shortlist assessment:
 
 - `https://area360.uk/postcode/{POSTCODE}`
 - `https://www.streetcheck.co.uk/crime/{POSTCODE}`
@@ -457,9 +433,9 @@ Rules:
 - Call out major positives, major negatives, and any dealbreakers.
 - If the postcode is missing or one or more pages are unavailable, say so and lower confidence accordingly.
 
-## Scoring
+## Deterministic Scores
 
-Scores are percentile-relative within the current database. The agent adds value by catching what the algorithm cannot see.
+Deterministic score code may exist as an internal experiment, but the default decision layer is the AI-authored assessment over evidence. Do not rely on score commands as part of the core workflow.
 
 ### Score Interpretation
 
@@ -477,25 +453,11 @@ Scores are percentile-relative within the current database. The agent adds value
 - Location, default 40%: station proximity, broadband, region priority, IMD, crime.
 - Liveability, default 30%: garden type, heating type, property type.
 - Penalties such as EPC, garden, and pets apply multiplicatively after composite aggregation.
-- A single penalty can dominate the final score.
-
-### Score Adjustment Guidance
-
-Use `scoreAdjustment` in the range `-30` to `+30` only when there is evidence the algorithm missed.
-
-| Adjustment | When to Use |
-| --- | --- |
-| `+15` to `+30` | Exceptional quality or fit the algorithm cannot detect |
-| `+1` to `+14` | Minor positives such as layout, renovation, quiet street |
-| `0` | Algorithm score looks fair |
-| `-1` to `-14` | Minor negatives such as dated decor or visible busy road |
-| `-15` to `-30` | Major red flags such as damp, missing rooms, industrial context |
-
-Always explain the adjustment in `reasoning`. If evidence is incomplete, reduce confidence instead of over-adjusting.
+- Treat this model as background context only unless deterministic scoring is explicitly reintroduced into the active workflow.
 
 ## Subagents
 
-### Search and Fetch by Location
+### Search and Inspect by Location
 
 Use sequential subagents for multi-region exploration.
 
@@ -520,10 +482,10 @@ Read first: $HOME/.tools/let/data/let.context.md.
 
 Constraints:
 * Do not edit config files.
-* Use default command output for tool calls. Expect JSON envelopes for all commands except `build sources`.
-* Keep the batch small: discover, then fetch 5-10 max.
-* Assess 1-2 best candidates deeply if media is available.
-* Write assessments back using normal assessment submission.
+* Use default command output for tool calls. Expect JSON envelopes for all structured commands.
+* Keep the batch small: discover, then inspect 2-5 promising IDs.
+* Verify checkable claims before treating them as true.
+* Write assessments back with `assess save`.
 * Return a compact summary.
 
 Location:
@@ -533,11 +495,11 @@ Location:
 Steps:
 1) `"$HOME/.tools/let/let" health`
 2) Discover listings for this location
-3) Diff new vs known
-4) Fetch a small batch and assign region if needed
-5) Triage the top 10
-6) Deep dive 1-2 using photos, maps, postcode research sources, and quick neighborhood research
-7) Submit 1-2 assessments
+3) Inspect a small candidate batch
+4) Read evidence and verify broadband/EPC/address claims where relevant
+5) Deep dive 1-2 using photos, maps, postcode research sources, and quick neighborhood research
+6) Save 1-2 assessments
+7) Return:
 8) Return:
    * Top 3 candidates with short rationale
    * Red flags
@@ -556,15 +518,14 @@ Error codes appear in `error.code` when `ok: false`.
 | Code | Meaning | Recovery Action |
 | --- | --- | --- |
 | `NO_CONFIG` | Config missing | Create from `.claude/skills/let/templates/let.config.toml`, then re-run health |
-| `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$HOME/.tools/let/let" build sources all --jobs 3` |
-| `SCHEMA_MISMATCH` | DB schema incompatible | Delete `let.db`, then run `"$HOME/.tools/let/let" fetch <id>` to recreate it |
+| `NO_SOURCES` | Source DBs missing | Proceed degraded or run `"$HOME/.tools/let/let" sources build all --jobs 3` |
+| `SCHEMA_MISMATCH` | DB schema incompatible | Delete `let.db`, then run `"$HOME/.tools/let/let" inspect <id>` to recreate it |
 | `CONFLICT` | Database lock contention | Close competing DB users, then retry the command |
 | `NOT_FOUND` | Listing removed | Skip and continue |
 | `VALIDATION_ERROR` | Invalid assessment or input data | Fix according to schema and `error.hint` |
 | `DB_ERROR` / `INTERNAL_ERROR` | Database read/write or path failure | Run `"$HOME/.tools/let/let" health"`; check permissions, locks, and disk state before restoring or recreating anything |
 | `NETWORK_ERROR` | Network request failed | Check connectivity/TLS, then retry once |
 | `PARSE_ERROR` | Upstream payload parse failed | Retry once; if persistent, treat as upstream drift and continue degraded |
-| `PATCH_JSON_PARSE_ERROR` / `PATCH_JSON_SCHEMA_ERROR` / `PATCH_JSON_VALIDATION_ERROR` | Invalid `ops patch --patch-json` payload | Fix JSON shape/values using `error.details`, then retry |
 | `NO_CREDENTIALS` | API credentials missing | Set keys in `$HOME/.tools/let/data/.env` and re-run health |
 | `INVALID_DB` | Notion database inaccessible | Check Notion credentials and DB ID |
 
@@ -586,8 +547,8 @@ Recovery rules:
 
 ## Intent Mappings
 
-- Top 5 new homes: baseline mode, discover, diff, fetch a small batch, triage, assess top 2-3, report top 5.
-- Compare Manchester, Liverpool, Sheffield: override mode per city, fetch small samples, summarize per region, then compare.
+- Top 5 new homes: baseline mode, discover, inspect a small candidate batch, verify claims, assess top 2-3, report top 5.
+- Compare Manchester, Liverpool, Sheffield: override mode per city, inspect small samples, summarize per region, then compare.
 - Flats around York within about 30 minutes of the centre: override property type to flats, use nearby towns if supported, and label any travel-time approximation clearly.
 
 ## Expected Output

@@ -1,11 +1,16 @@
 #![forbid(unsafe_code)]
 
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use let_sdk::intelligence::{EvidenceBundle, IntelligenceDb};
 use let_sdk::load_listings_file;
-use let_sdk::schema::listing::Listing;
+use let_sdk::schema::listing::{
+    Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingImage,
+    ListingStatus, MapViews, PortalIds, RemoteLocalAsset,
+};
 use ratatui::layout::Rect;
 
 use crate::preview::{PreviewAssetKind, PreviewController, PreviewTarget, PreviewView};
@@ -99,11 +104,20 @@ pub(crate) struct App {
 impl App {
     pub(crate) fn with_preview(preview: PreviewController) -> Self {
         let (listings, status) = load_ranked_listings();
+        let selected = initial_selection(&listings, env::var("LET_START_ID").ok().as_deref());
+        let focus = if env::var("LET_START_SECTIONS")
+            .ok()
+            .is_some_and(|sections| sections.split(',').any(|section| section == "media"))
+        {
+            FocusPane::Context
+        } else {
+            FocusPane::Listings
+        };
         let mut app = Self {
             running: true,
             listings,
-            selected: 0,
-            focus: FocusPane::Listings,
+            selected,
+            focus,
             context_selected: 0,
             context_offset: 0,
             selected_media: ListingMedia::default(),
@@ -413,19 +427,19 @@ impl App {
             kind: PaletteActionKind::Refresh,
         });
         actions.push(PaletteAction {
-            label: "build sources all".to_owned(),
+            label: "sources build all".to_owned(),
             kind: PaletteActionKind::BuildSources("all"),
         });
         actions.push(PaletteAction {
-            label: "build sources broadband".to_owned(),
+            label: "sources build broadband".to_owned(),
             kind: PaletteActionKind::BuildSources("broadband"),
         });
         actions.push(PaletteAction {
-            label: "build sources crime".to_owned(),
+            label: "sources build crime".to_owned(),
             kind: PaletteActionKind::BuildSources("crime"),
         });
         actions.push(PaletteAction {
-            label: "build sources income".to_owned(),
+            label: "sources build income".to_owned(),
             kind: PaletteActionKind::BuildSources("income"),
         });
         actions.push(PaletteAction {
@@ -575,16 +589,16 @@ impl App {
         let mut command = Command::new("cargo");
         command
             .args([
-                "run", "-q", "-p", "let-cli", "--", "build", "sources", target, "--jobs", "3",
+                "run", "-q", "-p", "let-cli", "--", "sources", "build", target, "--jobs", "3",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
         let status = command.status();
         self.status = match status {
-            Ok(exit) if exit.success() => format!("build sources {target} completed"),
-            Ok(exit) => format!("build sources {target} failed (exit {:?})", exit.code()),
-            Err(error) => format!("build sources {target} failed ({error})"),
+            Ok(exit) if exit.success() => format!("sources build {target} completed"),
+            Ok(exit) => format!("sources build {target} failed (exit {:?})", exit.code()),
+            Err(error) => format!("sources build {target} failed ({error})"),
         };
         self.refresh_sources();
     }
@@ -753,6 +767,30 @@ fn load_ranked_listings() -> (Vec<Listing>, String) {
     let paths = let_sdk::paths::paths();
     let db_path = paths.derived.database;
 
+    match IntelligenceDb::open_readonly(&db_path).and_then(|db| db.load_bundles()) {
+        Ok(bundles) if !bundles.is_empty() => {
+            let mut listings = bundles.iter().map(listing_from_bundle).collect::<Vec<_>>();
+            let listing_count = listings.len();
+            listings.sort_by(|a, b| {
+                let left = a.assessed_score.unwrap_or(0.0);
+                let right = b.assessed_score.unwrap_or(0.0);
+                right
+                    .partial_cmp(&left)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            return (
+                listings,
+                format!(
+                    "loaded {} evidence bundles from {}",
+                    listing_count,
+                    db_path.display()
+                ),
+            );
+        }
+        Ok(_) => {}
+        Err(_) => {}
+    }
+
     match load_listings_file(&db_path) {
         Ok(data) => {
             let mut listings = data.listings;
@@ -783,6 +821,161 @@ fn load_ranked_listings() -> (Vec<Listing>, String) {
             Vec::new(),
             format!("load failed: {} ({})", error.message, db_path.display()),
         ),
+    }
+}
+
+fn initial_selection(listings: &[Listing], requested_id: Option<&str>) -> usize {
+    let Some(requested_id) = requested_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return 0;
+    };
+    listings
+        .iter()
+        .position(|listing| {
+            listing.id == requested_id
+                || listing.portal_ids.rightmove.as_deref() == Some(requested_id)
+                || requested_id
+                    .strip_prefix("rightmove:")
+                    .is_some_and(|id| listing.portal_ids.rightmove.as_deref() == Some(id))
+        })
+        .unwrap_or(0)
+}
+
+fn listing_from_bundle(bundle: &EvidenceBundle) -> Listing {
+    let selected_address = bundle.address.selected.as_ref();
+    let address = selected_address
+        .map(|candidate| candidate.label.clone())
+        .or_else(|| bundle.rightmove.address.clone())
+        .unwrap_or_else(|| bundle.rightmove_id.clone());
+    let postcode = selected_address
+        .and_then(|candidate| candidate.postcode.clone())
+        .or_else(|| bundle.rightmove.postcode.clone())
+        .unwrap_or_default();
+    let lat = selected_address
+        .and_then(|candidate| candidate.latitude)
+        .or(bundle.rightmove.latitude)
+        .unwrap_or_default();
+    let lng = selected_address
+        .and_then(|candidate| candidate.longitude)
+        .or(bundle.rightmove.longitude)
+        .unwrap_or_default();
+    let assessed_score = bundle
+        .assessment
+        .as_ref()
+        .and_then(|assessment| assessment.assessment.get("score"))
+        .and_then(serde_json::Value::as_f64);
+
+    Listing {
+        id: bundle.rightmove_id.clone(),
+        portal_ids: PortalIds {
+            rightmove: Some(bundle.rightmove_id.clone()),
+            ..PortalIds::default()
+        },
+        uprn: bundle.epc.as_ref().and_then(|epc| epc.uprn.clone()),
+        uprn_source: None,
+        uprn_confidence: None,
+        url: bundle.url.clone(),
+        location: GeoLocation {
+            lat,
+            lng,
+            pin_type: None,
+        },
+        postcode,
+        address,
+        region: None,
+        google_maps_url: format!("https://www.google.com/maps/search/?api=1&query={lat},{lng}"),
+        google_maps_street_view_url: format!(
+            "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lng}"
+        ),
+        area: AreaMetrics::default(),
+        price: bundle.rightmove.price_pcm.unwrap_or_default(),
+        price_display: bundle.rightmove.display_price.clone().unwrap_or_default(),
+        bedrooms: bundle.rightmove.bedrooms.unwrap_or_default(),
+        bathrooms: bundle.rightmove.bathrooms.unwrap_or_default(),
+        property_type: bundle.rightmove.property_type.clone().unwrap_or_default(),
+        description: bundle.rightmove.description.text.clone(),
+        notes: bundle.rightmove.description.key_features.clone(),
+        images: bundle
+            .media
+            .photos
+            .iter()
+            .map(|item| ListingImage {
+                remote: item.remote_url.clone(),
+                local: item.local_path.clone(),
+            })
+            .collect(),
+        floorplan: bundle
+            .media
+            .floorplans
+            .first()
+            .map(remote_local_asset_from_media)
+            .unwrap_or_default(),
+        epc: bundle
+            .media
+            .epc_graphs
+            .first()
+            .map(remote_local_asset_from_media)
+            .unwrap_or_default(),
+        map_views: MapViews {
+            satellite: bundle
+                .media
+                .maps
+                .iter()
+                .find(|item| item.kind == "mapSatellite")
+                .map(remote_local_asset_from_media)
+                .unwrap_or_default(),
+            street: bundle
+                .media
+                .maps
+                .iter()
+                .find(|item| item.kind == "mapStreet")
+                .map(remote_local_asset_from_media)
+                .unwrap_or_default(),
+        },
+        epc_rating: None,
+        floor_area_sqm: bundle.epc.as_ref().and_then(|epc| epc.floor_area_sqm),
+        epc_lodgement_date: bundle
+            .epc
+            .as_ref()
+            .and_then(|epc| epc.lodgement_date.clone()),
+        epc_address_match: bundle.epc.as_ref().map(|epc| epc.address_match),
+        epc_search_url: None,
+        nearest_stations: Vec::new(),
+        gigabit_availability: bundle
+            .broadband
+            .as_ref()
+            .and_then(|broadband| broadband.gigabit_availability),
+        listed_date: bundle.rightmove.listed_date.clone(),
+        lettings: Lettings {
+            available_date: bundle.rightmove.available_date.clone(),
+            deposit: bundle.rightmove.deposit,
+        },
+        agent: Agent {
+            name: bundle.rightmove.agent_name.clone(),
+            phone: bundle.rightmove.agent_phone.clone(),
+        },
+        assessment: None,
+        assessed_at: bundle
+            .assessment
+            .as_ref()
+            .map(|assessment| assessment.saved_at.clone()),
+        assessed_score,
+        scores: None,
+        fetched_at: bundle.generated_at.clone(),
+        extraction_status: ExtractionStatus::Success,
+        status: ListingStatus::Active,
+        notion_page_id: None,
+    }
+}
+
+fn remote_local_asset_from_media(
+    item: &let_sdk::intelligence::MediaItemEvidence,
+) -> RemoteLocalAsset {
+    RemoteLocalAsset {
+        remote: Some(item.remote_url.clone()),
+        local: item.local_path.clone(),
     }
 }
 
@@ -1044,7 +1237,7 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
 
         let rows = app.palette_rows();
-        assert_eq!(rows, vec!["build sources income".to_owned()]);
+        assert_eq!(rows, vec!["sources build income".to_owned()]);
     }
 
     #[test]

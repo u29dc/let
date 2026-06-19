@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::schema::listing::{
@@ -15,6 +17,166 @@ pub enum RightmoveListingPageStatus {
     Active,
     LetAgreed,
     Removed,
+}
+
+impl RightmoveListingPageStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::LetAgreed => "letAgreed",
+            Self::Removed => "removed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RightmovePageCapture {
+    pub rightmove_id: String,
+    pub url: String,
+    pub fetched_at: String,
+    pub page_status: String,
+    pub content_hash: String,
+    pub page_model: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RightmoveDescriptionExtract {
+    pub raw_html: String,
+    pub text: String,
+    pub normalized_text: String,
+    pub key_features: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RightmoveMediaExtract {
+    pub photos: Vec<String>,
+    pub floorplans: Vec<String>,
+    pub epc_graphs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RightmovePropertyExtract {
+    pub rightmove_id: String,
+    pub url: String,
+    pub page_status: String,
+    pub fetched_at: String,
+    pub content_hash: String,
+    pub title: Option<String>,
+    pub address: Option<String>,
+    pub postcode: Option<String>,
+    pub display_price: Option<String>,
+    pub price_pcm: Option<i64>,
+    pub bedrooms: Option<i64>,
+    pub bathrooms: Option<i64>,
+    pub property_type: Option<String>,
+    pub agent_name: Option<String>,
+    pub agent_phone: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub pin_type: Option<String>,
+    pub listed_date: Option<String>,
+    pub available_date: Option<String>,
+    pub deposit: Option<i64>,
+    pub description: RightmoveDescriptionExtract,
+    pub media: RightmoveMediaExtract,
+}
+
+pub fn fetch_page_capture(
+    runtime: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    rightmove_id: &str,
+    max_retries: usize,
+) -> std::result::Result<RightmovePageCapture, String> {
+    let html = fetch_listing_html(runtime, client, rightmove_id, max_retries)?;
+    capture_page_model(rightmove_id, &html)
+}
+
+pub fn capture_page_model(
+    rightmove_id: &str,
+    html: &str,
+) -> std::result::Result<RightmovePageCapture, String> {
+    let page_status = classify_listing_page(html)?;
+    let page_model = extract_page_model(html)?;
+    Ok(RightmovePageCapture {
+        rightmove_id: rightmove_id.to_owned(),
+        url: rightmove_url(rightmove_id),
+        fetched_at: crate::utils::time::now_iso(),
+        page_status: page_status.as_str().to_owned(),
+        content_hash: sha256_hex(html),
+        page_model,
+    })
+}
+
+pub fn extract_property_evidence(
+    capture: &RightmovePageCapture,
+) -> std::result::Result<RightmovePropertyExtract, String> {
+    let property_data = get_path(&capture.page_model, &["propertyData"])
+        .ok_or_else(|| "propertyData not found".to_owned())?;
+
+    let price_display = get_path(property_data, &["prices", "primaryPrice"])
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let outcode = get_path(property_data, &["address", "outcode"]).and_then(Value::as_str);
+    let incode = get_path(property_data, &["address", "incode"]).and_then(Value::as_str);
+    let postcode = match (outcode, incode) {
+        (Some(left), Some(right)) => Some(format!("{left} {right}")),
+        _ => None,
+    };
+    let listing_history =
+        get_path(property_data, &["listingHistory", "listingUpdateReason"]).and_then(Value::as_str);
+
+    Ok(RightmovePropertyExtract {
+        rightmove_id: capture.rightmove_id.clone(),
+        url: capture.url.clone(),
+        page_status: capture.page_status.clone(),
+        fetched_at: capture.fetched_at.clone(),
+        content_hash: capture.content_hash.clone(),
+        title: get_path(property_data, &["heading"]).and_then(string_value),
+        address: get_path(property_data, &["address", "displayAddress"]).and_then(string_value),
+        postcode,
+        price_pcm: price_display.as_deref().and_then(parse_price),
+        display_price: price_display,
+        bedrooms: get_path(property_data, &["bedrooms"]).and_then(Value::as_i64),
+        bathrooms: get_path(property_data, &["bathrooms"]).and_then(Value::as_i64),
+        property_type: get_path(property_data, &["propertySubType"]).and_then(string_value),
+        agent_name: get_path(property_data, &["customer", "branchDisplayName"])
+            .and_then(string_value),
+        agent_phone: get_path(
+            property_data,
+            &["contactInfo", "telephoneNumbers", "localNumber"],
+        )
+        .and_then(string_value),
+        latitude: get_path(property_data, &["location", "latitude"]).and_then(Value::as_f64),
+        longitude: get_path(property_data, &["location", "longitude"]).and_then(Value::as_f64),
+        pin_type: get_path(property_data, &["location", "pinType"]).and_then(string_value),
+        listed_date: listing_history.and_then(parse_listed_date),
+        available_date: get_path(property_data, &["lettings", "letAvailableDate"])
+            .and_then(string_value),
+        deposit: get_path(property_data, &["lettings", "deposit"]).and_then(value_to_i64),
+        description: extract_description(property_data),
+        media: RightmoveMediaExtract {
+            photos: extract_image_urls(get_path(property_data, &["images"])),
+            floorplans: extract_url_list(get_path(property_data, &["floorplans"])),
+            epc_graphs: extract_url_list(get_path(property_data, &["epcGraphs"])),
+        },
+    })
+}
+
+pub fn listing_from_capture(
+    capture: &RightmovePageCapture,
+    region: Option<String>,
+    include_images: bool,
+) -> std::result::Result<Listing, String> {
+    transform_listing(
+        &capture.page_model,
+        &capture.rightmove_id,
+        region,
+        include_images,
+    )
 }
 
 pub fn fetch_listing(
@@ -109,6 +271,8 @@ pub fn classify_listing_page(
 pub fn extract_page_model(html: &str) -> std::result::Result<Value, String> {
     let marker = if let Some(index) = html.find("window.PAGE_MODEL") {
         ("window.PAGE_MODEL", index)
+    } else if let Some(index) = html.find("window.__PAGE_MODEL") {
+        ("window.__PAGE_MODEL", index)
     } else if let Some(index) = html.find("window.pageModel") {
         ("window.pageModel", index)
     } else {
@@ -135,8 +299,68 @@ pub fn extract_page_model(html: &str) -> std::result::Result<Value, String> {
     let remaining = &html[cursor..];
     let end = find_json_end(remaining).ok_or_else(|| "invalid PAGE_MODEL JSON".to_owned())?;
     let json_text = &remaining[..=end];
-    serde_json::from_str::<Value>(json_text)
-        .map_err(|error| format!("invalid PAGE_MODEL JSON: {error}"))
+    let page_model = serde_json::from_str::<Value>(json_text)
+        .map_err(|error| format!("invalid PAGE_MODEL JSON: {error}"))?;
+    decode_page_model(page_model)
+}
+
+fn decode_page_model(page_model: Value) -> std::result::Result<Value, String> {
+    let Some(encoded) = page_model.get("data").and_then(Value::as_str) else {
+        return Ok(page_model);
+    };
+    let slots = serde_json::from_str::<Vec<Value>>(encoded)
+        .map_err(|error| format!("invalid encoded PAGE_MODEL data: {error}"))?;
+    decode_indexed_value(&slots, 0, &mut Vec::new())
+}
+
+fn decode_indexed_value(
+    slots: &[Value],
+    index: usize,
+    stack: &mut Vec<usize>,
+) -> std::result::Result<Value, String> {
+    if stack.contains(&index) {
+        return Err("encoded PAGE_MODEL contains a cyclic reference".to_owned());
+    }
+    let Some(value) = slots.get(index) else {
+        return Err(format!(
+            "encoded PAGE_MODEL reference {index} is out of range"
+        ));
+    };
+
+    stack.push(index);
+    let decoded = match value {
+        Value::Array(items) => {
+            let mut decoded_items = Vec::with_capacity(items.len());
+            for item in items {
+                decoded_items.push(decode_indexed_slot_value(slots, item, stack)?);
+            }
+            Value::Array(decoded_items)
+        }
+        Value::Object(map) => {
+            let mut decoded_map = serde_json::Map::with_capacity(map.len());
+            for (key, item) in map {
+                decoded_map.insert(key.clone(), decode_indexed_slot_value(slots, item, stack)?);
+            }
+            Value::Object(decoded_map)
+        }
+        other => other.clone(),
+    };
+    stack.pop();
+    Ok(decoded)
+}
+
+fn decode_indexed_slot_value(
+    slots: &[Value],
+    value: &Value,
+    stack: &mut Vec<usize>,
+) -> std::result::Result<Value, String> {
+    if let Some(index) = value.as_u64() {
+        let index = usize::try_from(index)
+            .map_err(|_| "encoded PAGE_MODEL reference is too large".to_owned())?;
+        decode_indexed_value(slots, index, stack)
+    } else {
+        Ok(value.clone())
+    }
 }
 
 pub fn find_json_end(input: &str) -> Option<usize> {
@@ -290,7 +514,7 @@ fn transform_listing(
         uprn: None,
         uprn_source: None,
         uprn_confidence: None,
-        url: format!("https://www.rightmove.co.uk/properties/{rightmove_id}"),
+        url: rightmove_url(rightmove_id),
         location: GeoLocation { lat, lng, pin_type },
         postcode: postcode.clone(),
         address: address.clone(),
@@ -347,23 +571,39 @@ fn parse_pin_type(raw: &str) -> Option<PinType> {
 }
 
 fn build_description(property_data: &Value) -> String {
-    let description = get_path(property_data, &["text", "description"])
+    let extracted = extract_description(property_data);
+    let features = extracted.key_features.join(", ");
+    let description = extracted.text;
+    sanitize_for_ai(&format!("{features} {description}"))
+}
+
+fn extract_description(property_data: &Value) -> RightmoveDescriptionExtract {
+    let raw_html = get_path(property_data, &["text", "description"])
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    let features = get_path(property_data, &["keyFeatures"])
+        .unwrap_or_default()
+        .to_owned();
+    let decoded = decode_html_entities(&raw_html);
+    let text = normalize_spaces(&strip_html_tags(&decoded));
+    let key_features = get_path(property_data, &["keyFeatures"])
         .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
                 .filter_map(Value::as_str)
+                .map(normalize_spaces)
+                .filter(|item| !item.is_empty())
                 .collect::<Vec<_>>()
-                .join(", ")
         })
         .unwrap_or_default();
-    sanitize_for_ai(&format!("{features} {description}"))
+    RightmoveDescriptionExtract {
+        raw_html,
+        text: text.clone(),
+        normalized_text: sanitize_for_ai(&format!("{} {text}", key_features.join(", "))),
+        key_features,
+    }
 }
 
-fn sanitize_for_ai(input: &str) -> String {
+pub fn sanitize_for_ai(input: &str) -> String {
     let decoded = decode_html_entities(input);
     let stripped = strip_html_tags(&decoded).to_lowercase();
     let mut out = String::with_capacity(stripped.len());
@@ -387,7 +627,7 @@ fn sanitize_for_ai(input: &str) -> String {
     out.trim().to_owned()
 }
 
-fn strip_html_tags(input: &str) -> String {
+pub fn strip_html_tags(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut in_tag = false;
     for ch in input.chars() {
@@ -401,7 +641,7 @@ fn strip_html_tags(input: &str) -> String {
     out
 }
 
-fn decode_html_entities(input: &str) -> String {
+pub fn decode_html_entities(input: &str) -> String {
     input
         .replace("&amp;", "&")
         .replace("&lt;", "<")
@@ -427,6 +667,40 @@ fn extract_images(property_data: &Value) -> Vec<ListingImage> {
                             remote: url.to_owned(),
                             local: None,
                         })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_image_urls(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_object()
+                        .and_then(|obj| obj.get("url"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_url_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_object()
+                        .and_then(|obj| obj.get("url"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
                 })
                 .collect::<Vec<_>>()
         })
@@ -605,6 +879,24 @@ fn detect_removed_html(html: &str) -> bool {
         || lower.contains("this property has been removed")
 }
 
+fn rightmove_url(rightmove_id: &str) -> String {
+    format!("https://www.rightmove.co.uk/properties/{rightmove_id}")
+}
+
+fn sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn string_value(value: &Value) -> Option<String> {
+    value.as_str().map(ToOwned::to_owned)
+}
+
+fn normalize_spaces(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn get_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = value;
     for segment in path {
@@ -655,6 +947,25 @@ mod tests {
         let html = r#"<script>window.PAGE_MODEL = {"propertyData":{"id":1}}</script>"#;
         let model = extract_page_model(html).expect("page model should parse");
         assert_eq!(model["propertyData"]["id"], 1);
+    }
+
+    #[test]
+    fn extract_page_model_supports_encoded_underscore_marker() {
+        let html = r#"
+            <script>
+                window.__PAGE_MODEL = {"data":"[{\"propertyData\":1,\"analyticsInfo\":8},{\"id\":2,\"prices\":3,\"location\":5},\"89606028\",{\"primaryPrice\":4},\"£1,300 pcm\",{\"latitude\":6,\"longitude\":7},51.1,1.2,{\"analyticsProperty\":9},{\"letAgreed\":10},false]","encoding":"on"};
+            </script>
+        "#;
+
+        let model = extract_page_model(html).expect("page model should parse");
+        assert_eq!(model["propertyData"]["id"], "89606028");
+        assert_eq!(
+            model["propertyData"]["prices"]["primaryPrice"],
+            "£1,300 pcm"
+        );
+        assert_eq!(model["propertyData"]["location"]["latitude"], 51.1);
+        let status = classify_listing_page(html).expect("page status should classify");
+        assert_eq!(status, RightmoveListingPageStatus::Active);
     }
 
     #[test]

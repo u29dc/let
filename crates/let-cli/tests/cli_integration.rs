@@ -1,19 +1,14 @@
 use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Output;
+use std::process::{Command, Output};
 
-use let_sdk::config::{
-    AppConfig, FetchConfig, Location, SearchConfig, SearchFilters, default_scoring_config,
+use let_sdk::intelligence::{
+    AddressCandidateEvidence, AddressEvidence, AssessmentRecord, BroadbandEvidence, ClaimEvidence,
+    ConfidenceLevel, DescriptionEvidence, EvidenceBundle, FactEvidence, FactProvider, InspectDepth,
+    IntelligenceDb, MediaEvidence, MediaItemEvidence, RefreshPolicy, RightmoveEvidence,
+    SectionState, SectionStatus, SourceRef, VerificationEvidence, VerificationStatus,
 };
-use let_sdk::schema::listing::{
-    Agent, AreaCodeName, AreaMetrics, CrimeMetrics, ExtractionStatus, FloodRisk, GeoLocation,
-    ImdMetrics, IncomeMetrics, Lettings, Listing, ListingImage, ListingStatus, MapViews, PinType,
-    PortalIds, RemoteLocalAsset,
-};
-use let_sdk::{DbMeta, load_listings_file, upsert_listings};
-use rusqlite::Connection;
+use serde_json::json;
 use tempfile::TempDir;
 
 fn bin_path() -> PathBuf {
@@ -26,7 +21,6 @@ struct Fixture {
     config_dir: PathBuf,
     cache_dir: PathBuf,
     sources_dir: PathBuf,
-    db_path: PathBuf,
 }
 
 impl Fixture {
@@ -42,52 +36,7 @@ impl Fixture {
         fs::create_dir_all(&config_dir).expect("create config dir");
         fs::create_dir_all(&cache_dir).expect("create cache dir");
         fs::create_dir_all(&sources_dir).expect("create sources dir");
-
-        let config = AppConfig {
-            search: SearchConfig {
-                use_api: true,
-                locations: vec![Location {
-                    id: "REGION^87490".to_owned(),
-                    name: "Manchester".to_owned(),
-                }],
-                filters: SearchFilters {
-                    min_bedrooms: 1,
-                    max_bedrooms: 4,
-                    min_price: 600,
-                    max_price: 2500,
-                    property_types: vec!["flat".to_owned(), "terraced".to_owned()],
-                    include_let_agreed: false,
-                    radius: 0.0,
-                    dont_show: vec![],
-                    must_have: vec!["garden".to_owned()],
-                },
-            },
-            fetch: FetchConfig {
-                delay_ms: 1,
-                max_listings: 100,
-                max_retries: 2,
-                ..FetchConfig::default()
-            },
-            scoring: default_scoring_config(),
-        };
-        let config_text = toml::to_string(&config).expect("serialize config");
-        fs::write(config_dir.join("let.config.toml"), config_text).expect("write config");
-
-        let db_path = data_dir.join("let.db");
-        let listing = sample_listing();
-        upsert_listings(
-            &db_path,
-            std::slice::from_ref(&listing),
-            &[],
-            std::slice::from_ref(&listing),
-            &DbMeta {
-                updated_at: "2026-03-01T00:00:00.000Z".to_owned(),
-                last_search_total: 1,
-            },
-            &["https://www.rightmove.co.uk/property-to-rent/find.html".to_owned()],
-            &["Manchester".to_owned()],
-        )
-        .expect("seed listings db");
+        fs::write(config_dir.join("let.config.toml"), sample_config()).expect("write config");
 
         Self {
             _temp: temp,
@@ -95,7 +44,6 @@ impl Fixture {
             config_dir,
             cache_dir,
             sources_dir,
-            db_path,
         }
     }
 
@@ -113,34 +61,78 @@ impl Fixture {
         ]);
         command
     }
+
+    fn db_path(&self) -> PathBuf {
+        self.data_dir.join("let.db")
+    }
+
+    fn seed_bundle(&self) {
+        let mut db = IntelligenceDb::open(self.db_path()).expect("open intelligence db");
+        db.save_bundle(&sample_bundle()).expect("save bundle");
+    }
 }
 
 #[test]
-fn tools_json_returns_catalog() {
+fn tools_json_returns_agent_native_catalog() {
     let fixture = Fixture::new();
     let output = fixture.cmd().args(["tools"]).output().expect("run tools");
     assert_eq!(output.status.code(), Some(0));
-    assert!(
-        output.stderr.is_empty(),
-        "tools should not write to stderr in default JSON mode"
-    );
+    assert!(output.stderr.is_empty());
 
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["meta"]["tool"], "tools");
-    assert_eq!(json["data"]["version"], env!("CARGO_PKG_VERSION"));
-    assert!(json["data"]["tools"].as_array().is_some());
-    assert!(json["data"]["globalFlags"].as_array().is_some());
-    assert_eq!(
-        json["data"]["outputFormats"],
-        serde_json::json!(["json", "toon"])
-    );
-    assert_eq!(json["data"]["defaultOutputFormat"], "json");
-    let global_flags = json["data"]["globalFlags"]
-        .as_array()
-        .expect("global flags array");
-    assert!(global_flags.iter().any(|flag| flag["name"] == "--toon"));
-    assert!(!global_flags.iter().any(|flag| flag["name"] == "--text"));
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["meta"]["tool"], "tools");
+
+    let tools = envelope["data"]["tools"].as_array().expect("tools array");
+    for expected in [
+        "inspect",
+        "evidence",
+        "verify",
+        "correct.address",
+        "correct.epc",
+        "correct.media",
+        "correct.clear",
+        "assess.save",
+        "assess.get",
+        "sources.list",
+        "sources.status",
+        "sources.build",
+        "start",
+    ] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == expected),
+            "expected tool {expected}"
+        );
+    }
+    for removed in [
+        "fetch",
+        "view.list",
+        "score.compute",
+        "ops.patch",
+        "export.json",
+    ] {
+        assert!(
+            tools.iter().all(|tool| tool["name"] != removed),
+            "removed tool {removed} should not be advertised"
+        );
+    }
+    assert!(tools.iter().all(|tool| tool["inputSchema"].is_string()));
+    assert!(tools.iter().all(|tool| tool["outputSchema"].is_string()));
+}
+
+#[test]
+fn tools_detail_returns_inspect_contract() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["tools", "inspect"])
+        .output()
+        .expect("run tools inspect");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["data"]["tool"]["name"], "inspect");
+    assert!(envelope["data"]["tool"]["inputSchema"].is_string());
 }
 
 #[test]
@@ -153,287 +145,32 @@ fn tools_toon_returns_decodable_catalog() {
         .expect("run tools toon");
     assert_eq!(output.status.code(), Some(0));
 
-    let value = assert_single_toon_envelope(&output);
-    assert_eq!(value["ok"], true);
-    assert_eq!(value["meta"]["tool"], "tools");
-    assert_eq!(
-        value["data"]["outputFormats"],
-        serde_json::json!(["json", "toon"])
+    let envelope = assert_single_toon_envelope(&output);
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["meta"]["tool"], "tools");
+}
+
+#[test]
+fn bare_and_group_invocations_print_help() {
+    let fixture = Fixture::new();
+    let bare = fixture.cmd().output().expect("run bare let");
+    assert_eq!(bare.status.code(), Some(0));
+    assert!(
+        String::from_utf8(bare.stdout)
+            .expect("stdout")
+            .contains("Commands:")
     );
-    assert!(value["data"]["tools"].as_array().is_some());
-}
 
-#[test]
-fn bare_invocation_prints_root_help() {
-    let fixture = Fixture::new();
-    let output = fixture.cmd().output().expect("run bare let");
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stderr.is_empty());
-
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
-    assert!(stdout.contains("Usage:"));
-    assert!(stdout.contains("Commands:"));
-}
-
-#[test]
-fn group_invocation_prints_group_help() {
-    let fixture = Fixture::new();
-    let output = fixture
+    let group = fixture
         .cmd()
-        .args(["view"])
+        .args(["sources"])
         .output()
-        .expect("run view group");
-    assert_eq!(output.status.code(), Some(0));
-    assert!(output.stderr.is_empty());
-
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf-8");
-    assert!(stdout.contains("Usage:"));
+        .expect("run sources");
+    assert_eq!(group.status.code(), Some(0));
+    let stdout = String::from_utf8(group.stdout).expect("stdout utf-8");
     assert!(stdout.contains("list"));
-    assert!(stdout.contains("detail"));
-}
-
-#[test]
-fn view_list_json_reads_seeded_listing() {
-    let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["view", "list", "--top", "5"])
-        .output()
-        .expect("run view list");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    let listings = json["data"]["listings"].as_array().expect("listings array");
-    assert_eq!(listings.len(), 1);
-}
-
-#[test]
-fn text_flag_is_rejected() {
-    let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["view", "list", "--text"])
-        .output()
-        .expect("run view list with removed text flag");
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf-8");
-    assert!(
-        stderr.contains("--text"),
-        "expected --text error, got: {stderr}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn view_list_copy_keeps_json_stdout_and_copies_payload_json() {
-    let fixture = Fixture::new();
-    let script_dir = TempDir::new().expect("script tempdir");
-    let script_path = script_dir.path().join("clipboard-mock.sh");
-    let capture_path = script_dir.path().join("clipboard.txt");
-    write_clipboard_capture_script(&script_path);
-
-    let output = fixture
-        .cmd()
-        .env("LET_CLIPBOARD_BIN", &script_path)
-        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
-        .args(["view", "list", "--copy"])
-        .output()
-        .expect("run view list copy");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["filtered"], 1);
-    assert_eq!(json["data"]["listings"].as_array().map(Vec::len), Some(1));
-
-    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
-    let copied_json: serde_json::Value =
-        serde_json::from_str(&capture).expect("parse copied list json");
-    assert_eq!(copied_json["filtered"], 1);
-    assert_eq!(copied_json["total"], 1);
-    assert_eq!(copied_json["listings"].as_array().map(Vec::len), Some(1));
-    assert!(
-        copied_json.get("meta").is_none(),
-        "clipboard should contain data payload, not envelope: {copied_json:?}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn view_list_copy_with_toon_copies_payload_toon() {
-    let fixture = Fixture::new();
-    let script_dir = TempDir::new().expect("script tempdir");
-    let script_path = script_dir.path().join("clipboard-mock.sh");
-    let capture_path = script_dir.path().join("clipboard.txt");
-    write_clipboard_capture_script(&script_path);
-
-    let output = fixture
-        .cmd()
-        .env("LET_CLIPBOARD_BIN", &script_path)
-        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
-        .args(["view", "list", "--copy", "--toon"])
-        .output()
-        .expect("run view list copy toon");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_toon_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["filtered"], 1);
-
-    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
-    assert!(
-        serde_json::from_str::<serde_json::Value>(&capture).is_err(),
-        "toon clipboard payload should not be raw JSON"
-    );
-    let copied: serde_json::Value =
-        toon_format::decode_default(&capture).expect("decode copied Toon payload");
-    assert_eq!(copied["filtered"], 1);
-    assert_eq!(copied["total"], 1);
-    assert_eq!(copied["listings"].as_array().map(Vec::len), Some(1));
-    assert!(
-        copied.get("meta").is_none(),
-        "clipboard should contain data payload, not envelope: {copied:?}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn view_list_copy_empty_result_copies_valid_empty_payload() {
-    let fixture = Fixture::new();
-    let script_dir = TempDir::new().expect("script tempdir");
-    let script_path = script_dir.path().join("clipboard-mock.sh");
-    let capture_path = script_dir.path().join("clipboard.txt");
-    write_clipboard_capture_script(&script_path);
-
-    let output = fixture
-        .cmd()
-        .env("LET_CLIPBOARD_BIN", &script_path)
-        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
-        .args(["view", "list", "--region", "Leeds", "--copy"])
-        .output()
-        .expect("run view list empty copy");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["filtered"], 0);
-
-    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
-    let copied_json: serde_json::Value =
-        serde_json::from_str(&capture).expect("parse copied empty list json");
-    assert_eq!(copied_json["filtered"], 0);
-    assert_eq!(copied_json["total"], 1);
-    assert_eq!(copied_json["listings"].as_array().map(Vec::len), Some(0));
-}
-
-#[test]
-fn view_detail_json_renders_listing_payload() {
-    let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["view", "detail", "165432101"])
-        .output()
-        .expect("run view detail");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(
-        json["data"]["listing"]["address"],
-        "10 Example Street, Manchester"
-    );
-}
-
-#[test]
-fn tools_json_includes_view_list_copy_parameter() {
-    let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["tools", "view.list"])
-        .output()
-        .expect("run tools view.list");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["tool"]["name"], "view.list");
-
-    let parameters = json["data"]["tool"]["parameters"]
-        .as_array()
-        .expect("tool parameters array");
-    assert!(
-        parameters.iter().any(|value| {
-            value["name"] == "--copy"
-                && value["type"] == "bool"
-                && value["description"]
-                    .as_str()
-                    .is_some_and(|description| description.contains("clipboard"))
-        }),
-        "expected --copy parameter in view.list metadata, got: {parameters:?}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn view_detail_copy_keeps_json_stdout_and_copies_listing_json() {
-    let fixture = Fixture::new();
-    let script_dir = TempDir::new().expect("script tempdir");
-    let script_path = script_dir.path().join("clipboard-mock.sh");
-    let capture_path = script_dir.path().join("clipboard.txt");
-    write_clipboard_capture_script(&script_path);
-
-    let output = fixture
-        .cmd()
-        .env("LET_CLIPBOARD_BIN", &script_path)
-        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
-        .args(["view", "detail", "165432101", "--copy"])
-        .output()
-        .expect("run view detail copy");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(
-        json["data"]["listing"]["address"],
-        "10 Example Street, Manchester"
-    );
-
-    let capture = fs::read_to_string(&capture_path).expect("read clipboard capture");
-    let copied_json: serde_json::Value =
-        serde_json::from_str(&capture).expect("parse copied listing json");
-    assert_eq!(copied_json["address"], "10 Example Street, Manchester");
-    assert!(
-        copied_json.get("meta").is_none(),
-        "clipboard should contain listing payload, not envelope: {copied_json:?}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn view_detail_copy_not_found_preserves_error_and_skips_clipboard_write() {
-    let fixture = Fixture::new();
-    let script_dir = TempDir::new().expect("script tempdir");
-    let script_path = script_dir.path().join("clipboard-mock.sh");
-    let capture_path = script_dir.path().join("clipboard.txt");
-    write_clipboard_capture_script(&script_path);
-
-    let output = fixture
-        .cmd()
-        .env("LET_CLIPBOARD_BIN", &script_path)
-        .env("LET_CLIPBOARD_CAPTURE_PATH", &capture_path)
-        .args(["view", "detail", "missing-id", "--copy"])
-        .output()
-        .expect("run missing view detail copy");
-    assert_eq!(output.status.code(), Some(1));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "not_found");
-    assert!(
-        !capture_path.exists(),
-        "clipboard helper should not run when detail lookup fails"
-    );
+    assert!(stdout.contains("status"));
+    assert!(stdout.contains("build"));
 }
 
 #[test]
@@ -446,619 +183,354 @@ fn config_show_exposes_search_use_api() {
         .expect("run config show");
     assert_eq!(output.status.code(), Some(0));
 
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["config"]["search"]["useApi"], true);
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "config.show");
+    assert_eq!(envelope["data"]["config"]["search"]["useApi"], true);
 }
 
 #[test]
-fn config_validate_rejects_legacy_fetch_use_api_key() {
+fn health_reports_missing_and_present_intelligence_db() {
     let fixture = Fixture::new();
-    fs::write(
-        fixture.config_dir.join("let.config.toml"),
-        r#"
-[search]
-locations = [{ id = "REGION^87490", name = "Manchester" }]
-
-[search.filters]
-minBedrooms = 1
-maxBedrooms = 4
-minPrice = 600
-maxPrice = 2500
-propertyTypes = ["flat", "terraced"]
-includeLetAgreed = false
-radius = 0
-dontShow = []
-mustHave = ["garden"]
-
-[fetch]
-useApi = false
-delayMs = 1
-maxListings = 100
-maxRetries = 2
-
-[scoring]
-adaptiveness = 2.0
-adaptivenessFactor = 10
-
-[scoring.weights]
-affordability = 0.3
-location = 0.4
-liveability = 0.3
-
-[scoring.affordability]
-priceWeight = 1.0
-epcWeight = 0.0
-
-[scoring.affordability.heatingCosts]
-A = 30
-B = 45
-C = 70
-D = 100
-E = 400
-F = 450
-G = 500
-
-[scoring.location]
-stationWeight = 0.2
-broadbandWeight = 0.2
-priorityWeight = 0.2
-imdWeight = 0.2
-crimeWeight = 0.2
-
-[scoring.liveability]
-gardenWeight = 0.4
-heatingWeight = 0.3
-propertyTypeWeight = 0.3
-
-[scoring.liveability.garden]
-private = 100
-shared = 40
-none = 0
-
-[scoring.liveability.heating]
-gas = 100
-electric = 60
-unknown = 30
-
-[scoring.liveability.propertyType]
-flat = 80
-terraced = 85
-
-[scoring.penalties]
-epcF = 0.0
-epcG = 0.0
-noGarden = 0.5
-noPets = 0.9
-deprivation = 0.75
-deprivationThreshold = 2
-highCrime = 0.8
-highCrimeThreshold = 120
-missingDataPenalty = 0.95
-
-[scoring.regionPriority]
-Manchester = 70
-"#,
-    )
-    .expect("write legacy config");
-
-    let output = fixture
-        .cmd()
-        .args(["config", "validate"])
-        .output()
-        .expect("run config validate");
-    assert_eq!(output.status.code(), Some(1));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "invalid_input");
-    assert_eq!(
-        json["error"]["hint"],
-        "rename fetch.useApi to search.useApi"
-    );
-}
-
-#[test]
-fn search_diff_marks_known_and_new_ids() {
-    let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["search", "diff", "165432101,999999999"])
-        .output()
-        .expect("run search diff");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    let known = json["data"]["known"].as_array().expect("known array");
-    let new_ids = json["data"]["new"].as_array().expect("new array");
-    assert_eq!(known.len(), 1);
-    assert_eq!(new_ids.len(), 1);
-    assert_eq!(known[0].as_str(), Some("165432101"));
-    assert_eq!(new_ids[0].as_str(), Some("999999999"));
-}
-
-#[test]
-fn unsupported_group_subcommands_return_json_envelope() {
-    let cases = [
-        ("search", vec!["search", "nope"]),
-        ("config", vec!["config", "nope"]),
-        ("view", vec!["view", "nope"]),
-        ("assess", vec!["assess", "nope"]),
-        ("score", vec!["score", "nope"]),
-        ("build", vec!["build", "nope"]),
-        ("ops", vec!["ops", "nope"]),
-        ("export", vec!["export", "nope"]),
-    ];
-
-    for (group, args) in cases {
-        let output = Command::new(bin_path())
-            .args(args)
-            .output()
-            .unwrap_or_else(|error| panic!("run unsupported {group} subcommand: {error}"));
-
-        assert_eq!(output.status.code(), Some(1));
-        assert!(
-            output.stderr.is_empty(),
-            "unsupported {group} subcommand should not emit clap usage text"
-        );
-
-        let json = assert_single_json_envelope(&output);
-        assert_eq!(json["ok"], false);
-        assert_eq!(json["meta"]["tool"], "external");
-        assert_eq!(json["error"]["code"], "unsupported_command");
-        assert_eq!(
-            json["error"]["message"],
-            format!("{group} command is not supported: nope")
-        );
-    }
-}
-
-#[test]
-fn search_diff_preserves_schema_mismatch_error_contract() {
-    let fixture = Fixture::new();
-    drop_score_contexts_table(&fixture.db_path);
-
-    let output = fixture
-        .cmd()
-        .args(["search", "diff", "165432101,999999999"])
-        .output()
-        .expect("run search diff with mismatched schema");
-    assert_eq!(output.status.code(), Some(2));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "schema_mismatch");
+    let missing = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(missing.status.code(), Some(0));
+    let missing_json = assert_single_json_envelope(&missing);
+    let database = find_check(&missing_json, "database");
+    assert_eq!(database["label"], "Intelligence Database");
+    assert_eq!(database["status"], "missing");
     assert!(
-        json["error"]["message"]
+        database["fix"]
+            .as_array()
+            .expect("fix array")
+            .iter()
+            .any(|item| item
+                .as_str()
+                .is_some_and(|text| text.contains("let inspect")))
+    );
+
+    fixture.seed_bundle();
+    let present = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(present.status.code(), Some(0));
+    let present_json = assert_single_json_envelope(&present);
+    let database = find_check(&present_json, "database");
+    assert_eq!(database["status"], "ok");
+    assert!(
+        database["detail"]
             .as_str()
-            .is_some_and(|message| message.contains("score_contexts")),
-        "expected score_contexts schema mismatch message, got: {json:?}"
+            .unwrap_or_default()
+            .contains("1 entities")
     );
 }
 
 #[test]
 fn health_marks_schema_mismatch_as_blocking() {
     let fixture = Fixture::new();
-    drop_score_contexts_table(&fixture.db_path);
-
-    let output = fixture.cmd().args(["health"]).output().expect("run health");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["status"], "blocked");
-
-    let checks = json["data"]["checks"].as_array().expect("checks array");
-    let database = checks
-        .iter()
-        .find(|check| check["id"] == "database")
-        .expect("database check");
-    assert_eq!(database["status"], "error");
-    assert_eq!(database["severity"], "blocking");
-
-    let fix = database["fix"]
-        .as_array()
-        .expect("database fix instructions");
-    assert!(
-        fix.iter().any(|item| {
-            item.as_str()
-                .is_some_and(|text| text.contains("run `let fetch <id>`"))
-        }),
-        "expected fetch recreation hint, got: {fix:?}"
-    );
-}
-
-#[test]
-fn health_marks_unopenable_database_as_degraded() {
-    let fixture = Fixture::new();
-    fs::remove_file(&fixture.db_path).expect("remove seeded database file");
-    fs::create_dir(&fixture.db_path).expect("replace database with directory");
-
-    let output = fixture.cmd().args(["health"]).output().expect("run health");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["data"]["status"], "degraded");
-
-    let checks = json["data"]["checks"].as_array().expect("checks array");
-    let database = checks
-        .iter()
-        .find(|check| check["id"] == "database")
-        .expect("database check");
-    assert_eq!(database["status"], "error");
-    assert_eq!(database["severity"], "degraded");
-    assert!(
-        database["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.contains("sqlite error")),
-        "expected sqlite error detail, got: {database:?}"
-    );
-}
-
-#[test]
-fn health_marks_schema_version_mismatch_as_blocking() {
-    let fixture = Fixture::new();
-    let connection = Connection::open(&fixture.db_path).expect("open listings db");
+    let connection = rusqlite::Connection::open(fixture.db_path()).expect("open db");
     connection
         .pragma_update(None, "user_version", 999)
-        .expect("set mismatched user_version");
+        .expect("set schema version");
     drop(connection);
 
     let output = fixture.cmd().args(["health"]).output().expect("run health");
     assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    let checks = json["data"]["checks"].as_array().expect("checks array");
-    let database = checks
-        .iter()
-        .find(|check| check["id"] == "database")
-        .expect("database check");
-
+    let envelope = assert_single_json_envelope(&output);
+    let database = find_check(&envelope, "database");
     assert_eq!(database["severity"], "blocking");
     assert!(
         database["detail"]
             .as_str()
-            .is_some_and(|detail| detail.contains("schema version mismatch")),
-        "expected version mismatch detail, got: {database:?}"
+            .is_some_and(|text| text.contains("intelligence database schema version 999"))
     );
 }
 
 #[test]
-fn health_accepts_epc_bearer_token() {
+fn sources_list_and_status_use_new_surface() {
     let fixture = Fixture::new();
-    fs::write(
-        fixture.config_dir.join(".env"),
-        "EPC_API_BEARER_TOKEN=bearer-secret\nNOTION_API_KEY=secret_xxx\n",
-    )
-    .expect("write env file");
-
-    let output = fixture.cmd().args(["health"]).output().expect("run health");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    let checks = json["data"]["checks"].as_array().expect("checks array");
-    let epc_auth = checks
-        .iter()
-        .find(|check| check["id"] == "env.epc_auth")
-        .expect("epc auth check");
-
-    assert_eq!(epc_auth["status"], "ok");
-    assert_eq!(epc_auth["severity"], "info");
+    let list = fixture
+        .cmd()
+        .args(["sources", "list"])
+        .output()
+        .expect("run sources list");
+    assert_eq!(list.status.code(), Some(0));
+    let list_json = assert_single_json_envelope(&list);
+    assert_eq!(list_json["meta"]["tool"], "sources.list");
     assert!(
-        epc_auth["detail"]
-            .as_str()
-            .is_some_and(|detail| detail.contains("EPC_API_BEARER_TOKEN")),
-        "expected bearer-token detail, got: {epc_auth:?}"
+        list_json["data"]["sources"]
+            .as_array()
+            .expect("sources")
+            .iter()
+            .any(|source| source == "broadband")
+    );
+
+    let status = fixture
+        .cmd()
+        .args(["sources", "status"])
+        .output()
+        .expect("run sources status");
+    assert_eq!(status.status.code(), Some(0));
+    let status_json = assert_single_json_envelope(&status);
+    assert_eq!(status_json["meta"]["tool"], "sources.status");
+    assert_eq!(status_json["data"]["present"], 0);
+}
+
+#[test]
+fn evidence_reads_seeded_bundle() {
+    let fixture = Fixture::new();
+    fixture.seed_bundle();
+
+    let output = fixture
+        .cmd()
+        .args([
+            "evidence",
+            "170448131",
+            "--section",
+            "broadband,verifications",
+        ])
+        .output()
+        .expect("run evidence");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "evidence");
+    assert_eq!(envelope["data"]["bundle"]["rightmoveId"], "170448131");
+    assert_eq!(
+        envelope["data"]["bundle"]["broadband"]["gigabitAvailability"],
+        88.0
+    );
+    assert_eq!(
+        envelope["data"]["requestedSections"],
+        json!(["broadband", "verifications"])
     );
 }
 
 #[test]
-fn prune_dry_run_does_not_mutate_database() {
+fn verify_reads_seeded_verifications_without_refresh() {
     let fixture = Fixture::new();
+    fixture.seed_bundle();
+
     let output = fixture
         .cmd()
-        .args(["ops", "prune", "--min-score", "90", "--dry-run", "--force"])
+        .args(["verify", "170448131", "--claim", "broadband"])
         .output()
-        .expect("run prune dry-run");
+        .expect("run verify");
     assert_eq!(output.status.code(), Some(0));
 
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["data"]["dryRun"], true);
-    assert_eq!(json["data"]["removed"], 1);
-
-    let after = load_listings_file(&fixture.db_path).expect("reload listings");
-    assert_eq!(after.listings.len(), 1);
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "verify");
+    assert_eq!(envelope["data"]["verifications"][0]["status"], "supported");
 }
 
 #[test]
-fn fetch_with_empty_ids_returns_validation_error() {
-    let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["fetch", ",,,"])
-        .output()
-        .expect("run fetch");
-    assert_eq!(output.status.code(), Some(1));
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "validation_error");
-}
-
-#[test]
-fn assess_submit_invalid_payload_returns_error_envelope() {
+fn assess_save_and_get_persist_agent_json() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
         .args([
             "assess",
-            "submit",
-            "165432101",
-            r#"{"maintenance":"invalid","scoreAdjustment":99}"#,
+            "save",
+            "170448131",
+            r#"{"recommendation":"view","reasoning":"good evidence"}"#,
         ])
         .output()
-        .expect("run assess submit");
+        .expect("run assess save");
+    assert_eq!(output.status.code(), Some(0));
+    let save_json = assert_single_json_envelope(&output);
+    assert_eq!(save_json["meta"]["tool"], "assess.save");
+    assert_eq!(save_json["data"]["assessment"]["recommendation"], "view");
 
+    let get = fixture
+        .cmd()
+        .args(["assess", "get", "170448131"])
+        .output()
+        .expect("run assess get");
+    assert_eq!(get.status.code(), Some(0));
+    let get_json = assert_single_json_envelope(&get);
+    assert_eq!(get_json["meta"]["tool"], "assess.get");
+    assert_eq!(get_json["data"]["assessment"]["reasoning"], "good evidence");
+}
+
+#[test]
+fn assess_save_rejects_non_object_json() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["assess", "save", "170448131", "[1,2,3]"])
+        .output()
+        .expect("run assess save");
     assert_eq!(output.status.code(), Some(1));
 
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "validation_error");
-
-    let details = json["error"]["details"]
-        .as_array()
-        .expect("error details array");
-    assert!(
-        details.iter().any(|item| item["path"] == "maintenance"),
-        "expected maintenance validation detail, got: {details:?}"
-    );
-    assert!(
-        details.iter().any(|item| item["path"] == "scoreAdjustment"),
-        "expected scoreAdjustment validation detail, got: {details:?}"
-    );
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "validation_error");
 }
 
 #[test]
-fn assess_candidates_returns_unassessed_active_listing() {
+fn correct_address_persists_and_clear_disables_correction() {
     let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["assess", "candidates", "--top", "5"])
-        .output()
-        .expect("run assess candidates");
+    fixture.seed_bundle();
 
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    let candidates = json["data"]["candidates"]
-        .as_array()
-        .expect("candidates array");
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0]["portalId"], "165432101");
-}
-
-#[test]
-fn ops_patch_re_enriches_from_sources_by_default() {
-    let fixture = Fixture::new();
-    seed_minimal_sources(&fixture.sources_dir);
-    clear_listing_enrichment(&fixture);
-
-    let output = fixture
+    let save = fixture
         .cmd()
         .args([
-            "ops",
-            "patch",
-            "165432101",
-            "--address",
-            "10 Example Street, Manchester (updated)",
+            "correct",
+            "address",
+            "170448131",
+            "--postcode",
+            "YO1 7HH",
+            "--lat",
+            "53.9590",
+            "--lng",
+            "-1.0815",
+            "--note",
+            "verified manually",
         ])
         .output()
-        .expect("run ops patch");
-    assert_eq!(output.status.code(), Some(0));
-
-    let json = assert_single_json_envelope(&output);
-    let re_enriched = json["data"]["reEnriched"]
-        .as_array()
-        .expect("re-enriched array");
-    assert!(
-        re_enriched.iter().any(|item| item == "gigabitAvailability"),
-        "expected gigabitAvailability in re-enriched fields, got: {re_enriched:?}"
+        .expect("run correct address");
+    assert_eq!(save.status.code(), Some(0));
+    let save_json = assert_single_json_envelope(&save);
+    assert_eq!(save_json["meta"]["tool"], "correct.address");
+    assert_eq!(save_json["data"]["correction"]["kind"], "address");
+    assert_eq!(
+        save_json["data"]["correction"]["payload"]["postcode"],
+        "YO1 7HH"
     );
-    assert!(
-        re_enriched.iter().any(|item| item == "lsoaCode"),
-        "expected lsoaCode in re-enriched fields, got: {re_enriched:?}"
+    let correction_id = save_json["data"]["correction"]["id"]
+        .as_str()
+        .expect("correction id")
+        .to_owned();
+
+    let evidence = fixture
+        .cmd()
+        .args(["evidence", "170448131"])
+        .output()
+        .expect("run evidence");
+    assert_eq!(evidence.status.code(), Some(0));
+    let evidence_json = assert_single_json_envelope(&evidence);
+    assert_eq!(
+        evidence_json["data"]["bundle"]["corrections"][0]["id"],
+        correction_id
     );
 
-    let after = load_listings_file(&fixture.db_path).expect("reload listings");
-    let listing = after.listings.first().expect("listing exists");
-    assert_eq!(listing.gigabit_availability, Some(88.0));
-    assert_eq!(listing.area.lsoa.code.as_deref(), Some("E01005236"));
-    assert_eq!(listing.area.msoa.code.as_deref(), Some("E02001052"));
-}
-
-#[test]
-fn ops_patch_skip_re_enrich_keeps_source_fields_untouched() {
-    let fixture = Fixture::new();
-    seed_minimal_sources(&fixture.sources_dir);
-    clear_listing_enrichment(&fixture);
-
-    let output = fixture
+    let clear = fixture
         .cmd()
         .args([
-            "ops",
-            "patch",
-            "165432101",
-            "--address",
-            "10 Example Street, Manchester (skip)",
-            "--skip-re-enrich",
+            "correct",
+            "clear",
+            "170448131",
+            "--kind",
+            "address",
+            "--correction-id",
+            &correction_id,
         ])
         .output()
-        .expect("run ops patch");
-    assert_eq!(output.status.code(), Some(0));
+        .expect("run correct clear");
+    assert_eq!(clear.status.code(), Some(0));
+    let clear_json = assert_single_json_envelope(&clear);
+    assert_eq!(clear_json["meta"]["tool"], "correct.clear");
+    assert_eq!(clear_json["data"]["correction"]["active"], false);
 
-    let json = assert_single_json_envelope(&output);
-    let re_enriched = json["data"]["reEnriched"]
-        .as_array()
-        .expect("re-enriched array");
-    assert!(re_enriched.is_empty());
-
-    let after = load_listings_file(&fixture.db_path).expect("reload listings");
-    let listing = after.listings.first().expect("listing exists");
-    assert_eq!(listing.gigabit_availability, None);
-    assert_eq!(listing.area.lsoa.code, None);
-    assert_eq!(listing.area.msoa.code, None);
-}
-
-#[test]
-fn global_json_flag_is_rejected() {
-    let fixture = Fixture::new();
-    let output = fixture
+    let evidence_after_clear = fixture
         .cmd()
-        .args(["--json", "tools"])
+        .args(["evidence", "170448131"])
         .output()
-        .expect("run tools with removed flag");
-
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&output.stderr);
+        .expect("run evidence after clear");
+    let evidence_after_clear_json = assert_single_json_envelope(&evidence_after_clear);
     assert!(
-        stderr.contains("unexpected argument '--json'"),
-        "expected clap to reject removed flag, got: {stderr}"
+        evidence_after_clear_json["data"]["bundle"]
+            .get("corrections")
+            .is_none()
     );
 }
 
 #[test]
-fn build_sources_list_returns_single_line_json_envelope_by_default() {
+fn inspect_rejects_non_rightmove_ids_with_json_envelope() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
-        .args(["build", "sources", "list"])
+        .args(["inspect", "not-a-listing"])
         .output()
-        .expect("run build sources list");
+        .expect("run inspect");
+    assert_eq!(output.status.code(), Some(1));
 
-    assert_eq!(output.status.code(), Some(0));
-    assert!(
-        output.stderr.is_empty(),
-        "build sources list should not write to stderr in default JSON mode"
-    );
-
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["meta"]["tool"], "build.sources");
-    assert!(json["data"]["sources"].as_array().is_some());
-    assert_eq!(json["data"]["defaultJobs"], 3);
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "inspect");
+    assert_eq!(envelope["error"]["code"], "invalid_input");
 }
 
 #[test]
-fn toon_flag_switches_to_toon_envelope() {
+fn unsupported_group_subcommands_return_json_envelope() {
     let fixture = Fixture::new();
     let output = fixture
         .cmd()
-        .args(["--toon", "build", "sources", "list"])
+        .args(["sources", "legacy"])
         .output()
-        .expect("run build sources list with toon mode");
+        .expect("run unsupported group command");
+    assert_eq!(output.status.code(), Some(1));
 
-    assert_eq!(output.status.code(), Some(0));
-
-    let value = assert_single_toon_envelope(&output);
-    assert_eq!(value["ok"], true);
-    assert_eq!(value["meta"]["tool"], "build.sources");
-    assert!(value["data"]["sources"].as_array().is_some());
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "unsupported_command");
 }
 
 #[cfg(unix)]
 #[test]
-fn start_passes_resolved_paths_to_child_tui() {
+fn start_launches_tui_binary_with_runtime_paths() {
+    use std::os::unix::fs::PermissionsExt;
+
     let fixture = Fixture::new();
-    let script_dir = TempDir::new().expect("script tempdir");
-    let script_path = script_dir.path().join("let-tui-mock.sh");
-    let capture_path = script_dir.path().join("captured-env.txt");
-
+    let fake_tui = fixture.data_dir.join("fake-let-tui");
+    let capture = fixture.data_dir.join("start-env.txt");
     fs::write(
-        &script_path,
-        r#"#!/bin/sh
-{
-  printf 'LET_DATA_DIR=%s\n' "$LET_DATA_DIR"
-  printf 'LET_CONFIG_DIR=%s\n' "$LET_CONFIG_DIR"
-  printf 'LET_CACHE_DIR=%s\n' "$LET_CACHE_DIR"
-  printf 'LET_SOURCES_DIR=%s\n' "$LET_SOURCES_DIR"
-} > "$LET_TUI_CAPTURE_PATH"
-"#,
+        &fake_tui,
+        "#!/bin/sh\nprintf '%s\\n' \"$LET_DATA_DIR\" \"$LET_CONFIG_DIR\" \"$LET_CACHE_DIR\" \"$LET_SOURCES_DIR\" \"$LET_START_ID\" \"$LET_START_SECTIONS\" > \"$LET_TUI_CAPTURE\"\nexit 0\n",
     )
-    .expect("write mock tui script");
-
-    let chmod = Command::new("chmod")
-        .args(["+x", script_path.to_str().expect("script path str")])
-        .status()
-        .expect("chmod script");
-    assert!(chmod.success(), "chmod should succeed");
+    .expect("write fake tui");
+    let mut permissions = fs::metadata(&fake_tui)
+        .expect("fake tui metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_tui, permissions).expect("chmod fake tui");
 
     let output = fixture
         .cmd()
-        .env("LET_TUI_BIN", &script_path)
-        .env("LET_TUI_CAPTURE_PATH", &capture_path)
-        .args(["start"])
+        .env("LET_TUI_BIN", &fake_tui)
+        .env("LET_TUI_CAPTURE", &capture)
+        .args(["start", "--id", "170448131", "--section", "media,address"])
         .output()
         .expect("run start");
-
     assert_eq!(output.status.code(), Some(0));
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["meta"]["tool"], "start");
 
-    let captured = fs::read_to_string(&capture_path).expect("read captured env");
-    assert!(
-        captured.contains(&format!("LET_DATA_DIR={}", fixture.data_dir.display())),
-        "expected data dir in child env, got: {captured}"
-    );
-    assert!(
-        captured.contains(&format!("LET_CONFIG_DIR={}", fixture.config_dir.display())),
-        "expected config dir in child env, got: {captured}"
-    );
-    assert!(
-        captured.contains(&format!("LET_CACHE_DIR={}", fixture.cache_dir.display())),
-        "expected cache dir in child env, got: {captured}"
-    );
-    assert!(
-        captured.contains(&format!(
-            "LET_SOURCES_DIR={}",
-            fixture.sources_dir.display()
-        )),
-        "expected sources dir in child env, got: {captured}"
-    );
-}
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "start");
+    assert_eq!(envelope["data"]["status"], "exited");
+    assert_eq!(envelope["data"]["id"], "170448131");
+    assert_eq!(envelope["data"]["sections"], "media,address");
 
-#[test]
-fn prune_requires_force_in_non_interactive_mode() {
-    let fixture = Fixture::new();
-    let output = fixture
-        .cmd()
-        .args(["ops", "prune", "--min-score", "90"])
-        .output()
-        .expect("run prune without force");
-
-    assert_eq!(output.status.code(), Some(1));
-    let json = assert_single_json_envelope(&output);
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["error"]["code"], "validation_error");
+    let captured = fs::read_to_string(capture).expect("capture env");
+    let lines = captured.lines().collect::<Vec<_>>();
+    assert_eq!(lines[0], fixture.data_dir.to_str().expect("data dir str"));
+    assert_eq!(
+        lines[1],
+        fixture.config_dir.to_str().expect("config dir str")
+    );
+    assert_eq!(lines[2], fixture.cache_dir.to_str().expect("cache dir str"));
+    assert_eq!(
+        lines[3],
+        fixture.sources_dir.to_str().expect("sources dir str")
+    );
+    assert_eq!(lines[4], "170448131");
+    assert_eq!(lines[5], "media,address");
 }
 
 #[test]
 fn json_envelope_helper_accepts_single_stdout_line() {
-    let json = assert_single_json_envelope_stdout("{\"ok\":true}\n");
-    assert_eq!(json["ok"], true);
+    let envelope = assert_single_json_envelope_stdout("{\"ok\":true}\n");
+    assert_eq!(envelope["ok"], true);
 }
 
 #[test]
+#[should_panic(expected = "expected exactly one stdout line")]
 fn json_envelope_helper_rejects_extra_blank_stdout_lines() {
-    let result = std::panic::catch_unwind(|| {
-        assert_single_json_envelope_stdout("{\"ok\":true}\n\n");
-    });
-
-    assert!(
-        result.is_err(),
-        "helper should reject trailing blank stdout lines"
-    );
+    let _ = assert_single_json_envelope_stdout("{\"ok\":true}\n\n");
 }
 
 fn assert_single_json_envelope(output: &Output) -> serde_json::Value {
@@ -1068,11 +540,10 @@ fn assert_single_json_envelope(output: &Output) -> serde_json::Value {
 
 fn assert_single_toon_envelope(output: &Output) -> serde_json::Value {
     let stdout = String::from_utf8(output.stdout.clone()).expect("stdout utf-8");
-    let Some(line) = stdout.strip_suffix('\n') else {
+    let Some(document) = stdout.strip_suffix('\n') else {
         panic!("expected Toon envelope stdout to end with one newline, got: {stdout:?}");
     };
-    assert!(!line.is_empty(), "expected Toon envelope on stdout");
-    toon_format::decode_default(line).expect("decode Toon envelope")
+    toon_format::decode_default(document).expect("decode Toon envelope")
 }
 
 fn assert_single_json_envelope_stdout(stdout: &str) -> serde_json::Value {
@@ -1090,199 +561,269 @@ fn assert_single_json_envelope_stdout(stdout: &str) -> serde_json::Value {
     serde_json::from_str(line).expect("parse envelope")
 }
 
-#[cfg(unix)]
-fn write_clipboard_capture_script(path: &Path) {
-    fs::write(path, "#!/bin/sh\ncat > \"$LET_CLIPBOARD_CAPTURE_PATH\"\n")
-        .expect("write clipboard capture script");
-    make_executable(path);
+fn find_check<'a>(envelope: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    envelope["data"]["checks"]
+        .as_array()
+        .expect("checks array")
+        .iter()
+        .find(|check| check["id"] == id)
+        .expect("check present")
 }
 
-#[cfg(unix)]
-fn make_executable(path: &Path) {
-    let chmod = Command::new("chmod")
-        .args(["+x", path.to_str().expect("path str")])
-        .status()
-        .expect("chmod path");
-    assert!(
-        chmod.success(),
-        "chmod should succeed for {}",
-        path.display()
-    );
+fn sample_config() -> &'static str {
+    r#"
+[search]
+useApi = true
+
+[[search.locations]]
+id = "REGION^87490"
+name = "Manchester"
+
+[search.filters]
+minBedrooms = 1
+maxBedrooms = 4
+minPrice = 600
+maxPrice = 2500
+propertyTypes = ["flat"]
+includeLetAgreed = false
+radius = 0.0
+dontShow = []
+mustHave = []
+
+[fetch]
+delayMs = 1
+maxListings = 100
+maxRetries = 2
+minScore = 0
+dropNewBelowMinScore = false
+downloadMaps = false
+downloadFloorplan = false
+downloadEpcAsset = false
+mediaDownloadConcurrency = 1
+mediaProcessConcurrency = 1
+mediaPhotoLandscapeWidth = 1200
+mediaPhotoLandscapeHeight = 800
+mediaPhotoPortraitWidth = 900
+mediaPhotoPortraitHeight = 1200
+mediaAuxWidth = 1200
+mediaAuxHeight = 800
+mediaMapWidth = 1200
+mediaMapHeight = 800
+mediaQualityPhoto = 82
+mediaQualityAux = 82
+mediaQualityMap = 82
+mediaTimeoutMs = 15000
+
+[scoring]
+adaptiveness = 2.0
+adaptivenessFactor = 0.5
+regionPriority = {}
+
+[scoring.weights]
+affordability = 0.25
+location = 0.30
+liveability = 0.45
+
+[scoring.affordability]
+priceWeight = 1.0
+epcWeight = 0.0
+
+[scoring.affordability.heatingCosts]
+A = 30
+B = 45
+C = 70
+D = 100
+E = 400
+F = 450
+G = 500
+
+[scoring.location]
+stationWeight = 0.45
+broadbandWeight = 0.20
+priorityWeight = 0.20
+imdWeight = 0.15
+crimeWeight = 0.0
+
+[scoring.liveability]
+heatingWeight = 0.2
+gardenWeight = 0.2
+propertyTypeWeight = 0.6
+
+[scoring.liveability.garden]
+private = 100
+shared = 40
+none = 0
+
+[scoring.liveability.heating]
+gas = 100
+electric = 60
+unknown = 30
+
+[scoring.liveability.propertyType]
+flat = 80
+
+[scoring.penalties]
+epcF = 0.0
+epcG = 0.0
+noGarden = 0.5
+noPets = 0.9
+deprivation = 0.75
+deprivationThreshold = 2
+highCrime = 0.8
+highCrimeThreshold = 120
+missingDataPenalty = 0.95
+"#
 }
 
-fn drop_score_contexts_table(db_path: &Path) {
-    let connection = Connection::open(db_path).expect("open listings db");
-    connection
-        .execute_batch("DROP TABLE IF EXISTS score_contexts;")
-        .expect("drop score_contexts table");
-}
-
-fn seed_minimal_sources(sources_dir: &Path) {
-    let postcodes_db = Connection::open(sources_dir.join("postcodes.db")).expect("postcodes db");
-    postcodes_db
-        .execute_batch(
-            "
-            CREATE TABLE postcodes (
-                postcode TEXT PRIMARY KEY,
-                postcode_display TEXT,
-                lsoa_code TEXT,
-                lsoa_name TEXT,
-                msoa_code TEXT,
-                msoa_name TEXT
-            );
-            INSERT INTO postcodes (postcode, postcode_display, lsoa_code, lsoa_name, msoa_code, msoa_name)
-            VALUES ('M11AA', 'M1 1AA', 'E01005236', 'Manchester 001A', 'E02001052', 'Manchester 001');
-            ",
-        )
-        .expect("seed postcodes");
-
-    let broadband_db = Connection::open(sources_dir.join("broadband.db")).expect("broadband db");
-    broadband_db
-        .execute_batch(
-            "
-            CREATE TABLE postcodes (
-                postcode TEXT PRIMARY KEY,
-                postcode_display TEXT,
-                gigabit_availability REAL
-            );
-            INSERT INTO postcodes (postcode, postcode_display, gigabit_availability)
-            VALUES ('M11AA', 'M1 1AA', 88.0);
-            ",
-        )
-        .expect("seed broadband");
-}
-
-fn clear_listing_enrichment(fixture: &Fixture) {
-    let mut data = load_listings_file(&fixture.db_path).expect("load listings");
-    for listing in &mut data.listings {
-        listing.gigabit_availability = None;
-        listing.area.lsoa.code = None;
-        listing.area.lsoa.name = None;
-        listing.area.msoa.code = None;
-        listing.area.msoa.name = None;
-    }
-
-    let meta = DbMeta {
-        updated_at: "2026-03-02T00:00:00.000Z".to_owned(),
-        last_search_total: data.last_search_total,
+fn sample_bundle() -> EvidenceBundle {
+    let source = SourceRef {
+        source: "rightmove".to_owned(),
+        snapshot_id: Some("snapshot-1".to_owned()),
+        observation_id: None,
+        url: Some("https://www.rightmove.co.uk/properties/170448131".to_owned()),
+        captured_at: Some("2026-06-18T00:00:00.000Z".to_owned()),
     };
-    upsert_listings(
-        &fixture.db_path,
-        &[],
-        &data.listings,
-        &data.listings,
-        &meta,
-        &data.search_urls,
-        &data.locations,
-    )
-    .expect("persist listing reset");
-}
+    let broadband_source = SourceRef {
+        source: "broadbandDb".to_owned(),
+        snapshot_id: None,
+        observation_id: None,
+        url: None,
+        captured_at: None,
+    };
+    let assessment = AssessmentRecord {
+        entity_id: "rightmove:170448131".to_owned(),
+        assessment: json!({"recommendation":"view"}),
+        saved_at: "2026-06-18T00:00:00.000Z".to_owned(),
+    };
 
-fn sample_listing() -> Listing {
-    Listing {
-        id: "2d8ab4a6-7de1-4e3f-a4aa-9408f2112377".to_owned(),
-        portal_ids: PortalIds {
-            rightmove: Some("165432101".to_owned()),
-            zoopla: None,
-            onthemarket: None,
+    EvidenceBundle {
+        entity_id: "rightmove:170448131".to_owned(),
+        rightmove_id: "170448131".to_owned(),
+        url: "https://www.rightmove.co.uk/properties/170448131".to_owned(),
+        generated_at: "2026-06-18T00:00:00.000Z".to_owned(),
+        depth: InspectDepth::Standard,
+        refresh: RefreshPolicy::Stale,
+        sections: [
+            (
+                "rightmove".to_owned(),
+                SectionState::ok("Rightmove PAGE_MODEL captured", ConfidenceLevel::Probable),
+            ),
+            (
+                "broadband".to_owned(),
+                SectionState::ok("broadband database matched", ConfidenceLevel::Probable),
+            ),
+            (
+                "verifications".to_owned(),
+                SectionState::ok("claims verified", ConfidenceLevel::Probable),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        source_snapshots: Vec::new(),
+        rightmove: RightmoveEvidence {
+            rightmove_id: "170448131".to_owned(),
+            url: "https://www.rightmove.co.uk/properties/170448131".to_owned(),
+            page_status: "active".to_owned(),
+            fetched_at: "2026-06-18T00:00:00.000Z".to_owned(),
+            content_hash: "hash".to_owned(),
+            title: Some("Two bedroom flat".to_owned()),
+            address: Some("1 Example Street".to_owned()),
+            postcode: Some("M1 1AA".to_owned()),
+            display_price: Some("£1,250 pcm".to_owned()),
+            price_pcm: Some(1250),
+            bedrooms: Some(2),
+            bathrooms: Some(1),
+            property_type: Some("Flat".to_owned()),
+            agent_name: Some("Example Agent".to_owned()),
+            agent_phone: Some("0161 000 0000".to_owned()),
+            latitude: Some(53.4808),
+            longitude: Some(-2.2426),
+            pin_type: Some("ACCURATE_POINT".to_owned()),
+            listed_date: Some("2026-06-01".to_owned()),
+            available_date: None,
+            deposit: Some(1442),
+            description: DescriptionEvidence {
+                raw_html: "Gigabit broadband available".to_owned(),
+                text: "Gigabit broadband available".to_owned(),
+                key_features: vec!["Balcony".to_owned()],
+                normalized_text: "balcony gigabit broadband available".to_owned(),
+            },
+            media: vec![MediaItemEvidence {
+                kind: "photo".to_owned(),
+                remote_url: "https://media.rightmove.co.uk/photo.jpg".to_owned(),
+                local_path: None,
+                width: None,
+                height: None,
+                content_hash: None,
+                status: "remote".to_owned(),
+            }],
         },
-        uprn: Some("100021345678".to_owned()),
-        uprn_source: None,
-        uprn_confidence: None,
-        url: "https://www.rightmove.co.uk/properties/165432101".to_owned(),
-        location: GeoLocation {
-            lat: 53.4808,
-            lng: -2.2426,
-            pin_type: Some(PinType::AccuratePoint),
+        address: AddressEvidence {
+            candidates: vec![AddressCandidateEvidence {
+                source: "rightmove".to_owned(),
+                label: "1 Example Street".to_owned(),
+                postcode: Some("M1 1AA".to_owned()),
+                latitude: Some(53.4808),
+                longitude: Some(-2.2426),
+                confidence: ConfidenceLevel::Exact,
+                raw: None,
+            }],
+            selected: None,
+            status: SectionStatus::Ok,
+            confidence: ConfidenceLevel::Exact,
+            warnings: Vec::new(),
         },
-        postcode: "M1 1AA".to_owned(),
-        address: "10 Example Street, Manchester".to_owned(),
-        region: Some("Manchester".to_owned()),
-        google_maps_url: "https://maps.google.com/?q=53.4808,-2.2426".to_owned(),
-        google_maps_street_view_url: "https://maps.google.com/?layer=c&cbll=53.4808,-2.2426"
-            .to_owned(),
-        area: AreaMetrics {
-            lsoa: AreaCodeName {
-                code: Some("E01005236".to_owned()),
-                name: Some("Manchester 001A".to_owned()),
-            },
-            msoa: AreaCodeName {
-                code: Some("E02001052".to_owned()),
-                name: Some("Manchester 001".to_owned()),
-            },
-            imd: ImdMetrics {
-                rank: Some(14000),
-                decile: Some(5),
-                score: Some(18.4),
-            },
-            income: IncomeMetrics {
-                bhc: Some(35_200.0),
-                ahc: Some(30_100.0),
-            },
-            social_housing_pct: Some(14.0),
-            population: Some(9800),
-            flood_risk: FloodRisk {
-                level: Some("low".to_owned()),
-                source: Some("ea".to_owned()),
-            },
-            crime: CrimeMetrics {
-                count_12m: Some(240),
-                rate_per_1k: Some(58.3),
-                violent_12m: Some(30),
-                burglary_12m: Some(11),
-                robbery_12m: Some(3),
-                band: None,
-                trend: None,
-                updated_at: Some("2026-01-31".to_owned()),
-            },
-        },
-        price: 1450,
-        price_display: "£1,450 pcm".to_owned(),
-        bedrooms: 2,
-        bathrooms: 1,
-        property_type: "Flat".to_owned(),
-        description: "Two-bedroom apartment with private balcony and shared garden.".to_owned(),
-        notes: vec!["balcony".to_owned(), "shared garden".to_owned()],
-        images: vec![ListingImage {
-            remote: "https://media.rightmove.co.uk/image-1.jpg".to_owned(),
-            local: None,
+        facts: vec![FactEvidence {
+            provider: FactProvider::BroadbandDb,
+            category: "broadband".to_owned(),
+            name: "gigabitAvailability".to_owned(),
+            value: json!(88.0),
+            confidence: ConfidenceLevel::Probable,
+            sources: vec![broadband_source.clone()],
         }],
-        floorplan: RemoteLocalAsset {
-            remote: Some("https://media.rightmove.co.uk/floorplan.jpg".to_owned()),
-            local: None,
-        },
-        epc: RemoteLocalAsset {
-            remote: Some("https://epc.service.gov.uk/energy-certificate/abcd".to_owned()),
-            local: None,
-        },
-        map_views: MapViews::default(),
-        epc_rating: Some(let_sdk::schema::listing::EpcBand::C),
-        floor_area_sqm: Some(72.0),
-        epc_lodgement_date: None,
-        epc_address_match: None,
-        epc_search_url: None,
-        nearest_stations: vec![let_sdk::schema::listing::StationDistance {
-            name: "Piccadilly".to_owned(),
-            distance: 0.4,
-            unit: "miles".to_owned(),
+        broadband: Some(BroadbandEvidence {
+            postcode: "M11AA".to_owned(),
+            postcode_display: Some("M1 1AA".to_owned()),
+            outward: Some("M1".to_owned()),
+            area: Some("M".to_owned()),
+            gigabit_availability: Some(88.0),
+            pct_over_300mbps: Some(92.0),
+            ufbb_availability: Some(95.0),
+            sfbb_availability: Some(99.0),
+        }),
+        epc: None,
+        claims: vec![ClaimEvidence {
+            id: "claim-1".to_owned(),
+            claim_type: "broadband".to_owned(),
+            claim_text: "description mentions gigabit broadband".to_owned(),
+            value: json!({"claimedCapability":"gigabit"}),
+            source: source.clone(),
         }],
-        gigabit_availability: Some(95.0),
-        listed_date: Some("2026-02-10".to_owned()),
-        lettings: Lettings {
-            available_date: Some("2026-03-01".to_owned()),
-            deposit: Some(1673),
+        verifications: vec![VerificationEvidence {
+            id: "verification-1".to_owned(),
+            claim_id: Some("claim-1".to_owned()),
+            claim_type: "broadband".to_owned(),
+            status: VerificationStatus::Supported,
+            confidence: ConfidenceLevel::Probable,
+            explanation: "Ofcom postcode data supports the claim".to_owned(),
+            evidence: vec![broadband_source],
+        }],
+        media: MediaEvidence {
+            photos: vec![MediaItemEvidence {
+                kind: "photo".to_owned(),
+                remote_url: "https://media.rightmove.co.uk/photo.jpg".to_owned(),
+                local_path: None,
+                width: None,
+                height: None,
+                content_hash: None,
+                status: "remote".to_owned(),
+            }],
+            floorplans: Vec::new(),
+            epc_graphs: Vec::new(),
+            maps: Vec::new(),
         },
-        agent: Agent {
-            name: Some("Example Agent".to_owned()),
-            phone: Some("0161 000 0000".to_owned()),
-        },
-        assessment: None,
-        assessed_at: None,
-        assessed_score: None,
-        scores: None,
-        fetched_at: "2026-03-01T00:00:00.000Z".to_owned(),
-        extraction_status: ExtractionStatus::Success,
-        status: ListingStatus::Active,
-        notion_page_id: None,
+        assessment: Some(assessment),
+        corrections: Vec::new(),
+        next_actions: Vec::new(),
     }
 }

@@ -238,10 +238,10 @@ CREATE TABLE IF NOT EXISTS meta (
 -- INDEXES: Secondary indexes for common query patterns
 --------------------------------------------------------------------------------
 
--- Region filtering: let view list --region
+-- Region filtering in legacy listing repository tests.
 CREATE INDEX IF NOT EXISTS idx_listings_region ON listings(region);
 
--- Status filtering: let ops verify, active/inactive queries
+-- Status filtering in legacy listing repository tests.
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
 
 -- Combined region + status: common filter pattern
@@ -250,5 +250,5 @@ CREATE INDEX IF NOT EXISTS idx_listings_status_region ON listings(status, region
 -- Rightmove ID lookup
 CREATE UNIQUE INDEX IF NOT EXISTS idx_listings_portal_rightmove ON listings(portal_rightmove) WHERE portal_rightmove IS NOT NULL;
 
--- Score sorting: let view list --sort overall
+-- Score sorting in legacy listing repository tests.
 CREATE INDEX IF NOT EXISTS idx_scores_overall ON scores(overall DESC);

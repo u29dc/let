@@ -1,10 +1,10 @@
-> `let` is a Rust workspace for an agent-native UK rental search toolbelt. It discovers Rightmove listings, enriches them from local source databases plus EPC/Mapbox/Notion integrations, scores them against configurable preferences, and serves the same working set through a JSON-first CLI and a Ratatui browser.
+> `let` is a Rust workspace for an agent-native UK rental intelligence toolbelt. It discovers Rightmove listing ids, gathers evidence bundles from Rightmove plus local source databases, Mapbox, and EPC data, verifies checkable claims, and persists AI-authored assessments through a JSON-first CLI.
 
 ## 1. Documentation
 
-- Primary runtime contracts: [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs), [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs), [`crates/let-cli/src/envelope.rs`](crates/let-cli/src/envelope.rs), [`crates/let-sdk/src/config.rs`](crates/let-sdk/src/config.rs), [`crates/let-sdk/src/paths.rs`](crates/let-sdk/src/paths.rs), [`crates/let-sdk/src/db/schema.sql`](crates/let-sdk/src/db/schema.sql)
-- Source-build and enrichment truth: [`crates/let-sdk/src/sources/mod.rs`](crates/let-sdk/src/sources/mod.rs), [`crates/let-sdk/src/sources/common.rs`](crates/let-sdk/src/sources/common.rs), [`crates/let-sdk/src/pipeline/enrich.rs`](crates/let-sdk/src/pipeline/enrich.rs), [`crates/let-sdk/src/pipeline/epc.rs`](crates/let-sdk/src/pipeline/epc.rs)
-- Runtime entrypoints: [`crates/let-cli/src/commands/start.rs`](crates/let-cli/src/commands/start.rs), [`crates/let-tui/src/app.rs`](crates/let-tui/src/app.rs), [`package.json`](package.json)
+- Primary runtime contracts: [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs), [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs), [`crates/let-cli/src/envelope.rs`](crates/let-cli/src/envelope.rs), [`crates/let-sdk/src/intelligence/types.rs`](crates/let-sdk/src/intelligence/types.rs), [`crates/let-sdk/src/intelligence/repository.rs`](crates/let-sdk/src/intelligence/repository.rs), [`crates/let-sdk/src/intelligence/service.rs`](crates/let-sdk/src/intelligence/service.rs), [`crates/let-sdk/src/config.rs`](crates/let-sdk/src/config.rs), [`crates/let-sdk/src/paths.rs`](crates/let-sdk/src/paths.rs)
+- Source-build and enrichment truth: [`crates/let-sdk/src/sources/mod.rs`](crates/let-sdk/src/sources/mod.rs), [`crates/let-sdk/src/sources/common.rs`](crates/let-sdk/src/sources/common.rs), [`crates/let-sdk/src/pipeline/enrich.rs`](crates/let-sdk/src/pipeline/enrich.rs), [`crates/let-sdk/src/pipeline/epc.rs`](crates/let-sdk/src/pipeline/epc.rs), [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs)
+- Runtime entrypoints: [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs), [`crates/let-tui/src/app.rs`](crates/let-tui/src/app.rs), [`package.json`](package.json)
 - Agent workflow docs live in [`.claude/skills/let/SKILL.md`](.claude/skills/let/SKILL.md); bootstrap templates live in [`.claude/skills/let/templates/`](.claude/skills/let/templates/)
 - Prefer `let tools`, `let health`, and `let config show` over prose when command shape or runtime expectations are unclear
 - [`.github/workflows/`](.github/workflows/) is currently empty, so local commands and hooks are the effective source of validation policy
@@ -15,9 +15,9 @@
 ```text
 .
 ├── crates/
-│   ├── let-cli/              clap command surface, tool registry, envelopes, clipboard
-│   ├── let-sdk/              config, paths, DB, fetch/enrich/score pipelines, source builders
-│   └── let-tui/              Ratatui browser over the shared DB and cache
+│   ├── let-cli/              clap command surface, tool registry, envelopes, command wrappers
+│   ├── let-sdk/              config, paths, intelligence DB, Rightmove/EPC/Mapbox/source pipelines
+│   └── let-tui/              Ratatui browser over local runtime data and cache
 ├── .claude/skills/let/       agent workflow and bootstrap templates
 ├── package.json              Bun wrappers for hooks, builds, and local checks
 ├── AGENTS.md                 canonical repo instructions
@@ -25,7 +25,7 @@
 └── README.md -> AGENTS.md
 ```
 
-- Start in [`crates/let-cli/src/commands/`](crates/let-cli/src/commands/) for CLI surface changes, [`crates/let-sdk/src/pipeline/`](crates/let-sdk/src/pipeline/) for fetch/enrich/score behavior, and [`crates/let-sdk/src/db/`](crates/let-sdk/src/db/) for persistence changes
+- Start in [`crates/let-cli/src/commands/`](crates/let-cli/src/commands/) for CLI surface changes, [`crates/let-sdk/src/intelligence/`](crates/let-sdk/src/intelligence/) for evidence contracts/orchestration/persistence, and [`crates/let-sdk/src/pipeline/`](crates/let-sdk/src/pipeline/) for provider-specific capture and enrichment behavior
 - [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs) is the source of truth for the agent-facing tool catalog and global flags
 - Treat [`target/`](target/), [`node_modules/`](node_modules/), `$LET_HOME/data`, `$LET_HOME/cache`, and `$LET_HOME/sources` as generated or runtime-owned state
 
@@ -35,8 +35,8 @@
 | --- | --- | --- |
 | Runtime | Rust 2024 workspace | three crates: SDK, CLI, TUI; `unsafe` forbidden |
 | CLI | `clap` + JSON/Toon envelopes | default stdout is JSON; `--toon` emits the same envelope as Toon |
-| TUI | `ratatui` + `crossterm` | launched by the CLI and pointed at the same runtime dirs |
-| Storage | SQLite via `rusqlite` | one listings DB plus one DB per enrichment source |
+| TUI | `ratatui` + `crossterm` | local browser surface; keep it aligned with the intelligence DB before expanding it |
+| Storage | SQLite via `rusqlite` | one intelligence DB plus one DB per enrichment source |
 | HTTP / Parsing | `reqwest`, `serde_json`, `csv`, `zip`, `calamine`, `image` | Rightmove fetch, EPC/Mapbox/Notion, source ingests, media normalization |
 | JS Tooling | Bun + Husky + lint-staged | wrappers, hooks, and release/install scripts only; product code is Rust |
 
@@ -45,60 +45,62 @@
 - `bun install` installs JS tooling and activates the Husky hooks in [`.husky/`](.husky/)
 - `cargo run -q -p let-cli -- tools` prints the current tool catalog and global flags from [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs)
 - `cargo run -q -p let-cli -- health` checks config, DB/schema health, source DB presence, credentials, and writable runtime dirs
-- `cargo run -q -p let-cli -- search discover` and `cargo run -q -p let-cli -- search diff <ids>` are the discovery loop; discovery is API-first with HTML fallback unless `search.useApi = false`
-- `cargo run -q -p let-cli -- fetch <ids>` fetches Rightmove pages, enriches, scores, optionally normalizes media, and upserts the listings DB
-- `cargo run -q -p let-cli -- assess candidates|context|submit ...` is the structured assessment loop over stored listings
-- `cargo run -q -p let-cli -- build sources list|all|<name>` builds enrichment DBs under `$LET_HOME/sources`; progress logs are written to stderr, not stdout
+- `cargo run -q -p let-cli -- search resolve <location>` resolves place names to Rightmove location identifiers
+- `cargo run -q -p let-cli -- search discover` discovers Rightmove listing ids; discovery is API-first with HTML fallback unless `search.useApi = false`
+- `cargo run -q -p let-cli -- inspect <id-or-url> [--depth quick|standard|deep] [--refresh none|stale|all] [--section ...]` gathers and persists one evidence bundle
+- `cargo run -q -p let-cli -- evidence <id> [--section ...]` reads a stored evidence bundle
+- `cargo run -q -p let-cli -- verify <id> [--claim all|address|broadband|epc|media|description] [--refresh none|stale|all]` verifies extracted claims against available evidence
+- `cargo run -q -p let-cli -- correct address|epc|media|clear ...` records append-only manual corrections for bad listing address, postcode, EPC, or map evidence
+- `cargo run -q -p let-cli -- assess save|get ...` stores or reads AI-authored assessment JSON; the CLI does not compute the final recommendation
+- `cargo run -q -p let-cli -- sources list|status|build <all|name>` manages enrichment DBs under `$LET_HOME/sources`; progress logs are written to stderr, not stdout
+- `cargo run -q -p let-cli -- start [--id <id>] [--section ...]` launches `let-tui` with the same runtime path overrides as the CLI
 - `bun run build` performs a release build and installs `let` plus `let-tui` into `${LET_HOME:-${TOOLS_HOME:-$HOME/.tools}/let}`
 - `bun run util:check` runs the local completion gate: fmt, clippy, `cargo check`, tests, and the release build/install wrapper
 
 ## 5. Architecture
 
 - [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs) parses flags, resolves path overrides, dispatches commands, and emits structured envelopes
-- [`crates/let-cli/src/commands/`](crates/let-cli/src/commands/) should stay thin; persistence, parsing, enrichment, and scoring belong in `let-sdk`
-- [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs) turns Rightmove HTML `PAGE_MODEL` data into listings and classifies active vs let-agreed vs removed pages
+- [`crates/let-cli/src/commands/`](crates/let-cli/src/commands/) should stay thin; persistence, parsing, enrichment, verification, and evidence shaping belong in `let-sdk`
+- [`crates/let-sdk/src/intelligence/service.rs`](crates/let-sdk/src/intelligence/service.rs) orchestrates capture, extraction, address resolution, source facts, claim extraction, claim verification, bundle persistence, and assessment reads/writes
+- [`crates/let-sdk/src/intelligence/repository.rs`](crates/let-sdk/src/intelligence/repository.rs) owns the intelligence DB schema and versioning
+- [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs) captures Rightmove `PAGE_MODEL`, preserves raw description evidence, extracts media URLs, and classifies active vs let-agreed vs removed pages
 - [`crates/let-sdk/src/pipeline/enrich.rs`](crates/let-sdk/src/pipeline/enrich.rs) joins local postcode, IMD, census, population, income, flood, crime, NaPTAN, and UPRN data; missing source DBs degrade the report instead of aborting most workflows
-- [`crates/let-sdk/src/pipeline/score.rs`](crates/let-sdk/src/pipeline/score.rs) computes percentile-relative scores across the current DB, persists factor context, and derives `assessedScore` from saved assessments
-- [`crates/let-cli/src/commands/start.rs`](crates/let-cli/src/commands/start.rs) launches `let-tui` as a sibling binary or via `LET_TUI_BIN` and forwards runtime dirs through `LET_*_DIR` env vars
+- [`crates/let-sdk/src/pipeline/score.rs`](crates/let-sdk/src/pipeline/score.rs) is retained for deterministic scoring experiments only; agent assessment is the default decision layer
 - Default stdout is exactly one JSON envelope per structured command. `--toon` emits the same envelope as Toon. Progress, warnings, and confirmation prompts go to stderr. There is no supported `--json` or `--text` flag.
 
 ## 6. Runtime and State
 
 - Path precedence is CLI flags -> `LET_*_DIR` -> `LET_HOME` -> `TOOLS_HOME/let` -> `~/.tools/let`; see [`crates/let-sdk/src/paths.rs`](crates/let-sdk/src/paths.rs)
 - Config and secrets live at `$LET_HOME/data/let.config.toml` and `$LET_HOME/data/.env`; `let health` also assumes `$LET_HOME/data` is writable
-- The listings DB lives at `$LET_HOME/data/let.db`; backups default to `$LET_HOME/data/let.db.bak`; JSON export defaults to `$LET_HOME/data/let.db.json`
+- The intelligence DB lives at `$LET_HOME/data/let.db` and stores entities, identifiers, source snapshots, observations, facts, claims, verifications, media assets, evidence bundles, append-only corrections, and assessments
 - Installed binaries normally live alongside those dirs at `$LET_HOME/let` and `$LET_HOME/let-tui`
 - Media cache entries live under `$LET_HOME/cache/<rightmove-id-or-uuid>/`; normalized filenames include an asset kind, short hashes, and a `-v1.jpg` suffix from [`crates/let-sdk/src/pipeline/fetch/cache.rs`](crates/let-sdk/src/pipeline/fetch/cache.rs)
 - Source DBs live under `$LET_HOME/sources/{broadband,postcodes,deprivation,census,population,income,flood,naptan,uprn,crime}.db`
 - Source builds accept per-input path or URL override env vars plus optional `*_SHA256` integrity guards, and each built DB gets `source_runs` / `source_inputs` metadata written by [`crates/let-sdk/src/sources/common.rs`](crates/let-sdk/src/sources/common.rs)
-- Listings DB schema version is `2`; scored rows also require `score_contexts`. Missing score context rows or schema-version mismatches are treated as `SCHEMA_MISMATCH` and the supported repair path is DB recreation, not hand migration.
-- Environment variables that materially affect behavior: `EPC_API_BEARER_TOKEN` preferred, legacy `EPC_API_EMAIL` + `EPC_API_KEY`, `MAPBOX_ACCESS_TOKEN`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `LET_TUI_BIN`, `LET_CLIPBOARD_BIN`, `LET_SKIP_DB_BACKUP`, `LET_DB_BACKUP_MIN_SECONDS`
+- Intelligence DB schema version is `1`; schema-version mismatches are treated as `SCHEMA_MISMATCH`, and the supported repair path is DB recreation through `let inspect <rightmove-id>`, not hand migration
+- Environment variables that materially affect behavior: `EPC_API_BEARER_TOKEN` preferred, legacy `EPC_API_EMAIL` + `EPC_API_KEY`, `MAPBOX_ACCESS_TOKEN`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`
 
 ## 7. Conventions
 
-- Use Rightmove portal IDs for external-facing command workflows and cache directories; internal listing rows also have UUIDs, and commands like `view detail` / `assess submit` accept either
-- Keep command payloads camelCase and envelope-safe; when adding or renaming fields, update [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs) and any text renderers or clipboard payloads that mirror them
+- Use Rightmove portal IDs for external-facing command workflows and cache directories; intelligence entity ids use `rightmove:<portal-id>`
+- Keep command payloads camelCase and envelope-safe; when adding or renaming fields, update [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs), tests, and any mirrored schemas
 - `search.useApi` controls discovery transport only. `fetch.useApi` is intentionally rejected by [`crates/let-sdk/src/config.rs`](crates/let-sdk/src/config.rs).
-- Batch `fetch` runs apply `fetch.minScore` before the heavy media stage; single-ID fetches skip that threshold unless `--min-score` is passed explicitly
-- `fetch --override-postcode` and `--override-address` are single-ID correction tools; they update address-derived URLs and can trigger postcode or Mapbox-based coordinate re-resolution before enrichment and scoring
-- `ops patch` re-enriches from source DBs by default, then reapplies the explicit patch so manual values win in that invocation; use `--skip-re-enrich` when you need a pure manual override
-- `view ... --copy` copies the structured payload as pretty JSON; on non-macOS platforms you must provide `LET_CLIPBOARD_BIN`
+- Evidence section statuses are `ok`, `partial`, `degraded`, `blocked`, `skipped`, or `stale`; missing optional sources should degrade the relevant section instead of aborting the whole bundle
+- Claim verification statuses are `supported`, `contradicted`, `unknown`, and `insufficientEvidence`; use source-backed explanations rather than bare booleans
+- Corrections are evidence, not source rewrites. `correct address`, `correct epc`, and `correct media` preserve Rightmove observations, expose active corrections in `evidence`, and influence only dependent resolved sections.
 
 ## 8. Constraints
 
-- Never hand-edit [`crates/let-sdk/src/db/schema.sql`](crates/let-sdk/src/db/schema.sql)-backed runtime DB files, source DBs, or cache assets; use CLI commands or source builders instead
-- High-risk files are [`crates/let-sdk/src/db/schema.sql`](crates/let-sdk/src/db/schema.sql), [`crates/let-sdk/src/db/repository.rs`](crates/let-sdk/src/db/repository.rs), [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs), [`crates/let-sdk/src/pipeline/epc.rs`](crates/let-sdk/src/pipeline/epc.rs), [`crates/let-sdk/src/sources/`](crates/let-sdk/src/sources/), and [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs)
-- DB writes create `.bak` snapshots unless `LET_SKIP_DB_BACKUP=1` is set; do not disable backups in normal development or runtime repair work
-- `ops prune` is destructive and prompts unless `--force` is used; non-interactive automation must use `--dry-run` first and `--force` only when the selection is already understood
-- `ops verify` mutates stored listing status unless `--dry-run` is set
+- Never hand-edit runtime DB files, source DBs, or cache assets; use CLI commands or source builders instead
+- High-risk files are [`crates/let-sdk/src/intelligence/repository.rs`](crates/let-sdk/src/intelligence/repository.rs), [`crates/let-sdk/src/intelligence/service.rs`](crates/let-sdk/src/intelligence/service.rs), [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs), [`crates/let-sdk/src/pipeline/epc.rs`](crates/let-sdk/src/pipeline/epc.rs), [`crates/let-sdk/src/sources/`](crates/let-sdk/src/sources/), and [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs)
 - Rightmove, EPC, Mapbox, Notion, and public source datasets are unstable dependencies. Expect API fallback, removed listings, header/schema drift, and partial enrichment.
-- Do not commit `$LET_HOME/data/.env`, exported listing snapshots, cached media, test-generated DBs, or personal search context
+- Do not commit `$LET_HOME/data/.env`, evidence exports, cached media, test-generated DBs, or personal search context
 
 ## 9. Validation
 
 - Required local gate: `bun run util:check`
-- CLI surface, envelope, clipboard, `--toon`, or tool-registry changes: `cargo test -p let-cli --test cli_integration`
-- DB schema or repository changes: `cargo test -p let-sdk --test db_tests`
-- Discovery, fetch, enrichment, source-build, or scoring changes: run the relevant crate tests plus at least one targeted manual smoke flow
-- Manual smoke for runtime-path or workflow changes: `cargo run -q -p let-cli -- tools`, `health`, `config show`, `search discover`, `fetch <id> --skip-images`, `view list`, `score explain <id>`, `export json`, `build sources list`
+- CLI surface, envelope, `--toon`, or tool-registry changes: `cargo test -p let-cli --test cli_integration`
+- Intelligence DB schema or repository changes: add/update focused tests and run `cargo test -p let-cli --test cli_integration`
+- Discovery, inspect, enrichment, source-build, EPC, Mapbox, media, or verification changes: run relevant crate tests plus at least one targeted manual smoke flow where credentials/network make it practical
+- Manual smoke for runtime-path or workflow changes: `cargo run -q -p let-cli -- tools`, `health`, `config show`, `sources list`, `sources status`, `search discover`, `inspect <id> --depth quick`, `evidence <id>`, `verify <id> --claim broadband`, `correct address <id> --postcode <postcode> --note <note>`
 - If you touch [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs), [`crates/let-cli/src/main.rs`](crates/let-cli/src/main.rs), or [`crates/let-cli/src/envelope.rs`](crates/let-cli/src/envelope.rs), verify default JSON mode still emits one stdout line and `--toon` decodes to the same envelope shape

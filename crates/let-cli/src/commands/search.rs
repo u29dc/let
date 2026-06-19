@@ -93,6 +93,7 @@ impl<'a> DiscoverRuntimeConfig<'a> {
     }
 }
 
+#[allow(dead_code)]
 pub fn diff(shared: &SharedArgs, ids_raw: &str) -> CommandResult {
     let input_ids = parse_csv(ids_raw);
     if input_ids.is_empty() {
@@ -179,31 +180,129 @@ pub fn resolve(location: &str) -> CommandResult {
             )
         })?;
 
-    let payload: TypeaheadResponse = serde_json::from_str(&body).map_err(|error| {
-        CommandError::runtime(
-            "PARSE_ERROR",
-            format!("failed to parse location response: {error}"),
-            "retry lookup command",
-        )
-    })?;
-
-    let locations = payload
-        .typeahead_locations
-        .into_iter()
-        .map(|entry| {
-            json!({
-                "displayName": entry.display_name,
-                "locationIdentifier": entry.location_identifier,
-                "normalizedSearchTerm": entry.normalised_search_term,
+    let matches = match serde_json::from_str::<TypeaheadResponse>(&body) {
+        Ok(payload) => payload
+            .typeahead_locations
+            .into_iter()
+            .map(|entry| {
+                json!({
+                    "displayName": entry.display_name,
+                    "locationIdentifier": entry.location_identifier,
+                    "normalizedSearchTerm": entry.normalised_search_term,
+                    "source": "typeahead",
+                })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>(),
+        Err(_) => resolve_location_from_search_page(&runtime, &client, location)?,
+    };
 
     Ok(CommandOutput::new(json!({
-        "query": location,
-        "locations": locations,
+        "location": location,
+        "matches": matches,
     }))
-    .with_count(locations.len()))
+    .with_count(matches.len()))
+}
+
+fn resolve_location_from_search_page(
+    runtime: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    location: &str,
+) -> Result<Vec<serde_json::Value>, CommandError> {
+    let slug = location_slug(location);
+    if slug.is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = format!("https://www.rightmove.co.uk/property-to-rent/{slug}.html");
+    let response = runtime
+        .block_on(async { client.get(url).send().await })
+        .map_err(|error| {
+            CommandError::runtime(
+                "NETWORK_ERROR",
+                format!("location lookup fallback failed: {error}"),
+                "check network connectivity",
+            )
+        })?;
+    if !response.status().is_success() {
+        return Err(CommandError::runtime(
+            "LOOKUP_ERROR",
+            format!(
+                "location lookup fallback failed: http {}",
+                response.status().as_u16()
+            ),
+            "check location spelling and retry",
+        ));
+    }
+    let body = runtime
+        .block_on(async { response.text().await })
+        .map_err(|error| {
+            CommandError::runtime(
+                "PARSE_ERROR",
+                format!("failed to read location fallback response: {error}"),
+                "retry lookup command",
+            )
+        })?;
+    let Some(location_identifier) = extract_search_page_location_identifier(&body) else {
+        return Err(CommandError::runtime(
+            "PARSE_ERROR",
+            "failed to find locationIdentifier in Rightmove search page",
+            "retry lookup command or pass --location manually",
+        ));
+    };
+    Ok(vec![json!({
+        "displayName": extract_search_page_description(&body).unwrap_or_else(|| location.to_owned()),
+        "locationIdentifier": location_identifier,
+        "normalizedSearchTerm": location,
+        "source": "searchPage",
+    })])
+}
+
+fn location_slug(location: &str) -> String {
+    location
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn extract_search_page_location_identifier(html: &str) -> Option<String> {
+    extract_json_string_after(html, "\"locationIdentifier\":")
+}
+
+fn extract_search_page_description(html: &str) -> Option<String> {
+    extract_json_string_after(html, "\"searchParametersDescription\":")
+}
+
+fn extract_json_string_after(input: &str, marker: &str) -> Option<String> {
+    let start = input.find(marker)? + marker.len();
+    let rest = input.get(start..)?;
+    let mut chars = rest.chars();
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in chars {
+        if escaped {
+            match ch {
+                '"' => value.push('"'),
+                '\\' => value.push('\\'),
+                '/' => value.push('/'),
+                'n' => value.push('\n'),
+                'r' => value.push('\r'),
+                't' => value.push('\t'),
+                'u' => return None,
+                other => value.push(other),
+            }
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => return Some(value),
+            other => value.push(other),
+        }
+    }
+    None
 }
 
 pub fn discover(shared: &SharedArgs, params: &DiscoverParams) -> CommandResult {
@@ -891,8 +990,9 @@ mod tests {
 
     use super::{
         DiscoverRuntimeConfig, SEARCH_API_BASE_URL, build_client, build_runtime,
-        build_search_api_url_from_base, discover_location_with_base_urls, parse_csv,
-        tokenize_location,
+        build_search_api_url_from_base, discover_location_with_base_urls,
+        extract_search_page_description, extract_search_page_location_identifier, location_slug,
+        parse_csv, tokenize_location,
     };
 
     #[test]
@@ -905,6 +1005,30 @@ mod tests {
     fn tokenize_location_matches_rightmove_pattern() {
         assert_eq!(tokenize_location("York"), "YO/RK");
         assert_eq!(tokenize_location("Newcastle"), "NE/WC/AS/TL/E");
+    }
+
+    #[test]
+    fn location_slug_matches_rightmove_town_pages() {
+        assert_eq!(location_slug("Sevenoaks"), "Sevenoaks");
+        assert_eq!(location_slug("Market Harborough"), "Market-Harborough");
+        assert_eq!(location_slug("Sevenoaks, Kent"), "Sevenoaks-Kent");
+    }
+
+    #[test]
+    fn search_page_location_parser_extracts_identifier_and_description() {
+        let html = r#"{
+            "searchParametersDescription":"Properties To Rent in Sevenoaks, Kent",
+            "searchParameters":{"locationIdentifier":"REGION^1191"}
+        }"#;
+
+        assert_eq!(
+            extract_search_page_location_identifier(html).as_deref(),
+            Some("REGION^1191")
+        );
+        assert_eq!(
+            extract_search_page_description(html).as_deref(),
+            Some("Properties To Rent in Sevenoaks, Kent")
+        );
     }
 
     #[test]

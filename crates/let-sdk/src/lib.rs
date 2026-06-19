@@ -4,6 +4,7 @@ pub mod config;
 pub mod context;
 pub mod db;
 pub mod errors;
+pub mod intelligence;
 pub mod paths;
 pub mod pipeline;
 pub mod schema;
@@ -18,8 +19,13 @@ pub use db::{
     update_listing_assessment, update_listing_notion_page_ids, upsert_listings,
 };
 pub use errors::{ErrorCode, LetError, Result};
+pub use intelligence::{
+    AssessGetParams, AssessSaveParams, EvidenceParams, InspectParams, IntelligenceDb,
+    RefreshPolicy, VerifyParams, assess_get, assess_save, database_overview, evidence, inspect,
+    verify,
+};
 pub use pipeline::enrich::{
-    EnrichmentMode, ListingEnrichmentReport, PostcodeCoordinates, SourceEnricher,
+    BroadbandProfile, EnrichmentMode, ListingEnrichmentReport, PostcodeCoordinates, SourceEnricher,
 };
 pub use pipeline::geocode::{GeocodeSource, GeocodedCoordinates, mapbox_forward_geocode};
 pub use pipeline::score::{

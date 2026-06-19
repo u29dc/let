@@ -139,7 +139,7 @@ impl ProgressReporter {
             ProgressStyle::Off => {}
             ProgressStyle::Plain => {
                 eprintln!(
-                    "build sources {} started (sources={}, jobs={})",
+                    "sources build {} started (sources={}, jobs={})",
                     self.target, self.total, self.jobs
                 );
             }
@@ -213,7 +213,7 @@ impl ProgressReporter {
             ProgressStyle::Off => {}
             ProgressStyle::Plain => {
                 eprintln!(
-                    "build sources {} finished: ok={}, failed={}, elapsed={}",
+                    "sources build {} finished: ok={}, failed={}, elapsed={}",
                     self.target,
                     succeeded,
                     failed,
@@ -398,7 +398,7 @@ fn run_all_sources(
                     first_error = Some(CommandError::runtime(
                         "PROCESS_ERROR",
                         "build worker channel disconnected unexpectedly",
-                        "retry build sources command",
+                        "retry sources build command",
                     ));
                 }
                 break;

@@ -50,7 +50,7 @@ pub fn open_listings_db_readonly(path: impl AsRef<Path>) -> Result<Connection> {
         return Err(LetError::new(
             ErrorCode::NotFound,
             format!("listings database not found at {}", path.display()),
-            "run `let fetch <id>` to create and populate the listings database",
+            "recreate the database through the current intelligence workflow",
         ));
     }
 
@@ -90,6 +90,6 @@ fn ensure_schema_version(connection: &Connection) -> Result<()> {
         format!(
             "listings database schema version mismatch: expected {LISTINGS_SCHEMA_VERSION}, found {version}"
         ),
-        "delete the listings database and rerun `let fetch <id>` to recreate it",
+        "delete the incompatible database and recreate it through the current intelligence workflow",
     ))
 }

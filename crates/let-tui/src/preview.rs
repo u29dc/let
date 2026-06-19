@@ -312,10 +312,18 @@ impl PreviewController {
     pub(crate) fn detect() -> Self {
         match Picker::from_query_stdio() {
             Ok(mut picker) => {
-                if should_force_ghostty_kitty() {
-                    picker.set_protocol_type(ProtocolType::Kitty);
+                if let Some(protocol_type) =
+                    preview_protocol_override().or_else(default_protocol_override)
+                {
+                    picker.set_protocol_type(protocol_type);
                 }
-                let font_size = picker.font_size();
+                let raw_font_size = picker.font_size();
+                let font_size = usable_font_size(raw_font_size);
+                if font_size != raw_font_size {
+                    let protocol_type = picker.protocol_type();
+                    picker = Picker::halfblocks();
+                    picker.set_protocol_type(protocol_type);
+                }
                 let queue = PreviewJobQueue::new();
                 let worker_queue = queue.clone();
                 let (response_tx, response_rx) = mpsc::channel();
@@ -693,22 +701,58 @@ fn compact_label(label: &str, max: usize) -> String {
     out
 }
 
-fn should_force_ghostty_kitty() -> bool {
+fn default_protocol_override() -> Option<ProtocolType> {
+    if is_ghostty() {
+        Some(ProtocolType::Halfblocks)
+    } else {
+        None
+    }
+}
+
+fn preview_protocol_override() -> Option<ProtocolType> {
+    let value = std::env::var("LET_TUI_IMAGE_PROTOCOL").ok()?;
+    protocol_type_from_str(&value)
+}
+
+fn protocol_type_from_str(value: &str) -> Option<ProtocolType> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "halfblock" | "halfblocks" => Some(ProtocolType::Halfblocks),
+        "kitty" => Some(ProtocolType::Kitty),
+        "iterm" | "iterm2" => Some(ProtocolType::Iterm2),
+        "sixel" => Some(ProtocolType::Sixel),
+        "auto" | "" => None,
+        _ => None,
+    }
+}
+
+fn is_ghostty() -> bool {
     std::env::var("TERM_PROGRAM")
         .is_ok_and(|term_program| term_program.eq_ignore_ascii_case("ghostty"))
         || std::env::var("TERM").is_ok_and(|term| term.contains("ghostty"))
+}
+
+fn usable_font_size(font_size: (u16, u16)) -> (u16, u16) {
+    let (width, height) = font_size;
+    if width < 4 || height < 8 || height < width {
+        DEFAULT_FONT_SIZE
+    } else {
+        font_size
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use image::{DynamicImage, ImageBuffer, Rgba};
     use ratatui::layout::Rect;
-    use ratatui_image::{Resize as RatatuiResize, picker::Picker};
+    use ratatui_image::{
+        Resize as RatatuiResize,
+        picker::{Picker, ProtocolType},
+    };
 
     use super::{
         DEFAULT_FONT_SIZE, PREVIEW_ASPECT_HEIGHT, PREVIEW_ASPECT_WIDTH, PreviewAssetKind,
         PreviewController, PreviewMode, PreviewState, PreviewTarget, PreviewView, RequestKey,
-        normalize_contain, normalize_cover,
+        normalize_contain, normalize_cover, protocol_type_from_str, usable_font_size,
     };
 
     fn sample_image() -> DynamicImage {
@@ -804,6 +848,27 @@ mod tests {
         assert_eq!(output.height(), 300);
         assert_eq!(PREVIEW_ASPECT_WIDTH, 4);
         assert_eq!(PREVIEW_ASPECT_HEIGHT, 3);
+    }
+
+    #[test]
+    fn unusable_font_size_falls_back_to_default_geometry() {
+        assert_eq!(usable_font_size((1, 1)), DEFAULT_FONT_SIZE);
+        assert_eq!(usable_font_size((10, 1)), DEFAULT_FONT_SIZE);
+        assert_eq!(usable_font_size((14, 12)), DEFAULT_FONT_SIZE);
+        assert_eq!(usable_font_size((8, 16)), (8, 16));
+    }
+
+    #[test]
+    fn preview_protocol_override_accepts_known_protocols() {
+        assert_eq!(
+            protocol_type_from_str("halfblocks"),
+            Some(ProtocolType::Halfblocks)
+        );
+        assert_eq!(protocol_type_from_str("kitty"), Some(ProtocolType::Kitty));
+        assert_eq!(protocol_type_from_str("iterm2"), Some(ProtocolType::Iterm2));
+        assert_eq!(protocol_type_from_str("sixel"), Some(ProtocolType::Sixel));
+        assert_eq!(protocol_type_from_str("auto"), None);
+        assert_eq!(protocol_type_from_str("bogus"), None);
     }
 
     #[test]

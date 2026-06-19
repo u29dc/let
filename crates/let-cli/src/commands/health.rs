@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::Path;
 
 use let_sdk::paths::resolve_paths;
-use let_sdk::{ErrorCode, load_listings_overview};
+use let_sdk::{ErrorCode, database_overview};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -208,37 +208,43 @@ fn check_database(path: &Path) -> HealthCheck {
     if !path.exists() {
         return HealthCheck {
             id: "database".to_owned(),
-            label: "Listings Database".to_owned(),
+            label: "Intelligence Database".to_owned(),
             status: "missing".to_owned(),
             severity: "degraded".to_owned(),
             detail: format!("missing {}", path.display()),
-            fix: json!(["run `let fetch <id>` to create and populate the listings database"]),
+            fix: json!(["run `let inspect <rightmove-id>` to create the intelligence database"]),
         };
     }
 
-    match load_listings_overview(path) {
+    match database_overview(path) {
         Ok(overview) => HealthCheck {
             id: "database".to_owned(),
-            label: "Listings Database".to_owned(),
+            label: "Intelligence Database".to_owned(),
             status: "ok".to_owned(),
             severity: "info".to_owned(),
-            detail: format!("{} ({} listings)", path.display(), overview.listing_count),
+            detail: format!(
+                "{} ({} entities, {} bundles, {} assessments)",
+                path.display(),
+                overview.entity_count,
+                overview.bundle_count,
+                overview.assessment_count
+            ),
             fix: Value::Null,
         },
         Err(error) if error.code == ErrorCode::SchemaMismatch => HealthCheck {
             id: "database".to_owned(),
-            label: "Listings Database".to_owned(),
+            label: "Intelligence Database".to_owned(),
             status: "error".to_owned(),
             severity: "blocking".to_owned(),
             detail: format!("{} ({})", path.display(), error.message),
             fix: json!([format!(
-                "delete {} and run `let fetch <id>` to recreate the listings database",
+                "delete {} and run `let inspect <rightmove-id>` to recreate the intelligence database",
                 path.display()
             )]),
         },
         Err(error) if error.code == ErrorCode::Conflict => HealthCheck {
             id: "database".to_owned(),
-            label: "Listings Database".to_owned(),
+            label: "Intelligence Database".to_owned(),
             status: "error".to_owned(),
             severity: "degraded".to_owned(),
             detail: format!("{} ({})", path.display(), error.message),
@@ -249,7 +255,7 @@ fn check_database(path: &Path) -> HealthCheck {
         },
         Err(error) => HealthCheck {
             id: "database".to_owned(),
-            label: "Listings Database".to_owned(),
+            label: "Intelligence Database".to_owned(),
             status: "error".to_owned(),
             severity: "degraded".to_owned(),
             detail: format!("{} ({})", path.display(), error.message),
@@ -278,7 +284,7 @@ fn check_source_db(name: &str, path: &Path) -> HealthCheck {
             status: "missing".to_owned(),
             severity: "degraded".to_owned(),
             detail: format!("missing {}", path.display()),
-            fix: json!([format!("run `let build sources {name}`")]),
+            fix: json!([format!("run `let sources build {name}`")]),
         }
     }
 }

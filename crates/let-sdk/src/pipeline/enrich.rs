@@ -74,6 +74,19 @@ pub struct PostcodeCoordinates {
     pub lng: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BroadbandProfile {
+    pub postcode: String,
+    pub postcode_display: Option<String>,
+    pub outward: Option<String>,
+    pub area: Option<String>,
+    pub gigabit_availability: Option<f64>,
+    pub pct_over_300mbps: Option<f64>,
+    pub ufbb_availability: Option<f64>,
+    pub sfbb_availability: Option<f64>,
+}
+
 #[derive(Debug, Clone)]
 struct FloodLookup {
     level: Option<String>,
@@ -428,6 +441,16 @@ impl SourceEnricher {
         };
         query_naptan_stops(connection, lat, lng, max_distance_m, limit)
     }
+
+    pub fn lookup_broadband_profile(&self, postcode: &str) -> Result<Option<BroadbandProfile>> {
+        let Some(connection) = self.broadband.as_ref() else {
+            return Ok(None);
+        };
+        let Some(postcode_key) = normalize_non_empty_postcode(postcode) else {
+            return Ok(None);
+        };
+        query_broadband_profile(connection, &postcode_key)
+    }
 }
 
 fn open_optional_source_db(
@@ -449,7 +472,7 @@ fn open_optional_source_db(
                     "failed to open source db `{source_name}` at {}: {error}",
                     db_path.display()
                 ),
-                "run `let build sources all` and retry",
+                "run `let sources build all` and retry",
             )
         })?;
     Ok(Some(connection))
@@ -517,6 +540,35 @@ fn query_broadband_gigabit(connection: &Connection, postcode: &str) -> Result<Op
         )
         .optional()
         .map(|value| value.flatten())
+        .map_err(Into::into)
+}
+
+fn query_broadband_profile(
+    connection: &Connection,
+    postcode: &str,
+) -> Result<Option<BroadbandProfile>> {
+    connection
+        .query_row(
+            "SELECT postcode, postcode_display, outward, area, gigabit_availability,
+                    pct_over_300mbps, ufbb_availability, sfbb_availability
+             FROM postcodes
+             WHERE postcode = ?1 OR REPLACE(postcode_display, ' ', '') = ?1
+             LIMIT 1",
+            params![postcode],
+            |row| {
+                Ok(BroadbandProfile {
+                    postcode: row.get::<_, String>(0)?,
+                    postcode_display: normalize_text(row.get::<_, Option<String>>(1)?),
+                    outward: normalize_text(row.get::<_, Option<String>>(2)?),
+                    area: normalize_text(row.get::<_, Option<String>>(3)?),
+                    gigabit_availability: row.get::<_, Option<f64>>(4)?,
+                    pct_over_300mbps: row.get::<_, Option<f64>>(5)?,
+                    ufbb_availability: row.get::<_, Option<f64>>(6)?,
+                    sfbb_availability: row.get::<_, Option<f64>>(7)?,
+                })
+            },
+        )
+        .optional()
         .map_err(Into::into)
 }
 

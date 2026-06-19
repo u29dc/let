@@ -4,18 +4,18 @@ use let_sdk::paths::PathOverrides;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub mod assess;
+pub mod agent_assess;
 pub mod build;
 pub mod config;
-pub mod export;
-pub mod fetch;
+pub mod correct;
+pub mod evidence;
 pub mod health;
-pub mod ops;
-pub mod score;
+pub mod inspect;
 pub mod search;
+pub mod sources;
 pub mod start;
 pub mod tools;
-pub mod view;
+pub mod verify;
 
 #[derive(Debug, Clone)]
 pub struct SharedArgs {
@@ -29,16 +29,10 @@ pub struct MetaOptions {
     pub has_more: Option<bool>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ClipboardOptions {
-    pub json: Option<Value>,
-}
-
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
     pub data: Value,
     pub meta: MetaOptions,
-    pub clipboard: ClipboardOptions,
 }
 
 impl CommandOutput {
@@ -46,7 +40,6 @@ impl CommandOutput {
         Self {
             data,
             meta: MetaOptions::default(),
-            clipboard: ClipboardOptions::default(),
         }
     }
 
@@ -62,11 +55,6 @@ impl CommandOutput {
 
     pub fn with_has_more(mut self, has_more: bool) -> Self {
         self.meta.has_more = Some(has_more);
-        self
-    }
-
-    pub fn with_copy_json(mut self, value: Value) -> Self {
-        self.clipboard.json = Some(value);
         self
     }
 }
@@ -102,14 +90,6 @@ impl CommandError {
         hint: impl Into<String>,
     ) -> Self {
         Self::new(code, message, hint, 1)
-    }
-
-    pub fn with_details(mut self, details: Vec<ErrorDetail>) -> Self {
-        if details.is_empty() {
-            return self;
-        }
-        self.details = Some(details);
-        self
     }
 }
 
