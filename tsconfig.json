@@ -30,6 +30,6 @@
 		"isolatedModules": true,
 		"verbatimModuleSyntax": true
 	},
-	"include": ["packages/*/src/**/*", "packages/*/tests/**/*"],
+	"include": ["packages/*/src/**/*", "packages/*/tests/**/*", "scripts/**/*.ts"],
 	"exclude": ["node_modules", "build", "dist", "tmp", ".tmp", "temp", ".temp", ".archive"]
 }
