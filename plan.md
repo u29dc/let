@@ -185,7 +185,7 @@ Implementation slice applied after the plan update:
 
 Validation applied after this slice:
 
-- `bun run util:check` passed: formatting, clippy with `-D warnings`, `cargo check`, all Rust tests, build-release tests, and release install.
+- `bun run util:check` passed: formatting, clippy with `-D warnings`, `cargo check`, all Rust tests, and release install.
 - Production `let --help` shows the narrowed command surface including `correct` and `start`.
 - Production `let search resolve sevenoaks` resolved `REGION^1191`.
 - Production `let search discover` returned zero results under the live narrow budget config, then returned three Sevenoaks ids with a copied broader temp config, confirming filter behavior and HTML fallback discovery.
