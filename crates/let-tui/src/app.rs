@@ -156,7 +156,7 @@ impl App {
     }
 
     pub(crate) fn poll_timeout_ms(&self) -> u64 {
-        if self.preview.has_pending_request() {
+        if self.preview.needs_fast_tick() {
             60
         } else {
             200
@@ -1282,9 +1282,11 @@ mod tests {
         Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingStatus,
         MapViews, PortalIds, RemoteLocalAsset,
     };
+    use ratatui::{Terminal, backend::TestBackend, style::Color};
 
     use super::{App, ContextMediaItem, FocusPane};
     use crate::preview::{PreviewAssetKind, PreviewController};
+    use crate::theme::Theme;
 
     fn down_key() -> KeyEvent {
         KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)
@@ -1424,6 +1426,30 @@ mod tests {
     }
 
     #[test]
+    fn repeated_media_navigation_renders_one_selected_row() {
+        let mut app = app_with_context_media(14);
+        let theme = Theme::default();
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        for _ in 0..12 {
+            app.on_key(down_key());
+            terminal
+                .draw(|frame| crate::ui::render(frame, &mut app, &theme))
+                .expect("render media navigation");
+            assert_eq!(selected_background_rows(&terminal), 1);
+        }
+
+        for _ in 0..12 {
+            app.on_key(up_key());
+            terminal
+                .draw(|frame| crate::ui::render(frame, &mut app, &theme))
+                .expect("render media navigation");
+            assert_eq!(selected_background_rows(&terminal), 1);
+        }
+    }
+
+    #[test]
     fn opens_and_closes_palette() {
         let mut app = App::default();
         app.on_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
@@ -1461,5 +1487,12 @@ mod tests {
         let mut app = App::default();
         app.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         assert!(app.palette_open());
+    }
+
+    fn selected_background_rows(terminal: &Terminal<TestBackend>) -> usize {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .filter(|y| (0..buffer.area.width).any(|x| buffer[(x, *y)].bg == Color::Cyan))
+            .count()
     }
 }

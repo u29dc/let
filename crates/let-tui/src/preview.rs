@@ -312,11 +312,9 @@ impl PreviewController {
     pub(crate) fn detect() -> Self {
         match Picker::from_query_stdio() {
             Ok(mut picker) => {
-                if let Some(protocol_type) =
-                    preview_protocol_override().or_else(default_protocol_override)
-                {
-                    picker.set_protocol_type(protocol_type);
-                }
+                picker.set_protocol_type(
+                    preview_protocol_override().unwrap_or(ProtocolType::Halfblocks),
+                );
                 let raw_font_size = picker.font_size();
                 let font_size = usable_font_size(raw_font_size);
                 if font_size != raw_font_size {
@@ -470,8 +468,12 @@ impl PreviewController {
         self.mode = self.mode.cycle();
     }
 
-    pub(crate) fn has_pending_request(&self) -> bool {
+    pub(crate) fn needs_fast_tick(&self) -> bool {
         self.pending.is_some()
+            || matches!(
+                &self.state,
+                PreviewState::Ready { protocol, .. } if protocol.protocol_type().is_none()
+            )
     }
 
     pub(crate) fn sync(
@@ -752,13 +754,6 @@ fn compact_label(label: &str, max: usize) -> String {
     out
 }
 
-fn default_protocol_override() -> Option<ProtocolType> {
-    default_protocol_override_for(
-        std::env::var("TERM_PROGRAM").ok().as_deref(),
-        std::env::var("TERM").ok().as_deref(),
-    )
-}
-
 fn preview_protocol_override() -> Option<ProtocolType> {
     let value = std::env::var("LET_TUI_IMAGE_PROTOCOL").ok()?;
     protocol_type_from_str(&value)
@@ -767,28 +762,11 @@ fn preview_protocol_override() -> Option<ProtocolType> {
 fn protocol_type_from_str(value: &str) -> Option<ProtocolType> {
     match value.trim().to_ascii_lowercase().as_str() {
         "halfblock" | "halfblocks" => Some(ProtocolType::Halfblocks),
-        "kitty" => Some(ProtocolType::Kitty),
         "iterm" | "iterm2" => Some(ProtocolType::Iterm2),
         "sixel" => Some(ProtocolType::Sixel),
         "auto" | "" => None,
         _ => None,
     }
-}
-
-fn default_protocol_override_for(
-    term_program: Option<&str>,
-    term: Option<&str>,
-) -> Option<ProtocolType> {
-    if is_ghostty(term_program, term) {
-        Some(ProtocolType::Kitty)
-    } else {
-        None
-    }
-}
-
-fn is_ghostty(term_program: Option<&str>, term: Option<&str>) -> bool {
-    term_program.is_some_and(|value| value.eq_ignore_ascii_case("ghostty"))
-        || term.is_some_and(|value| value.contains("ghostty"))
 }
 
 fn usable_font_size(font_size: (u16, u16)) -> (u16, u16) {
@@ -813,8 +791,7 @@ mod tests {
     use super::{
         DEFAULT_FONT_SIZE, PREVIEW_ASPECT_HEIGHT, PREVIEW_ASPECT_WIDTH, PreviewAssetKind,
         PreviewController, PreviewMode, PreviewState, PreviewTarget, PreviewView, RequestKey,
-        default_protocol_override_for, normalize_contain, normalize_cover, protocol_type_from_str,
-        usable_font_size,
+        normalize_contain, normalize_cover, protocol_type_from_str, usable_font_size,
     };
 
     fn sample_image() -> DynamicImage {
@@ -938,7 +915,7 @@ mod tests {
             protocol_type_from_str("halfblocks"),
             Some(ProtocolType::Halfblocks)
         );
-        assert_eq!(protocol_type_from_str("kitty"), Some(ProtocolType::Kitty));
+        assert_eq!(protocol_type_from_str("kitty"), None);
         assert_eq!(protocol_type_from_str("iterm2"), Some(ProtocolType::Iterm2));
         assert_eq!(protocol_type_from_str("sixel"), Some(ProtocolType::Sixel));
         assert_eq!(protocol_type_from_str("auto"), None);
@@ -946,19 +923,11 @@ mod tests {
     }
 
     #[test]
-    fn ghostty_default_uses_native_kitty_protocol() {
-        assert_eq!(
-            default_protocol_override_for(Some("Ghostty"), None),
-            Some(ProtocolType::Kitty)
-        );
-        assert_eq!(
-            default_protocol_override_for(None, Some("xterm-ghostty")),
-            Some(ProtocolType::Kitty)
-        );
-        assert_eq!(
-            default_protocol_override_for(Some("Apple_Terminal"), None),
-            None
-        );
+    fn default_preview_protocol_is_halfblocks() {
+        let mut picker = Picker::halfblocks();
+        picker
+            .set_protocol_type(protocol_type_from_str("auto").unwrap_or(ProtocolType::Halfblocks));
+        assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
     }
 
     #[test]
@@ -968,7 +937,7 @@ mod tests {
 
         controller.sync(Some(sample_target("img_01")), area, "empty");
 
-        assert!(controller.has_pending_request());
+        assert!(controller.needs_fast_tick());
         assert!(matches!(
             controller.state,
             PreviewState::Pending(ref key) if key.label == "img_01"
@@ -992,7 +961,7 @@ mod tests {
 
         controller.sync(Some(sample_target("img_02")), area, "empty");
 
-        assert!(controller.has_pending_request());
+        assert!(controller.needs_fast_tick());
         assert!(matches!(
             controller.state,
             PreviewState::Ready { ref key, .. } if key == &current_key
@@ -1003,6 +972,21 @@ mod tests {
         assert!(controller.protocol_mut().is_some());
         assert!(view.lines.len() >= 2);
         assert_eq!(view.title, " preview fit img_01 ");
+    }
+
+    #[test]
+    fn resize_pending_preview_requests_fast_tick() {
+        let area = Rect::new(0, 0, 40, 20);
+        let current_key = RequestKey::from_target(sample_target("img_01"), PreviewMode::Auto, area);
+        let mut controller = ready_controller(current_key);
+
+        assert!(!controller.needs_fast_tick());
+        controller
+            .protocol_mut()
+            .expect("ready protocol")
+            .empty_protocol();
+
+        assert!(controller.needs_fast_tick());
     }
 
     #[test]
