@@ -4,8 +4,10 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use let_sdk::intelligence::{CorrectionKind, EvidenceSection, InspectDepth, RefreshPolicy};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use let_sdk::intelligence::{
+    CorrectionKind, EvidenceSection, InspectDepth, ListingListFilters, RefreshPolicy,
+};
 use let_sdk::paths::PathOverrides;
 
 mod commands;
@@ -39,6 +41,10 @@ struct Cli {
     #[arg(long, value_name = "DIR", global = true)]
     sources_dir: Option<PathBuf>,
 
+    /// Select config profile from profiles/<name>.toml.
+    #[arg(long, value_name = "NAME", global = true)]
+    profile: Option<String>,
+
     /// Emit Toon instead of the default JSON envelope.
     #[arg(long, global = true, default_value_t = false)]
     toon: bool,
@@ -57,6 +63,11 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: Option<ConfigCommand>,
+    },
+    /// Inspect local area facts by postcode.
+    Area {
+        #[command(subcommand)]
+        command: Option<AreaCommand>,
     },
     /// Resolve locations or discover Rightmove listing ids.
     Search {
@@ -84,6 +95,8 @@ enum Command {
         /// Restrict sections; repeat or comma-separate values.
         #[arg(long, value_enum, value_delimiter = ',')]
         section: Vec<CliEvidenceSection>,
+        #[command(flatten)]
+        filters: CliListFilters,
     },
     /// Verify extracted claims against available sources.
     Verify {
@@ -129,7 +142,27 @@ enum Command {
 enum ConfigCommand {
     /// Show parsed config.
     Show,
+    /// List available config profiles.
+    Profiles,
     /// Capture unknown config subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum AreaCommand {
+    /// Read local-source area facts for a postcode.
+    Postcode {
+        /// UK postcode to inspect.
+        postcode: String,
+        /// Nearby lookup radius in metres for local stop/UPRN sources.
+        #[arg(long = "radius-m", default_value_t = 800.0)]
+        radius_m: f64,
+        /// Maximum nearby stop/UPRN candidates to return.
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Capture unknown area subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -142,25 +175,42 @@ enum SearchCommand {
         location: String,
     },
     /// Discover listing ids from configured or ad-hoc locations.
-    Discover {
-        #[arg(long)]
-        region: Option<String>,
-        #[arg(long)]
-        location: Option<String>,
-        #[arg(long = "property-types")]
-        property_types: Option<String>,
-        #[arg(long = "must-have")]
-        must_have: Option<String>,
-        #[arg(long = "dont-show")]
-        dont_show: Option<String>,
-        #[arg(long = "location-name")]
-        location_name: Option<String>,
-        #[arg(long)]
-        limit: Option<usize>,
-    },
+    Discover(SearchDiscoveryArgs),
+    /// Summarize discovered listing card rents and duplicate location matches.
+    Market(SearchDiscoveryArgs),
     /// Capture unknown search subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
+}
+
+#[derive(Debug, Clone, Args)]
+struct SearchDiscoveryArgs {
+    #[arg(long)]
+    region: Option<String>,
+    #[arg(long)]
+    location: Option<String>,
+    #[arg(long = "min-price")]
+    min_price: Option<i64>,
+    #[arg(long = "max-price")]
+    max_price: Option<i64>,
+    #[arg(long = "min-bedrooms")]
+    min_bedrooms: Option<i64>,
+    #[arg(long = "max-bedrooms")]
+    max_bedrooms: Option<i64>,
+    #[arg(long)]
+    radius: Option<f64>,
+    #[arg(long = "include-let-agreed", num_args = 0..=1, default_missing_value = "true")]
+    include_let_agreed: Option<bool>,
+    #[arg(long = "property-types")]
+    property_types: Option<String>,
+    #[arg(long = "must-have")]
+    must_have: Option<String>,
+    #[arg(long = "dont-show")]
+    dont_show: Option<String>,
+    #[arg(long = "location-name")]
+    location_name: Option<String>,
+    #[arg(long)]
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -177,9 +227,50 @@ enum AssessCommand {
         /// Rightmove id or entity id.
         id: String,
     },
+    /// List saved assessments with optional summary filters.
+    List {
+        #[command(flatten)]
+        filters: CliListFilters,
+    },
     /// Capture unknown assess subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
+}
+
+#[derive(Debug, Clone, Default, Args)]
+struct CliListFilters {
+    /// Match a saved assessment recommendation.
+    #[arg(long)]
+    recommendation: Option<String>,
+    /// Match saved area, address, postcode, or assessment area text.
+    #[arg(long)]
+    area: Option<String>,
+    /// Maximum monthly rent in pounds.
+    #[arg(long = "max-price")]
+    max_price: Option<i64>,
+    /// Match a postcode prefix such as M1 or YO1.
+    #[arg(long = "postcode-prefix")]
+    postcode_prefix: Option<String>,
+}
+
+impl CliListFilters {
+    fn has_values(&self) -> bool {
+        self.recommendation.is_some()
+            || self.area.is_some()
+            || self.max_price.is_some()
+            || self.postcode_prefix.is_some()
+    }
+}
+
+impl From<&CliListFilters> for ListingListFilters {
+    fn from(value: &CliListFilters) -> Self {
+        Self {
+            recommendation: value.recommendation.clone(),
+            area: value.area.clone(),
+            max_price: value.max_price,
+            postcode_prefix: value.postcode_prefix.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -446,6 +537,7 @@ fn main() {
             cache_dir: cli.cache_dir,
             sources_dir: cli.sources_dir,
         },
+        profile: cli.profile,
     };
 
     let started = Instant::now();
@@ -464,6 +556,24 @@ fn main() {
     }
 }
 
+fn discover_params_from_args(args: &SearchDiscoveryArgs) -> commands::search::DiscoverParams {
+    commands::search::DiscoverParams {
+        region: args.region.clone(),
+        location: args.location.clone(),
+        min_price: args.min_price,
+        max_price: args.max_price,
+        min_bedrooms: args.min_bedrooms,
+        max_bedrooms: args.max_bedrooms,
+        radius: args.radius,
+        include_let_agreed: args.include_let_agreed,
+        property_types: args.property_types.clone(),
+        must_have: args.must_have.clone(),
+        dont_show: args.dont_show.clone(),
+        location_name: args.location_name.clone(),
+        limit: args.limit,
+    }
+}
+
 fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
     match command {
         Command::Tools { name } => {
@@ -474,37 +584,48 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             command: Some(ConfigCommand::Show),
         } => DispatchOutcome::local("config.show", commands::config::show(shared)),
         Command::Config {
+            command: Some(ConfigCommand::Profiles),
+        } => DispatchOutcome::local("config.profiles", commands::config::profiles(shared)),
+        Command::Config {
             command: Some(ConfigCommand::External(args)),
         } => unsupported_external_group("config", args),
         Command::Config { command: None } => DispatchOutcome::help(&["config"]),
+        Command::Area {
+            command:
+                Some(AreaCommand::Postcode {
+                    postcode,
+                    radius_m,
+                    limit,
+                }),
+        } => DispatchOutcome::local(
+            "area.postcode",
+            commands::area::postcode(
+                shared,
+                commands::area::AreaPostcodeCommandParams {
+                    postcode: postcode.clone(),
+                    radius_m: *radius_m,
+                    limit: *limit,
+                },
+            ),
+        ),
+        Command::Area {
+            command: Some(AreaCommand::External(args)),
+        } => unsupported_external_group("area", args),
+        Command::Area { command: None } => DispatchOutcome::help(&["area"]),
         Command::Search {
             command: Some(SearchCommand::Resolve { location }),
         } => DispatchOutcome::local("search.resolve", commands::search::resolve(location)),
         Command::Search {
-            command:
-                Some(SearchCommand::Discover {
-                    region,
-                    location,
-                    property_types,
-                    must_have,
-                    dont_show,
-                    location_name,
-                    limit,
-                }),
+            command: Some(SearchCommand::Discover(args)),
         } => DispatchOutcome::local(
             "search.discover",
-            commands::search::discover(
-                shared,
-                &commands::search::DiscoverParams {
-                    region: region.clone(),
-                    location: location.clone(),
-                    property_types: property_types.clone(),
-                    must_have: must_have.clone(),
-                    dont_show: dont_show.clone(),
-                    location_name: location_name.clone(),
-                    limit: *limit,
-                },
-            ),
+            commands::search::discover(shared, &discover_params_from_args(args)),
+        ),
+        Command::Search {
+            command: Some(SearchCommand::Market(args)),
+        } => DispatchOutcome::local(
+            "search.market",
+            commands::search::market(shared, &discover_params_from_args(args)),
         ),
         Command::Search { command: None } => DispatchOutcome::help(&["search"]),
         Command::Search {
@@ -527,16 +648,54 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                 },
             ),
         ),
-        Command::Evidence { id, section } => DispatchOutcome::local(
-            "evidence",
-            commands::evidence::run(
-                shared,
-                commands::evidence::EvidenceCommandParams {
-                    id: id.clone(),
-                    sections: map_sections(section),
-                },
-            ),
-        ),
+        Command::Evidence {
+            id,
+            section,
+            filters,
+        } if id == "list" => {
+            if !section.is_empty() {
+                DispatchOutcome::local(
+                    "evidence.list",
+                    Err(CommandError::runtime(
+                        "VALIDATION_ERROR",
+                        "`--section` is only supported for `let evidence <id>`",
+                        "remove `--section` or pass a listing id",
+                    )),
+                )
+            } else {
+                DispatchOutcome::local(
+                    "evidence.list",
+                    commands::evidence::list(shared, filters.into()),
+                )
+            }
+        }
+        Command::Evidence {
+            id,
+            section,
+            filters,
+        } => {
+            if filters.has_values() {
+                DispatchOutcome::local(
+                    "evidence",
+                    Err(CommandError::runtime(
+                        "VALIDATION_ERROR",
+                        "list filters require `let evidence list`",
+                        "use `let evidence list --recommendation <value>` or remove the filters",
+                    )),
+                )
+            } else {
+                DispatchOutcome::local(
+                    "evidence",
+                    commands::evidence::run(
+                        shared,
+                        commands::evidence::EvidenceCommandParams {
+                            id: id.clone(),
+                            sections: map_sections(section),
+                        },
+                    ),
+                )
+            }
+        }
         Command::Verify { id, claim, refresh } => DispatchOutcome::local(
             "verify",
             commands::verify::run(
@@ -557,6 +716,12 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
         Command::Assess {
             command: Some(AssessCommand::Get { id }),
         } => DispatchOutcome::local("assess.get", commands::agent_assess::get(shared, id)),
+        Command::Assess {
+            command: Some(AssessCommand::List { filters }),
+        } => DispatchOutcome::local(
+            "assess.list",
+            commands::agent_assess::list(shared, filters.into()),
+        ),
         Command::Assess { command: None } => DispatchOutcome::help(&["assess"]),
         Command::Assess {
             command: Some(AssessCommand::External(args)),

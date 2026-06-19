@@ -3,13 +3,15 @@
 use crate::errors::Result;
 use crate::pipeline::enrich::SourceEnricher;
 use crate::schema::listing::{Listing, StationDistance};
+use serde::Serialize;
 
 const MAX_STATION_DISTANCE_M: f64 = 5_000.0;
 const LOOKUP_LIMIT: usize = 12;
 const OUTPUT_LIMIT: usize = 3;
 const METERS_PER_MILE: f64 = 1_609.344;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NaptanStopCandidate {
     pub name: String,
     pub stop_type: Option<String>,

@@ -3,7 +3,6 @@
 use let_sdk::intelligence::{
     EvidenceSection, InspectDepth, InspectParams, RefreshPolicy, VerifyParams,
 };
-use let_sdk::paths::resolve_paths;
 
 use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs, to_camel_json};
 
@@ -16,7 +15,8 @@ pub struct VerifyCommandParams {
 
 pub fn run(shared: &SharedArgs, params: VerifyCommandParams) -> CommandResult {
     let claim = VerifyClaim::parse(&params.claim)?;
-    let paths = resolve_paths(Some(shared.overrides.clone()));
+    let paths = shared.resolved_paths();
+    let config_path = shared.config_path(&paths)?;
     let sections = sections_for_claim(claim);
     let response = let_sdk::intelligence::verify(VerifyParams {
         id: params.id.clone(),
@@ -28,7 +28,7 @@ pub fn run(shared: &SharedArgs, params: VerifyCommandParams) -> CommandResult {
             refresh: params.refresh,
             sections,
             database_path: paths.derived.database,
-            config_path: paths.derived.config_file,
+            config_path,
             env_path: paths.derived.env_file,
             cache_dir: paths.resolved.cache,
             sources_dir: paths.resolved.sources,

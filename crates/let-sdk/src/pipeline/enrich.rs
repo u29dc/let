@@ -46,6 +46,63 @@ pub struct ListingEnrichmentReport {
     pub unavailable_sources: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaPostcodeSnapshot {
+    pub normalized_postcode: Option<String>,
+    pub postcode_display: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub lsoa_code: Option<String>,
+    pub lsoa_name: Option<String>,
+    pub msoa_code: Option<String>,
+    pub msoa_name: Option<String>,
+    pub broadband: Option<BroadbandProfile>,
+    pub deprivation: Option<AreaDeprivationProfile>,
+    pub demographics: AreaDemographicsProfile,
+    pub flood: Option<AreaFloodProfile>,
+    pub crime: Option<AreaCrimeProfile>,
+    pub naptan_stops: Vec<NaptanStopCandidate>,
+    pub uprn_candidates: Vec<UprnDistanceCandidate>,
+    pub missing_categories: Vec<String>,
+    pub unavailable_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaDeprivationProfile {
+    pub rank: Option<i64>,
+    pub decile: Option<i64>,
+    pub score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaDemographicsProfile {
+    pub social_housing_pct: Option<f64>,
+    pub population: Option<i64>,
+    pub income_bhc: Option<f64>,
+    pub income_ahc: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaFloodProfile {
+    pub level: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaCrimeProfile {
+    pub count_12m: Option<i64>,
+    pub rate_per_1k: Option<f64>,
+    pub violent_12m: Option<i64>,
+    pub burglary_12m: Option<i64>,
+    pub robbery_12m: Option<i64>,
+    pub updated_at: Option<String>,
+}
+
 pub struct SourceEnricher {
     postcodes: Option<Connection>,
     broadband: Option<Connection>,
@@ -62,6 +119,9 @@ pub struct SourceEnricher {
 
 #[derive(Debug, Clone)]
 struct PostcodeLookup {
+    postcode_display: Option<String>,
+    lat: Option<f64>,
+    lng: Option<f64>,
     lsoa_code: Option<String>,
     lsoa_name: Option<String>,
     msoa_code: Option<String>,
@@ -454,6 +514,187 @@ impl SourceEnricher {
         };
         query_broadband_profile(connection, &postcode_key)
     }
+
+    pub fn lookup_area_postcode(
+        &self,
+        postcode: &str,
+        radius_m: f64,
+        limit: usize,
+    ) -> Result<AreaPostcodeSnapshot> {
+        let postcode_key = normalize_non_empty_postcode(postcode);
+        let postcode_lookup = match (self.postcodes.as_ref(), postcode_key.as_deref()) {
+            (Some(connection), Some(postcode)) => query_postcode_lookup(connection, postcode)?,
+            _ => None,
+        };
+
+        let coordinates =
+            postcode_lookup
+                .as_ref()
+                .and_then(|lookup| match (lookup.lat, lookup.lng) {
+                    (Some(lat), Some(lng)) if !(lat == 0.0 && lng == 0.0) => {
+                        Some(PostcodeCoordinates { lat, lng })
+                    }
+                    _ => None,
+                });
+        let lsoa_code = postcode_lookup
+            .as_ref()
+            .and_then(|lookup| lookup.lsoa_code.clone());
+        let msoa_code = postcode_lookup
+            .as_ref()
+            .and_then(|lookup| lookup.msoa_code.clone());
+
+        let broadband = match (self.broadband.as_ref(), postcode_key.as_deref()) {
+            (Some(connection), Some(postcode)) => query_broadband_profile(connection, postcode)?,
+            _ => None,
+        };
+        let flood = match (self.flood.as_ref(), postcode_key.as_deref()) {
+            (Some(connection), Some(postcode)) => query_flood_lookup(connection, postcode)?,
+            _ => None,
+        }
+        .map(|item| AreaFloodProfile {
+            level: item.level,
+            source: item.source,
+        });
+        let deprivation = match (self.deprivation.as_ref(), lsoa_code.as_deref()) {
+            (Some(connection), Some(code)) => query_imd_lookup(connection, code)?,
+            _ => None,
+        }
+        .map(|item| AreaDeprivationProfile {
+            rank: item.rank,
+            decile: item.decile,
+            score: item.score,
+        });
+        let social_housing_pct = match (self.census.as_ref(), lsoa_code.as_deref()) {
+            (Some(connection), Some(code)) => query_social_housing_pct(connection, code)?,
+            _ => None,
+        };
+        let population = match (self.population.as_ref(), lsoa_code.as_deref()) {
+            (Some(connection), Some(code)) => query_population(connection, code)?,
+            _ => None,
+        };
+        let income = match (self.income.as_ref(), msoa_code.as_deref()) {
+            (Some(connection), Some(code)) => query_income(connection, code)?,
+            _ => None,
+        };
+        let crime_lookup = match (self.crime.as_ref(), lsoa_code.as_deref()) {
+            (Some(connection), Some(code)) => query_crime_lookup(connection, code)?,
+            _ => None,
+        };
+        let crime = crime_lookup.map(|item| {
+            let rate_per_1k = match (item.total, population) {
+                (Some(total), Some(population)) if population > 0 => {
+                    Some(((total as f64 / population as f64) * 1_000.0 * 100.0).round() / 100.0)
+                }
+                _ => None,
+            };
+            AreaCrimeProfile {
+                count_12m: item.total,
+                rate_per_1k,
+                violent_12m: item.violent,
+                burglary_12m: item.burglary,
+                robbery_12m: item.robbery,
+                updated_at: item.month_end,
+            }
+        });
+        let naptan_stops = match coordinates.as_ref() {
+            Some(coords) => self.lookup_naptan_stops(coords.lat, coords.lng, radius_m, limit)?,
+            None => Vec::new(),
+        };
+        let uprn_candidates = match coordinates.as_ref() {
+            Some(coords) => self.lookup_uprn_candidates(coords.lat, coords.lng, radius_m, limit)?,
+            None => Vec::new(),
+        };
+
+        let mut missing_categories = Vec::new();
+        push_missing(
+            &mut missing_categories,
+            self.postcodes.is_some() && postcode_lookup.is_none(),
+            SOURCE_POSTCODES,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.broadband.is_some() && broadband.is_none(),
+            SOURCE_BROADBAND,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.flood.is_some() && flood.is_none(),
+            SOURCE_FLOOD,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.deprivation.is_some() && deprivation.is_none(),
+            SOURCE_DEPRIVATION,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.census.is_some() && social_housing_pct.is_none(),
+            SOURCE_CENSUS,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.population.is_some() && population.is_none(),
+            SOURCE_POPULATION,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.income.is_some() && income.is_none(),
+            SOURCE_INCOME,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.crime.is_some() && crime.is_none(),
+            SOURCE_CRIME,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.naptan.is_some() && naptan_stops.is_empty(),
+            SOURCE_NAPTAN,
+        );
+        push_missing(
+            &mut missing_categories,
+            self.uprn.is_some() && uprn_candidates.is_empty(),
+            SOURCE_UPRN,
+        );
+        missing_categories.sort();
+
+        Ok(AreaPostcodeSnapshot {
+            normalized_postcode: postcode_key,
+            postcode_display: postcode_lookup
+                .as_ref()
+                .and_then(|lookup| lookup.postcode_display.clone()),
+            latitude: coordinates.as_ref().map(|coords| coords.lat),
+            longitude: coordinates.as_ref().map(|coords| coords.lng),
+            lsoa_code,
+            lsoa_name: postcode_lookup
+                .as_ref()
+                .and_then(|lookup| lookup.lsoa_name.clone()),
+            msoa_code,
+            msoa_name: postcode_lookup
+                .as_ref()
+                .and_then(|lookup| lookup.msoa_name.clone()),
+            broadband,
+            deprivation,
+            demographics: AreaDemographicsProfile {
+                social_housing_pct,
+                population,
+                income_bhc: income.as_ref().and_then(|item| item.0),
+                income_ahc: income.and_then(|item| item.1),
+            },
+            flood,
+            crime,
+            naptan_stops,
+            uprn_candidates,
+            missing_categories,
+            unavailable_sources: self.unavailable_sources.clone(),
+        })
+    }
+}
+
+fn push_missing(missing: &mut Vec<String>, condition: bool, source: &str) {
+    if condition {
+        missing.push(source.to_owned());
+    }
 }
 
 fn open_optional_source_db(
@@ -487,17 +728,20 @@ fn query_postcode_lookup(
 ) -> Result<Option<PostcodeLookup>> {
     connection
         .query_row(
-            "SELECT lsoa_code, lsoa_name, msoa_code, msoa_name
+            "SELECT postcode_display, lat, lng, lsoa_code, lsoa_name, msoa_code, msoa_name
              FROM postcodes
              WHERE postcode = ?1 OR REPLACE(postcode_display, ' ', '') = ?1
              LIMIT 1",
             params![postcode],
             |row| {
                 Ok(PostcodeLookup {
-                    lsoa_code: normalize_area_code(row.get::<_, Option<String>>(0)?.as_deref()),
-                    lsoa_name: normalize_text(row.get::<_, Option<String>>(1)?),
-                    msoa_code: normalize_area_code(row.get::<_, Option<String>>(2)?.as_deref()),
-                    msoa_name: normalize_text(row.get::<_, Option<String>>(3)?),
+                    postcode_display: normalize_text(row.get::<_, Option<String>>(0)?),
+                    lat: row.get::<_, Option<f64>>(1)?,
+                    lng: row.get::<_, Option<f64>>(2)?,
+                    lsoa_code: normalize_area_code(row.get::<_, Option<String>>(3)?.as_deref()),
+                    lsoa_name: normalize_text(row.get::<_, Option<String>>(4)?),
+                    msoa_code: normalize_area_code(row.get::<_, Option<String>>(5)?.as_deref()),
+                    msoa_name: normalize_text(row.get::<_, Option<String>>(6)?),
                 })
             },
         )
@@ -1065,10 +1309,18 @@ mod tests {
                 CREATE TABLE postcodes (
                     postcode TEXT PRIMARY KEY,
                     postcode_display TEXT,
-                    gigabit_availability REAL
+                    outward TEXT,
+                    area TEXT,
+                    gigabit_availability REAL,
+                    pct_over_300mbps REAL,
+                    ufbb_availability REAL,
+                    sfbb_availability REAL
                 );
-                INSERT INTO postcodes (postcode, postcode_display, gigabit_availability)
-                VALUES ('AA11AA', 'AA1 1AA', 87.4);
+                INSERT INTO postcodes (
+                    postcode, postcode_display, outward, area, gigabit_availability,
+                    pct_over_300mbps, ufbb_availability, sfbb_availability
+                )
+                VALUES ('AA11AA', 'AA1 1AA', 'AA1', 'Example Area', 87.4, 91.2, 96.0, 99.1);
                 ",
             )
             .expect("seed broadband");
@@ -1284,6 +1536,46 @@ mod tests {
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].name, "High Street Bus Stop");
         assert!(result[0].distance_m < result[1].distance_m);
+    }
+
+    #[test]
+    fn lookup_area_postcode_returns_source_snapshot() {
+        let temp = build_test_sources();
+        seed_uprn_db(temp.path());
+        seed_naptan_db(temp.path());
+        let enricher = SourceEnricher::open(temp.path()).expect("open enricher");
+
+        let result = enricher
+            .lookup_area_postcode("aa1 1aa", 500.0, 5)
+            .expect("area lookup should succeed");
+
+        assert_eq!(result.normalized_postcode.as_deref(), Some("AA11AA"));
+        assert_eq!(result.postcode_display.as_deref(), Some("AA1 1AA"));
+        assert_eq!(result.lsoa_code.as_deref(), Some("LSOA001"));
+        assert_eq!(result.msoa_name.as_deref(), Some("MSOA One"));
+        assert_eq!(
+            result
+                .broadband
+                .as_ref()
+                .and_then(|profile| profile.gigabit_availability),
+            Some(87.4)
+        );
+        assert_eq!(
+            result.deprivation.as_ref().and_then(|item| item.decile),
+            Some(9)
+        );
+        assert_eq!(result.demographics.population, Some(12000));
+        assert_eq!(
+            result.flood.as_ref().and_then(|item| item.level.as_deref()),
+            Some("low")
+        );
+        assert_eq!(
+            result.crime.as_ref().and_then(|item| item.count_12m),
+            Some(120)
+        );
+        assert!(!result.naptan_stops.is_empty());
+        assert!(!result.uprn_candidates.is_empty());
+        assert!(result.missing_categories.is_empty());
     }
 
     fn sample_listing(postcode: &str) -> Listing {

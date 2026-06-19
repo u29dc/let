@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use let_sdk::intelligence::{AssessGetParams, AssessSaveParams};
+use let_sdk::intelligence::{
+    AssessGetParams, AssessListParams, AssessSaveParams, ListingListFilters,
+};
 use let_sdk::paths::resolve_paths;
 use serde_json::Value;
 
@@ -38,4 +40,17 @@ pub fn get(shared: &SharedArgs, id: &str) -> CommandResult {
         database_path: paths.derived.database,
     })?;
     Ok(CommandOutput::new(to_camel_json(&record)))
+}
+
+pub fn list(shared: &SharedArgs, filters: ListingListFilters) -> CommandResult {
+    let paths = resolve_paths(Some(shared.overrides.clone()));
+    let response = let_sdk::intelligence::assess_list(AssessListParams {
+        filters,
+        database_path: paths.derived.database,
+    })?;
+    let count = response.assessments.len();
+
+    Ok(CommandOutput::new(to_camel_json(&response))
+        .with_count(count)
+        .with_total(count))
 }

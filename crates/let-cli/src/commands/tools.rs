@@ -80,6 +80,12 @@ mod tests {
             "expected --toon global flag in catalog"
         );
         assert!(
+            global_flags
+                .iter()
+                .any(|flag| flag["name"] == serde_json::Value::String("--profile".to_owned())),
+            "expected --profile global flag in catalog"
+        );
+        assert!(
             !global_flags
                 .iter()
                 .any(|flag| flag["name"] == serde_json::Value::String("--text".to_owned())),

@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use let_sdk::intelligence::EvidenceSection;
-use let_sdk::paths::resolve_paths;
 use serde_json::json;
 
 use crate::commands::{CommandError, CommandOutput, CommandResult, SharedArgs};
@@ -56,7 +55,7 @@ fn run_resolved(
         ));
     }
 
-    let paths = resolve_paths(Some(shared.overrides.clone()));
+    let paths = shared.resolved_paths();
     let section_names = params
         .sections
         .iter()
@@ -73,6 +72,11 @@ fn run_resolved(
 
     if let Some(id) = &params.id {
         command.env("LET_START_ID", id);
+    }
+
+    if let Some(profile) = &shared.profile {
+        let_sdk::config::validate_profile_name(profile)?;
+        command.env("LET_PROFILE", profile);
     }
 
     if !section_names.is_empty() {
@@ -145,6 +149,7 @@ mod tests {
         let result = run_resolved(
             &SharedArgs {
                 overrides: PathOverrides::default(),
+                profile: None,
             },
             StartParams {
                 id: None,
@@ -159,6 +164,29 @@ mod tests {
 
         let error = result.expect_err("captured stdout should be rejected");
         assert_eq!(error.code, "START_REQUIRES_TTY");
+    }
+
+    #[test]
+    fn start_rejects_invalid_profile_name() {
+        let result = run_resolved(
+            &SharedArgs {
+                overrides: PathOverrides::default(),
+                profile: Some("../bad".to_owned()),
+            },
+            StartParams {
+                id: None,
+                sections: Vec::new(),
+            },
+            PathBuf::from("unused"),
+            TerminalStdio {
+                stdin: true,
+                stdout: true,
+            },
+        );
+
+        let error = result.expect_err("invalid profile should be rejected before launch");
+        assert_eq!(error.code, "INVALID_INPUT");
+        assert!(error.message.contains("invalid config profile name"));
     }
 
     #[cfg(unix)]
@@ -192,6 +220,7 @@ mod tests {
         let output = run_resolved(
             &SharedArgs {
                 overrides: overrides.clone(),
+                profile: None,
             },
             StartParams {
                 id: Some("170448131".to_owned()),

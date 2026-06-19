@@ -3,11 +3,13 @@
 use crate::errors::Result;
 use crate::pipeline::enrich::SourceEnricher;
 use crate::schema::listing::{Listing, PinType, UprnConfidence, UprnSource};
+use serde::Serialize;
 
 const MAX_FALLBACK_DISTANCE_M: f64 = 25.0;
 const LOOKUP_LIMIT: usize = 6;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UprnDistanceCandidate {
     pub uprn: String,
     pub distance_m: f64,

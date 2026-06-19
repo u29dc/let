@@ -7,10 +7,12 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use crate::errors::{ErrorCode, LetError, Result};
 use crate::intelligence::types::{
-    AssessmentRecord, CorrectionKind, CorrectionRecord, EvidenceBundle,
+    AssessmentRecord, CorrectionKind, CorrectionRecord, EvidenceBundle, ListingListFilters,
+    StoredAssessmentSummary, StoredListingSummary,
 };
 use crate::utils::time::now_iso;
 
@@ -410,6 +412,301 @@ impl IntelligenceDb {
         })
         .transpose()
     }
+
+    pub fn list_evidence_summaries(
+        &self,
+        filters: &ListingListFilters,
+    ) -> Result<Vec<StoredListingSummary>> {
+        let mut statement = self.connection.prepare(
+            "SELECT b.bundle_json, a.assessment_json, a.saved_at, e.updated_at
+             FROM evidence_bundles b
+             LEFT JOIN assessments a ON a.entity_id = b.entity_id
+             LEFT JOIN entities e ON e.id = b.entity_id
+             ORDER BY b.generated_at DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (bundle_json, assessment_json, assessment_saved_at, updated_at) = row?;
+            let bundle = self.deserialize_bundle(&bundle_json)?;
+            let assessment =
+                joined_assessment(&bundle.entity_id, assessment_json, assessment_saved_at)?
+                    .or_else(|| bundle.assessment.clone());
+            let summary = summary_from_bundle(&bundle, assessment.as_ref(), updated_at);
+            if matches_filters(
+                &summary,
+                assessment.as_ref().map(|record| &record.assessment),
+                filters,
+            ) {
+                summaries.push(summary);
+            }
+        }
+        Ok(summaries)
+    }
+
+    pub fn list_assessment_summaries(
+        &self,
+        filters: &ListingListFilters,
+    ) -> Result<Vec<StoredAssessmentSummary>> {
+        let mut statement = self.connection.prepare(
+            "SELECT a.entity_id, a.assessment_json, a.saved_at, b.bundle_json, e.updated_at
+             FROM assessments a
+             LEFT JOIN evidence_bundles b ON b.entity_id = a.entity_id
+             LEFT JOIN entities e ON e.id = a.entity_id
+             ORDER BY a.saved_at DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (entity_id, assessment_json, saved_at, bundle_json, updated_at) = row?;
+            let assessment = AssessmentRecord {
+                entity_id: entity_id.clone(),
+                assessment: deserialize_json(&assessment_json, "assessment")?,
+                saved_at,
+            };
+            let bundle = bundle_json
+                .as_deref()
+                .map(|raw| self.deserialize_bundle(raw))
+                .transpose()?;
+            let listing = match bundle.as_ref() {
+                Some(bundle) => summary_from_bundle(bundle, Some(&assessment), updated_at),
+                None => summary_from_assessment(&assessment, updated_at),
+            };
+            if matches_filters(&listing, Some(&assessment.assessment), filters) {
+                summaries.push(StoredAssessmentSummary {
+                    listing,
+                    assessment: assessment.assessment,
+                });
+            }
+        }
+        Ok(summaries)
+    }
+}
+
+fn joined_assessment(
+    entity_id: &str,
+    assessment_json: Option<String>,
+    saved_at: Option<String>,
+) -> Result<Option<AssessmentRecord>> {
+    let Some(assessment_json) = assessment_json else {
+        return Ok(None);
+    };
+    let Some(saved_at) = saved_at else {
+        return Ok(None);
+    };
+    Ok(Some(AssessmentRecord {
+        entity_id: entity_id.to_owned(),
+        assessment: deserialize_json(&assessment_json, "assessment")?,
+        saved_at,
+    }))
+}
+
+fn summary_from_bundle(
+    bundle: &EvidenceBundle,
+    assessment: Option<&AssessmentRecord>,
+    updated_at: Option<String>,
+) -> StoredListingSummary {
+    let address = bundle.rightmove.address.clone().or_else(|| {
+        bundle
+            .address
+            .selected
+            .as_ref()
+            .map(|selected| selected.label.clone())
+    });
+    let postcode = bundle
+        .rightmove
+        .postcode
+        .clone()
+        .or_else(|| {
+            bundle
+                .address
+                .selected
+                .as_ref()
+                .and_then(|selected| selected.postcode.clone())
+        })
+        .or_else(|| {
+            bundle.broadband.as_ref().and_then(|broadband| {
+                broadband
+                    .postcode_display
+                    .clone()
+                    .or_else(|| Some(broadband.postcode.clone()))
+            })
+        });
+    let price = bundle.rightmove.display_price.clone().or_else(|| {
+        bundle
+            .rightmove
+            .price_pcm
+            .map(|price| format!("{price} pcm"))
+    });
+    let assessment_value = assessment.map(|record| &record.assessment);
+    let area =
+        assessment_text(assessment_value, &["area", "locationArea", "region"]).or_else(|| {
+            bundle
+                .broadband
+                .as_ref()
+                .and_then(|broadband| broadband.outward.clone().or_else(|| broadband.area.clone()))
+        });
+
+    StoredListingSummary {
+        id: external_id_from_entity(&bundle.entity_id, Some(&bundle.rightmove_id)),
+        entity_id: bundle.entity_id.clone(),
+        url: Some(bundle.url.clone()),
+        address,
+        postcode,
+        area,
+        price,
+        price_pcm: bundle.rightmove.price_pcm,
+        recommendation: assessment_text(assessment_value, &["recommendation"]),
+        confidence: assessment_text(assessment_value, &["confidence"]),
+        saved_at: assessment.map(|record| record.saved_at.clone()),
+        inspected_at: Some(bundle.generated_at.clone()),
+        updated_at,
+    }
+}
+
+fn summary_from_assessment(
+    assessment: &AssessmentRecord,
+    updated_at: Option<String>,
+) -> StoredListingSummary {
+    StoredListingSummary {
+        id: external_id_from_entity(&assessment.entity_id, None),
+        entity_id: assessment.entity_id.clone(),
+        url: None,
+        address: None,
+        postcode: None,
+        area: assessment_text(
+            Some(&assessment.assessment),
+            &["area", "locationArea", "region"],
+        ),
+        price: None,
+        price_pcm: None,
+        recommendation: assessment_text(Some(&assessment.assessment), &["recommendation"]),
+        confidence: assessment_text(Some(&assessment.assessment), &["confidence"]),
+        saved_at: Some(assessment.saved_at.clone()),
+        inspected_at: None,
+        updated_at,
+    }
+}
+
+fn external_id_from_entity(entity_id: &str, rightmove_id: Option<&str>) -> String {
+    rightmove_id
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| entity_id.strip_prefix("rightmove:").map(ToOwned::to_owned))
+        .unwrap_or_else(|| entity_id.to_owned())
+}
+
+fn assessment_text(assessment: Option<&Value>, keys: &[&str]) -> Option<String> {
+    let assessment = assessment?;
+    for key in keys {
+        if let Some(value) = assessment.get(*key).and_then(value_to_filter_text) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn value_to_filter_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => non_empty_text(text),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn non_empty_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn matches_filters(
+    summary: &StoredListingSummary,
+    assessment: Option<&Value>,
+    filters: &ListingListFilters,
+) -> bool {
+    matches_recommendation(summary, filters)
+        && matches_max_price(summary, filters)
+        && matches_postcode_prefix(summary, filters)
+        && matches_area(summary, assessment, filters)
+}
+
+fn matches_recommendation(summary: &StoredListingSummary, filters: &ListingListFilters) -> bool {
+    let Some(expected) = filters.recommendation.as_deref().and_then(non_empty_text) else {
+        return true;
+    };
+    summary
+        .recommendation
+        .as_deref()
+        .is_some_and(|actual| actual.eq_ignore_ascii_case(&expected))
+}
+
+fn matches_max_price(summary: &StoredListingSummary, filters: &ListingListFilters) -> bool {
+    let Some(max_price) = filters.max_price else {
+        return true;
+    };
+    summary.price_pcm.is_some_and(|price| price <= max_price)
+}
+
+fn matches_postcode_prefix(summary: &StoredListingSummary, filters: &ListingListFilters) -> bool {
+    let Some(prefix) = filters
+        .postcode_prefix
+        .as_deref()
+        .map(normalize_postcode)
+        .filter(|value| !value.is_empty())
+    else {
+        return true;
+    };
+    summary
+        .postcode
+        .as_deref()
+        .map(normalize_postcode)
+        .is_some_and(|postcode| postcode.starts_with(&prefix))
+}
+
+fn matches_area(
+    summary: &StoredListingSummary,
+    assessment: Option<&Value>,
+    filters: &ListingListFilters,
+) -> bool {
+    let Some(expected) = filters.area.as_deref().and_then(non_empty_text) else {
+        return true;
+    };
+    let expected = expected.to_ascii_lowercase();
+    [
+        summary.area.as_deref(),
+        summary.address.as_deref(),
+        summary.postcode.as_deref(),
+        assessment_text(assessment, &["area", "locationArea", "region"]).as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value.to_ascii_lowercase().contains(&expected))
+}
+
+fn normalize_postcode(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 pub fn database_overview(path: impl AsRef<Path>) -> Result<IntelligenceDbOverview> {
@@ -813,7 +1110,14 @@ CREATE TABLE IF NOT EXISTS assessments (
 #[cfg(test)]
 mod tests {
     use rusqlite::Connection;
+    use serde_json::json;
     use tempfile::TempDir;
+
+    use crate::intelligence::types::{
+        AddressCandidateEvidence, AddressEvidence, BroadbandEvidence, ConfidenceLevel,
+        DescriptionEvidence, EvidenceBundle, InspectDepth, ListingListFilters, MediaEvidence,
+        RefreshPolicy, RightmoveEvidence, SectionStatus,
+    };
 
     use super::{
         INTELLIGENCE_SCHEMA_VERSION, IntelligenceDb, extract_rightmove_id, normalize_entity_id,
@@ -924,5 +1228,140 @@ mod tests {
             "unexpected message: {}",
             error.message
         );
+    }
+
+    #[test]
+    fn repository_lists_evidence_and_assessments_with_filters() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("let.db");
+        let mut db = IntelligenceDb::open(&path).expect("open db");
+        db.save_bundle(&test_bundle("170448131", "M1 1AA", 1250))
+            .expect("save matching bundle");
+        db.save_assessment(
+            "170448131",
+            json!({
+                "recommendation": "view",
+                "confidence": "high",
+                "area": "Manchester"
+            }),
+        )
+        .expect("save matching assessment");
+        db.save_bundle(&test_bundle("170448132", "M2 2BB", 1750))
+            .expect("save filtered bundle");
+        db.save_assessment(
+            "170448132",
+            json!({
+                "recommendation": "skip",
+                "confidence": "medium",
+                "area": "Manchester"
+            }),
+        )
+        .expect("save filtered assessment");
+
+        let filters = ListingListFilters {
+            recommendation: Some("view".to_owned()),
+            area: Some("manchester".to_owned()),
+            max_price: Some(1300),
+            postcode_prefix: Some("M1".to_owned()),
+        };
+
+        let evidence = db.list_evidence_summaries(&filters).expect("list evidence");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].id, "170448131");
+        assert_eq!(evidence[0].entity_id, "rightmove:170448131");
+        assert_eq!(evidence[0].postcode.as_deref(), Some("M1 1AA"));
+        assert_eq!(evidence[0].price_pcm, Some(1250));
+        assert_eq!(evidence[0].recommendation.as_deref(), Some("view"));
+        assert_eq!(evidence[0].confidence.as_deref(), Some("high"));
+        assert!(evidence[0].saved_at.is_some());
+        assert_eq!(
+            evidence[0].inspected_at.as_deref(),
+            Some("2026-06-18T00:00:00.000Z")
+        );
+
+        let assessments = db
+            .list_assessment_summaries(&filters)
+            .expect("list assessments");
+        assert_eq!(assessments.len(), 1);
+        assert_eq!(assessments[0].listing.id, "170448131");
+        assert_eq!(assessments[0].assessment["recommendation"], "view");
+    }
+
+    fn test_bundle(rightmove_id: &str, postcode: &str, price_pcm: i64) -> EvidenceBundle {
+        let entity_id = format!("rightmove:{rightmove_id}");
+        let url = format!("https://www.rightmove.co.uk/properties/{rightmove_id}");
+        EvidenceBundle {
+            entity_id: entity_id.clone(),
+            rightmove_id: rightmove_id.to_owned(),
+            url: url.clone(),
+            generated_at: "2026-06-18T00:00:00.000Z".to_owned(),
+            depth: InspectDepth::Standard,
+            refresh: RefreshPolicy::Stale,
+            sections: Default::default(),
+            source_snapshots: Vec::new(),
+            rightmove: RightmoveEvidence {
+                rightmove_id: rightmove_id.to_owned(),
+                url,
+                page_status: "active".to_owned(),
+                fetched_at: "2026-06-18T00:00:00.000Z".to_owned(),
+                content_hash: format!("hash-{rightmove_id}"),
+                title: Some("Two bedroom flat".to_owned()),
+                address: Some("1 Example Street, Manchester".to_owned()),
+                postcode: Some(postcode.to_owned()),
+                display_price: Some(format!("{price_pcm} pcm")),
+                price_pcm: Some(price_pcm),
+                bedrooms: Some(2),
+                bathrooms: Some(1),
+                property_type: Some("Flat".to_owned()),
+                agent_name: None,
+                agent_phone: None,
+                latitude: None,
+                longitude: None,
+                pin_type: None,
+                listed_date: None,
+                available_date: None,
+                deposit: None,
+                description: DescriptionEvidence {
+                    raw_html: String::new(),
+                    text: String::new(),
+                    key_features: Vec::new(),
+                    normalized_text: String::new(),
+                },
+                media: Vec::new(),
+            },
+            address: AddressEvidence {
+                candidates: vec![AddressCandidateEvidence {
+                    source: "rightmove".to_owned(),
+                    label: "1 Example Street, Manchester".to_owned(),
+                    postcode: Some(postcode.to_owned()),
+                    latitude: None,
+                    longitude: None,
+                    confidence: ConfidenceLevel::Probable,
+                    raw: None,
+                }],
+                selected: None,
+                status: SectionStatus::Ok,
+                confidence: ConfidenceLevel::Probable,
+                warnings: Vec::new(),
+            },
+            facts: Vec::new(),
+            broadband: Some(BroadbandEvidence {
+                postcode: postcode.replace(' ', ""),
+                postcode_display: Some(postcode.to_owned()),
+                outward: postcode.split_whitespace().next().map(ToOwned::to_owned),
+                area: Some("M".to_owned()),
+                gigabit_availability: None,
+                pct_over_300mbps: None,
+                ufbb_availability: None,
+                sfbb_availability: None,
+            }),
+            epc: None,
+            claims: Vec::new(),
+            verifications: Vec::new(),
+            media: MediaEvidence::default(),
+            assessment: None,
+            corrections: Vec::new(),
+            next_actions: Vec::new(),
+        }
     }
 }

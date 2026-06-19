@@ -1,6 +1,9 @@
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::thread;
 
 use let_sdk::intelligence::{
     AddressCandidateEvidence, AddressEvidence, AssessmentRecord, BroadbandEvidence, ClaimEvidence,
@@ -8,8 +11,10 @@ use let_sdk::intelligence::{
     IntelligenceDb, MediaEvidence, MediaItemEvidence, RefreshPolicy, RightmoveEvidence,
     SectionState, SectionStatus, SourceRef, VerificationEvidence, VerificationStatus,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::TempDir;
+
+const RIGHTMOVE_SEARCH_API_HEALTH_URL_ENV: &str = "LET_RIGHTMOVE_SEARCH_API_HEALTH_URL";
 
 fn bin_path() -> PathBuf {
     PathBuf::from(assert_cmd::cargo::cargo_bin!("let"))
@@ -59,6 +64,10 @@ impl Fixture {
             "--sources-dir",
             self.sources_dir.to_str().expect("sources dir str"),
         ]);
+        command.env(
+            RIGHTMOVE_SEARCH_API_HEALTH_URL_ENV,
+            "http://127.0.0.1:9/api/_search",
+        );
         command
     }
 
@@ -67,9 +76,172 @@ impl Fixture {
     }
 
     fn seed_bundle(&self) {
-        let mut db = IntelligenceDb::open(self.db_path()).expect("open intelligence db");
-        db.save_bundle(&sample_bundle()).expect("save bundle");
+        self.seed_bundle_record(&sample_bundle());
     }
+
+    fn seed_bundle_record(&self, bundle: &EvidenceBundle) {
+        let mut db = IntelligenceDb::open(self.db_path()).expect("open intelligence db");
+        db.save_bundle(bundle).expect("save bundle");
+    }
+
+    fn save_assessment(&self, id: &str, assessment: Value) {
+        let db = IntelligenceDb::open(self.db_path()).expect("open intelligence db");
+        db.save_assessment(id, assessment).expect("save assessment");
+    }
+
+    fn write_profile(&self, name: &str, config: &str) {
+        let profile_dir = self.config_dir.join("profiles");
+        fs::create_dir_all(&profile_dir).expect("create profile dir");
+        fs::write(profile_dir.join(format!("{name}.toml")), config).expect("write profile");
+    }
+
+    fn seed_area_sources(&self) {
+        seed_source_db(
+            &self.sources_dir.join("postcodes.db"),
+            "
+            CREATE TABLE postcodes (
+                postcode TEXT PRIMARY KEY,
+                postcode_display TEXT,
+                lat REAL,
+                lng REAL,
+                lsoa_code TEXT,
+                lsoa_name TEXT,
+                msoa_code TEXT,
+                msoa_name TEXT
+            );
+            INSERT INTO postcodes (postcode, postcode_display, lat, lng, lsoa_code, lsoa_name, msoa_code, msoa_name)
+            VALUES ('AA11AA', 'AA1 1AA', 51.5074, -0.1278, 'LSOA001', 'LSOA One', 'MSOA001', 'MSOA One');
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("broadband.db"),
+            "
+            CREATE TABLE postcodes (
+                postcode TEXT PRIMARY KEY,
+                postcode_display TEXT,
+                outward TEXT,
+                area TEXT,
+                gigabit_availability REAL,
+                pct_over_300mbps REAL,
+                ufbb_availability REAL,
+                sfbb_availability REAL
+            );
+            INSERT INTO postcodes (
+                postcode, postcode_display, outward, area, gigabit_availability,
+                pct_over_300mbps, ufbb_availability, sfbb_availability
+            )
+            VALUES ('AA11AA', 'AA1 1AA', 'AA1', 'Example Area', 87.4, 91.2, 96.0, 99.1);
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("deprivation.db"),
+            "
+            CREATE TABLE imd (
+                lsoa_code TEXT PRIMARY KEY,
+                rank INTEGER,
+                decile INTEGER,
+                score REAL
+            );
+            INSERT INTO imd (lsoa_code, rank, decile, score)
+            VALUES ('LSOA001', 222, 9, 7.4);
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("census.db"),
+            "
+            CREATE TABLE tenure (
+                lsoa_code TEXT PRIMARY KEY,
+                social_housing_pct REAL
+            );
+            INSERT INTO tenure (lsoa_code, social_housing_pct)
+            VALUES ('LSOA001', 14.5);
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("population.db"),
+            "
+            CREATE TABLE population (
+                lsoa_code TEXT PRIMARY KEY,
+                population INTEGER
+            );
+            INSERT INTO population (lsoa_code, population)
+            VALUES ('LSOA001', 12000);
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("income.db"),
+            "
+            CREATE TABLE income (
+                msoa_code TEXT PRIMARY KEY,
+                income_bhc REAL,
+                income_ahc REAL
+            );
+            INSERT INTO income (msoa_code, income_bhc, income_ahc)
+            VALUES ('MSOA001', 611.2, 503.0);
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("flood.db"),
+            "
+            CREATE TABLE flood (
+                postcode TEXT PRIMARY KEY,
+                risk TEXT,
+                source TEXT
+            );
+            INSERT INTO flood (postcode, risk, source)
+            VALUES ('AA11AA', 'low', 'ea-postcode-risk');
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("crime.db"),
+            "
+            CREATE TABLE crime_12m (
+                lsoa_code TEXT PRIMARY KEY,
+                total INTEGER,
+                violent INTEGER,
+                burglary INTEGER,
+                robbery INTEGER,
+                month_end TEXT
+            );
+            INSERT INTO crime_12m (lsoa_code, total, violent, burglary, robbery, month_end)
+            VALUES ('LSOA001', 120, 18, 9, 3, '2026-02');
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("naptan.db"),
+            "
+            CREATE TABLE stops (
+                atco_code TEXT PRIMARY KEY,
+                naptan_code TEXT,
+                common_name TEXT,
+                stop_type TEXT,
+                lat REAL,
+                lng REAL
+            );
+            INSERT INTO stops (atco_code, naptan_code, common_name, stop_type, lat, lng)
+            VALUES ('stop-1', 'nap-1', 'Central Rail Station', 'RLY', 51.50745, -0.12775);
+            ",
+        );
+        seed_source_db(
+            &self.sources_dir.join("uprn.db"),
+            "
+            CREATE TABLE uprn (
+                uprn TEXT PRIMARY KEY,
+                lat REAL,
+                lng REAL,
+                x REAL,
+                y REAL
+            );
+            INSERT INTO uprn (uprn, lat, lng, x, y)
+            VALUES ('100021234567', 51.50741, -0.12779, NULL, NULL);
+            ",
+        );
+    }
+}
+
+fn seed_source_db(path: &PathBuf, sql: &str) {
+    let connection = rusqlite::Connection::open(path).expect("open source db");
+    connection.execute_batch(sql).expect("seed source db");
 }
 
 #[test]
@@ -92,8 +264,13 @@ fn tools_json_returns_agent_native_catalog() {
         "correct.epc",
         "correct.media",
         "correct.clear",
+        "area.postcode",
+        "config.show",
+        "config.profiles",
         "assess.save",
         "assess.get",
+        "assess.list",
+        "evidence.list",
         "sources.list",
         "sources.status",
         "sources.build",
@@ -195,6 +372,126 @@ fn config_show_exposes_search_use_api() {
     let envelope = assert_single_json_envelope(&output);
     assert_eq!(envelope["meta"]["tool"], "config.show");
     assert_eq!(envelope["data"]["config"]["search"]["useApi"], true);
+    assert_eq!(envelope["data"]["profile"], serde_json::Value::Null);
+}
+
+#[test]
+fn config_profiles_lists_available_profiles() {
+    let fixture = Fixture::new();
+    fixture.write_profile("zeta", sample_config());
+    fixture.write_profile("alpha", sample_config());
+
+    let output = fixture
+        .cmd()
+        .args(["config", "profiles"])
+        .output()
+        .expect("run config profiles");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "config.profiles");
+    assert_eq!(envelope["meta"]["count"], 2);
+    assert!(
+        envelope["data"]["profileDir"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("/profiles"))
+    );
+    let names = envelope["data"]["profiles"]
+        .as_array()
+        .expect("profiles array")
+        .iter()
+        .map(|profile| profile["name"].as_str().expect("profile name"))
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["alpha", "zeta"]);
+}
+
+#[test]
+fn config_show_loads_named_profile() {
+    let fixture = Fixture::new();
+    fixture.write_profile(
+        "north",
+        &sample_config()
+            .replace("REGION^87490", "REGION^NORTH")
+            .replace("Manchester", "York"),
+    );
+
+    let output = fixture
+        .cmd()
+        .args(["config", "show", "--profile", "north"])
+        .output()
+        .expect("run config show profile");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["data"]["profile"], "north");
+    assert!(
+        envelope["data"]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("/profiles/north.toml"))
+    );
+    assert_eq!(
+        envelope["data"]["config"]["search"]["locations"][0]["name"],
+        "York"
+    );
+
+    let global_output = fixture
+        .cmd()
+        .args(["--profile", "north", "config", "show"])
+        .output()
+        .expect("run global profile config show");
+    assert_eq!(global_output.status.code(), Some(0));
+    let global_envelope = assert_single_json_envelope(&global_output);
+    assert_eq!(global_envelope["data"]["profile"], "north");
+    assert_eq!(
+        global_envelope["data"]["config"]["search"]["locations"][0]["name"],
+        "York"
+    );
+}
+
+#[test]
+fn config_show_rejects_invalid_profile_name() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["config", "show", "--profile", "../north"])
+        .output()
+        .expect("run config show invalid profile");
+    assert_eq!(output.status.code(), Some(1));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "invalid_input");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("invalid config profile name"))
+    );
+}
+
+#[test]
+fn config_profile_is_used_by_health() {
+    let fixture = Fixture::new();
+    fixture.write_profile(
+        "html",
+        &sample_config().replace("useApi = true", "useApi = false"),
+    );
+
+    let output = fixture
+        .cmd()
+        .args(["--profile", "html", "health"])
+        .output()
+        .expect("run health with profile");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["data"]["paths"]["profile"], "html");
+    assert!(
+        envelope["data"]["paths"]["configFile"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("/profiles/html.toml"))
+    );
+    let check = find_check(&envelope, "rightmove.search_api");
+    assert_eq!(check["status"], "disabled");
 }
 
 #[test]
@@ -292,6 +589,62 @@ fn health_write_probe_does_not_remove_existing_file() {
 }
 
 #[test]
+fn health_degrades_when_rightmove_search_api_returns_non_json() {
+    let fixture = Fixture::new();
+    let api_url = serve_search_api_response_once(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 21\r\nconnection: close\r\n\r\n<html>not json</html>",
+    );
+
+    let mut command = fixture.cmd();
+    command.env(RIGHTMOVE_SEARCH_API_HEALTH_URL_ENV, api_url);
+    let output = command.args(["health"]).output().expect("run health");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    let check = find_check(&envelope, "rightmove.search_api");
+    assert_eq!(check["label"], "Rightmove Search API");
+    assert_eq!(check["status"], "degraded");
+    assert_eq!(check["severity"], "degraded");
+    assert!(
+        check["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("text/html"))
+    );
+    assert!(
+        check["fix"]
+            .as_array()
+            .expect("fix array")
+            .iter()
+            .any(|item| item
+                .as_str()
+                .is_some_and(|text| text.contains("search.useApi = false")))
+    );
+}
+
+#[test]
+fn health_reports_rightmove_search_api_disabled_when_config_disables_api() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.config_dir.join("let.config.toml"),
+        sample_config().replace("useApi = true", "useApi = false"),
+    )
+    .expect("write config");
+
+    let output = fixture.cmd().args(["health"]).output().expect("run health");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    let check = find_check(&envelope, "rightmove.search_api");
+    assert_eq!(check["status"], "disabled");
+    assert_eq!(check["severity"], "info");
+    assert!(
+        check["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("search.useApi is false"))
+    );
+}
+
+#[test]
 fn sources_list_and_status_use_new_surface() {
     let fixture = Fixture::new();
     let list = fixture
@@ -322,6 +675,70 @@ fn sources_list_and_status_use_new_surface() {
 }
 
 #[test]
+fn area_postcode_reads_local_source_snapshot() {
+    let fixture = Fixture::new();
+    fixture.seed_area_sources();
+
+    let output = fixture
+        .cmd()
+        .args([
+            "area",
+            "postcode",
+            "aa1 1aa",
+            "--radius-m",
+            "500",
+            "--limit",
+            "5",
+        ])
+        .output()
+        .expect("run area postcode");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "area.postcode");
+    assert_eq!(envelope["data"]["query"]["normalizedPostcode"], "AA11AA");
+    assert_eq!(envelope["data"]["joinKeys"]["lsoaCode"], "LSOA001");
+    assert_eq!(envelope["data"]["broadband"]["gigabitAvailability"], 87.4);
+    assert_eq!(envelope["data"]["sections"]["postcodes"]["status"], "ok");
+    assert_eq!(envelope["data"]["sections"]["broadband"]["status"], "ok");
+    assert_eq!(
+        envelope["data"]["nearby"]["naptanStops"][0]["name"],
+        "Central Rail Station"
+    );
+    assert_eq!(
+        envelope["data"]["nearby"]["uprnCandidates"][0]["uprn"],
+        "100021234567"
+    );
+    assert!(
+        envelope["data"]["facts"]
+            .as_array()
+            .expect("facts")
+            .iter()
+            .any(|fact| fact["provider"] == "postcodesDb" && fact["name"] == "lsoaCode")
+    );
+}
+
+#[test]
+fn area_postcode_rejects_non_finite_radius() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["area", "postcode", "aa1 1aa", "--radius-m", "NaN"])
+        .output()
+        .expect("run area postcode");
+    assert_eq!(output.status.code(), Some(1));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "invalid_input");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("finite positive"))
+    );
+}
+
+#[test]
 fn evidence_reads_seeded_bundle() {
     let fixture = Fixture::new();
     fixture.seed_bundle();
@@ -349,6 +766,83 @@ fn evidence_reads_seeded_bundle() {
         envelope["data"]["requestedSections"],
         json!(["broadband", "verifications"])
     );
+}
+
+#[test]
+fn evidence_list_returns_summary_and_applies_filters() {
+    let fixture = Fixture::new();
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448131",
+        "1 Example Street, Manchester",
+        "M1 1AA",
+        1250,
+        "2026-06-18T00:00:00.000Z",
+    ));
+    fixture.save_assessment(
+        "170448131",
+        json!({
+            "recommendation": "view",
+            "confidence": "high",
+            "area": "Manchester"
+        }),
+    );
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448132",
+        "2 Example Street, Manchester",
+        "M2 2BB",
+        1750,
+        "2026-06-18T01:00:00.000Z",
+    ));
+    fixture.save_assessment(
+        "170448132",
+        json!({
+            "recommendation": "skip",
+            "confidence": "medium",
+            "area": "Manchester"
+        }),
+    );
+
+    let output = fixture
+        .cmd()
+        .args([
+            "evidence",
+            "list",
+            "--recommendation",
+            "view",
+            "--area",
+            "manchester",
+            "--max-price",
+            "1300",
+            "--postcode-prefix",
+            "M1",
+        ])
+        .output()
+        .expect("run evidence list");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "evidence.list");
+    assert_eq!(envelope["meta"]["count"], 1);
+    assert_eq!(envelope["data"]["filters"]["recommendation"], "view");
+    let listings = envelope["data"]["listings"]
+        .as_array()
+        .expect("listings array");
+    assert_eq!(listings.len(), 1);
+    let listing = &listings[0];
+    assert_eq!(listing["id"], "170448131");
+    assert_eq!(listing["entityId"], "rightmove:170448131");
+    assert_eq!(
+        listing["url"],
+        "https://www.rightmove.co.uk/properties/170448131"
+    );
+    assert_eq!(listing["address"], "1 Example Street, Manchester");
+    assert_eq!(listing["postcode"], "M1 1AA");
+    assert_eq!(listing["pricePcm"], 1250);
+    assert_eq!(listing["recommendation"], "view");
+    assert_eq!(listing["confidence"], "high");
+    assert_eq!(listing["inspectedAt"], "2026-06-18T00:00:00.000Z");
+    assert!(listing["savedAt"].is_string());
+    assert!(listing["updatedAt"].is_string());
 }
 
 #[test]
@@ -415,6 +909,77 @@ fn assess_save_and_get_persist_agent_json() {
     let get_json = assert_single_json_envelope(&get);
     assert_eq!(get_json["meta"]["tool"], "assess.get");
     assert_eq!(get_json["data"]["assessment"]["reasoning"], "good evidence");
+}
+
+#[test]
+fn assess_list_returns_saved_assessments_and_applies_filters() {
+    let fixture = Fixture::new();
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448131",
+        "1 Example Street, Manchester",
+        "M1 1AA",
+        1250,
+        "2026-06-18T00:00:00.000Z",
+    ));
+    fixture.save_assessment(
+        "170448131",
+        json!({
+            "recommendation": "view",
+            "confidence": "high",
+            "area": "Manchester",
+            "reasoning": "good evidence"
+        }),
+    );
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448132",
+        "2 Example Street, Manchester",
+        "M2 2BB",
+        1750,
+        "2026-06-18T01:00:00.000Z",
+    ));
+    fixture.save_assessment(
+        "170448132",
+        json!({
+            "recommendation": "skip",
+            "confidence": "medium",
+            "area": "Manchester"
+        }),
+    );
+
+    let output = fixture
+        .cmd()
+        .args([
+            "assess",
+            "list",
+            "--recommendation",
+            "view",
+            "--area",
+            "manchester",
+            "--max-price",
+            "1300",
+            "--postcode-prefix",
+            "M1",
+        ])
+        .output()
+        .expect("run assess list");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "assess.list");
+    assert_eq!(envelope["meta"]["count"], 1);
+    let assessments = envelope["data"]["assessments"]
+        .as_array()
+        .expect("assessments array");
+    assert_eq!(assessments.len(), 1);
+    let assessment = &assessments[0];
+    assert_eq!(assessment["id"], "170448131");
+    assert_eq!(assessment["entityId"], "rightmove:170448131");
+    assert_eq!(assessment["postcode"], "M1 1AA");
+    assert_eq!(assessment["pricePcm"], 1250);
+    assert_eq!(assessment["recommendation"], "view");
+    assert_eq!(assessment["confidence"], "high");
+    assert_eq!(assessment["assessment"]["reasoning"], "good evidence");
+    assert!(assessment["savedAt"].is_string());
 }
 
 #[test]
@@ -646,6 +1211,21 @@ fn find_check<'a>(envelope: &'a serde_json::Value, id: &str) -> &'a serde_json::
         .expect("check present")
 }
 
+fn serve_search_api_response_once(response: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = listener.local_addr().expect("read test server address");
+    thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut buffer = [0_u8; 1024];
+        let _ = stream.read(&mut buffer);
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+    });
+    format!("http://{address}/api/_search")
+}
+
 fn sample_config() -> &'static str {
     r#"
 [search]
@@ -749,6 +1329,48 @@ highCrime = 0.8
 highCrimeThreshold = 120
 missingDataPenalty = 0.95
 "#
+}
+
+fn sample_bundle_variant(
+    rightmove_id: &str,
+    address: &str,
+    postcode: &str,
+    price_pcm: i64,
+    generated_at: &str,
+) -> EvidenceBundle {
+    let mut bundle = sample_bundle();
+    let entity_id = format!("rightmove:{rightmove_id}");
+    let url = format!("https://www.rightmove.co.uk/properties/{rightmove_id}");
+
+    bundle.entity_id = entity_id.clone();
+    bundle.rightmove_id = rightmove_id.to_owned();
+    bundle.url = url.clone();
+    bundle.generated_at = generated_at.to_owned();
+    bundle.rightmove.rightmove_id = rightmove_id.to_owned();
+    bundle.rightmove.url = url;
+    bundle.rightmove.address = Some(address.to_owned());
+    bundle.rightmove.postcode = Some(postcode.to_owned());
+    bundle.rightmove.display_price = Some(format!("£{price_pcm} pcm"));
+    bundle.rightmove.price_pcm = Some(price_pcm);
+    bundle.address.candidates = vec![AddressCandidateEvidence {
+        source: "rightmove".to_owned(),
+        label: address.to_owned(),
+        postcode: Some(postcode.to_owned()),
+        latitude: Some(53.4808),
+        longitude: Some(-2.2426),
+        confidence: ConfidenceLevel::Exact,
+        raw: None,
+    }];
+    if let Some(broadband) = bundle.broadband.as_mut() {
+        broadband.postcode = postcode.replace(' ', "");
+        broadband.postcode_display = Some(postcode.to_owned());
+        broadband.outward = postcode.split_whitespace().next().map(ToOwned::to_owned);
+        broadband.area = Some("M".to_owned());
+    }
+    bundle.assessment = None;
+    bundle.claims.clear();
+    bundle.verifications.clear();
+    bundle
 }
 
 fn sample_bundle() -> EvidenceBundle {

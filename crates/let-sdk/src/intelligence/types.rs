@@ -470,6 +470,41 @@ pub struct AssessmentRecord {
     pub saved_at: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListingListFilters {
+    pub recommendation: Option<String>,
+    pub area: Option<String>,
+    pub max_price: Option<i64>,
+    pub postcode_prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredListingSummary {
+    pub id: String,
+    pub entity_id: String,
+    pub url: Option<String>,
+    pub address: Option<String>,
+    pub postcode: Option<String>,
+    pub area: Option<String>,
+    pub price: Option<String>,
+    pub price_pcm: Option<i64>,
+    pub recommendation: Option<String>,
+    pub confidence: Option<String>,
+    pub saved_at: Option<String>,
+    pub inspected_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredAssessmentSummary {
+    #[serde(flatten)]
+    pub listing: StoredListingSummary,
+    pub assessment: Value,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CorrectionRecord {

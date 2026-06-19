@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,14 @@ use crate::errors::{ErrorCode, LetError, Result};
 use crate::paths::paths;
 
 pub const RIGHTMOVE_SEARCH_TYPES: [&str; 4] = ["detached", "semi-detached", "terraced", "flat"];
+pub const PROFILE_DIR_NAME: &str = "profiles";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigProfile {
+    pub name: String,
+    pub path: PathBuf,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Location {
@@ -611,6 +620,114 @@ pub fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
     Ok(parsed)
 }
 
+pub fn load_config_profile(
+    default_config_path: Option<&Path>,
+    profile: Option<&str>,
+) -> Result<AppConfig> {
+    let default_path = default_config_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| paths().derived.config_file);
+    let config_path = config_path_for_profile(&default_path, profile)?;
+    load_config(Some(&config_path))
+}
+
+pub fn config_profiles_dir(default_config_path: &Path) -> PathBuf {
+    default_config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(PROFILE_DIR_NAME)
+}
+
+pub fn config_path_for_profile(
+    default_config_path: &Path,
+    profile: Option<&str>,
+) -> Result<PathBuf> {
+    let Some(profile) = profile else {
+        return Ok(default_config_path.to_path_buf());
+    };
+
+    validate_profile_name(profile)?;
+    Ok(config_profiles_dir(default_config_path).join(format!("{profile}.toml")))
+}
+
+pub fn list_config_profiles(default_config_path: &Path) -> Result<Vec<ConfigProfile>> {
+    let profile_dir = config_profiles_dir(default_config_path);
+    let entries = match fs::read_dir(&profile_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(LetError::new(
+                ErrorCode::InvalidInput,
+                format!(
+                    "failed to read config profiles directory {}: {error}",
+                    profile_dir.display()
+                ),
+                "check config directory permissions",
+            ));
+        }
+    };
+
+    let mut profiles = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            LetError::new(
+                ErrorCode::InvalidInput,
+                format!(
+                    "failed to read config profiles directory {}: {error}",
+                    profile_dir.display()
+                ),
+                "check config directory permissions",
+            )
+        })?;
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .map(|file_type| file_type.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if validate_profile_name(name).is_err() {
+            continue;
+        }
+        profiles.push(ConfigProfile {
+            name: name.to_owned(),
+            path,
+        });
+    }
+
+    profiles.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(profiles)
+}
+
+pub fn validate_profile_name(name: &str) -> Result<()> {
+    let valid_len = (1..=64).contains(&name.len());
+    let valid_chars = name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+    let starts_with_alnum = name
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric());
+    let reserved = name.eq_ignore_ascii_case("default");
+
+    if valid_len && valid_chars && starts_with_alnum && !reserved {
+        return Ok(());
+    }
+
+    Err(LetError::new(
+        ErrorCode::InvalidInput,
+        format!("invalid config profile name `{name}`"),
+        "use 1-64 ASCII letters, digits, hyphens, or underscores; do not use `default`",
+    ))
+}
+
 fn reject_legacy_fetch_use_api(raw: &toml::Value, path: &Path) -> Result<()> {
     let has_legacy_key = raw
         .get("fetch")
@@ -655,8 +772,9 @@ mod tests {
     use crate::ErrorCode;
 
     use super::{
-        AppConfig, FetchConfig, Location, SearchConfig, SearchFilters, default_scoring_config,
-        load_config, load_scoring_config, parse_scoring_config,
+        AppConfig, FetchConfig, Location, SearchConfig, SearchFilters, config_path_for_profile,
+        default_scoring_config, list_config_profiles, load_config, load_config_profile,
+        load_scoring_config, parse_scoring_config, validate_profile_name,
     };
 
     #[test]
@@ -736,6 +854,79 @@ mod tests {
 
         assert_eq!(config_a.search.locations[0].name, "Alpha");
         assert_eq!(config_b.search.locations[0].name, "Beta");
+    }
+
+    #[test]
+    fn load_config_profile_reads_profile_file() {
+        let temp = TempDir::new().expect("tempdir");
+        let default_path = temp.path().join("let.config.toml");
+        let profile_dir = temp.path().join("profiles");
+        let profile_path = profile_dir.join("north.toml");
+
+        fs::create_dir_all(&profile_dir).expect("create profile dir");
+        fs::write(
+            &default_path,
+            toml::to_string(&sample_config("Default")).expect("serialize default config"),
+        )
+        .expect("write default config");
+        fs::write(
+            &profile_path,
+            toml::to_string(&sample_config("North")).expect("serialize profile config"),
+        )
+        .expect("write profile config");
+
+        let default_config =
+            load_config_profile(Some(&default_path), None).expect("load default config");
+        let profile_config =
+            load_config_profile(Some(&default_path), Some("north")).expect("load profile config");
+
+        assert_eq!(default_config.search.locations[0].name, "Default");
+        assert_eq!(profile_config.search.locations[0].name, "North");
+    }
+
+    #[test]
+    fn list_config_profiles_returns_valid_toml_profiles_sorted() {
+        let temp = TempDir::new().expect("tempdir");
+        let default_path = temp.path().join("let.config.toml");
+        let profile_dir = temp.path().join("profiles");
+
+        fs::create_dir_all(&profile_dir).expect("create profile dir");
+        fs::write(profile_dir.join("zeta.toml"), "").expect("write zeta profile");
+        fs::write(profile_dir.join("alpha.toml"), "").expect("write alpha profile");
+        fs::write(profile_dir.join("../ignored.toml"), "").expect("write sibling file");
+        fs::write(profile_dir.join("not-toml.txt"), "").expect("write text file");
+
+        let profiles = list_config_profiles(&default_path).expect("list profiles");
+        let names = profiles
+            .iter()
+            .map(|profile| profile.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["alpha", "zeta"]);
+        assert_eq!(profiles[0].path, profile_dir.join("alpha.toml"));
+    }
+
+    #[test]
+    fn profile_name_validation_rejects_path_traversal_and_ambiguous_names() {
+        for invalid in [
+            "",
+            "../north",
+            "north/east",
+            ".hidden",
+            "-dash",
+            "default",
+            "north.toml",
+        ] {
+            let error = validate_profile_name(invalid).expect_err("profile name should fail");
+            assert_eq!(error.code, ErrorCode::InvalidInput);
+        }
+
+        assert!(validate_profile_name("north_1").is_ok());
+        let temp = TempDir::new().expect("tempdir");
+        let default_path = temp.path().join("let.config.toml");
+        let error = config_path_for_profile(&default_path, Some("../north"))
+            .expect_err("invalid profile path should fail");
+        assert_eq!(error.code, ErrorCode::InvalidInput);
     }
 
     #[test]

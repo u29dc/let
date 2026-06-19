@@ -20,12 +20,14 @@ pub use db::{
 };
 pub use errors::{ErrorCode, LetError, Result};
 pub use intelligence::{
-    AssessGetParams, AssessSaveParams, EvidenceParams, InspectParams, IntelligenceDb,
-    RefreshPolicy, VerifyParams, assess_get, assess_save, database_overview, evidence, inspect,
-    verify,
+    AreaPostcodeParams, AssessGetParams, AssessListParams, AssessSaveParams, EvidenceListParams,
+    EvidenceParams, InspectParams, IntelligenceDb, ListingListFilters, RefreshPolicy, VerifyParams,
+    area_postcode, assess_get, assess_list, assess_save, database_overview, evidence,
+    evidence_list, inspect, verify,
 };
 pub use pipeline::enrich::{
-    BroadbandProfile, EnrichmentMode, ListingEnrichmentReport, PostcodeCoordinates, SourceEnricher,
+    AreaPostcodeSnapshot, BroadbandProfile, EnrichmentMode, ListingEnrichmentReport,
+    PostcodeCoordinates, SourceEnricher,
 };
 pub use pipeline::geocode::{GeocodeSource, GeocodedCoordinates, mapbox_forward_geocode};
 pub use pipeline::score::{

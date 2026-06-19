@@ -15,11 +15,14 @@ use crate::intelligence::repository::{IntelligenceDb, extract_rightmove_id, norm
 use crate::intelligence::types::{
     AddressCandidateEvidence, AddressEvidence, AssessmentRecord, BroadbandEvidence, ClaimEvidence,
     ConfidenceLevel, CorrectionKind, CorrectionRecord, DescriptionEvidence, EpcEvidence,
-    EvidenceBundle, EvidenceSection, FactEvidence, FactProvider, InspectDepth, MediaEvidence,
-    MediaItemEvidence, RefreshPolicy, RightmoveEvidence, SectionState, SectionStatus, SourceRef,
-    SourceSnapshotEvidence, VerificationEvidence, VerificationStatus,
+    EvidenceBundle, EvidenceSection, FactEvidence, FactProvider, InspectDepth, ListingListFilters,
+    MediaEvidence, MediaItemEvidence, RefreshPolicy, RightmoveEvidence, SectionState,
+    SectionStatus, SourceRef, SourceSnapshotEvidence, StoredAssessmentSummary,
+    StoredListingSummary, VerificationEvidence, VerificationStatus,
 };
-use crate::pipeline::enrich::{BroadbandProfile, EnrichmentMode, SourceEnricher};
+use crate::pipeline::enrich::{
+    AreaPostcodeSnapshot, BroadbandProfile, EnrichmentMode, SourceEnricher,
+};
 use crate::pipeline::epc::{EpcCredentials, EpcLookup, lookup_domestic_epc};
 use crate::pipeline::fetch::media::{MediaNormalizationConfig, populate_listing_media};
 use crate::pipeline::fetch::rightmove::{
@@ -50,6 +53,20 @@ pub struct EvidenceParams {
 }
 
 #[derive(Debug, Clone)]
+pub struct EvidenceListParams {
+    pub filters: ListingListFilters,
+    pub database_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct AreaPostcodeParams {
+    pub postcode: String,
+    pub radius_m: f64,
+    pub limit: usize,
+    pub sources_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub struct VerifyParams {
     pub id: String,
     pub claim: String,
@@ -67,6 +84,12 @@ pub struct AssessSaveParams {
 #[derive(Debug, Clone)]
 pub struct AssessGetParams {
     pub id: String,
+    pub database_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct AssessListParams {
+    pub filters: ListingListFilters,
     pub database_path: PathBuf,
 }
 
@@ -96,6 +119,54 @@ pub struct EvidenceResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EvidenceListResponse {
+    pub listings: Vec<StoredListingSummary>,
+    pub filters: ListingListFilters,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaPostcodeResponse {
+    pub query: AreaPostcodeQuery,
+    pub join_keys: AreaPostcodeJoinKeys,
+    pub sections: BTreeMap<String, SectionState>,
+    pub facts: Vec<FactEvidence>,
+    pub broadband: Option<BroadbandProfile>,
+    pub nearby: AreaNearbyEvidence,
+    pub missing_sources: Vec<String>,
+    pub next_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaPostcodeQuery {
+    pub postcode: String,
+    pub normalized_postcode: Option<String>,
+    pub radius_m: f64,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaPostcodeJoinKeys {
+    pub postcode_display: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub lsoa_code: Option<String>,
+    pub lsoa_name: Option<String>,
+    pub msoa_code: Option<String>,
+    pub msoa_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AreaNearbyEvidence {
+    pub naptan_stops: Vec<crate::pipeline::naptan::NaptanStopCandidate>,
+    pub uprn_candidates: Vec<crate::pipeline::uprn::UprnDistanceCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VerifyResponse {
     pub id: String,
     pub claim: String,
@@ -110,6 +181,13 @@ pub struct CorrectionResponse {
     pub affected_sections: Vec<String>,
     pub warnings: Vec<String>,
     pub next_commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssessListResponse {
+    pub assessments: Vec<StoredAssessmentSummary>,
+    pub filters: ListingListFilters,
 }
 
 pub fn inspect(params: InspectParams) -> Result<EvidenceBundle> {
@@ -280,6 +358,75 @@ pub fn evidence(params: EvidenceParams) -> Result<EvidenceResponse> {
     })
 }
 
+pub fn evidence_list(params: EvidenceListParams) -> Result<EvidenceListResponse> {
+    let db = IntelligenceDb::open(&params.database_path)?;
+    let listings = db.list_evidence_summaries(&params.filters)?;
+    Ok(EvidenceListResponse {
+        listings,
+        filters: params.filters,
+    })
+}
+
+pub fn area_postcode(params: AreaPostcodeParams) -> Result<AreaPostcodeResponse> {
+    if params.postcode.trim().is_empty() {
+        return Err(LetError::new(
+            ErrorCode::InvalidInput,
+            "postcode is required",
+            "pass a UK postcode such as `let area postcode CT21 5QR`",
+        ));
+    }
+    if !params.radius_m.is_finite() || params.radius_m <= 0.0 {
+        return Err(LetError::new(
+            ErrorCode::InvalidInput,
+            format!(
+                "radius must be a finite positive number (got {})",
+                params.radius_m
+            ),
+            "pass finite --radius-m greater than zero",
+        ));
+    }
+    if params.limit == 0 {
+        return Err(LetError::new(
+            ErrorCode::InvalidInput,
+            "limit must be positive",
+            "pass --limit greater than zero",
+        ));
+    }
+
+    let enricher = SourceEnricher::open(&params.sources_dir)?;
+    let snapshot =
+        enricher.lookup_area_postcode(&params.postcode, params.radius_m, params.limit)?;
+    let facts = area_facts(&snapshot);
+    let sections = area_sections(&snapshot);
+    let next_actions = area_next_actions(&snapshot);
+    Ok(AreaPostcodeResponse {
+        query: AreaPostcodeQuery {
+            postcode: params.postcode,
+            normalized_postcode: snapshot.normalized_postcode.clone(),
+            radius_m: params.radius_m,
+            limit: params.limit,
+        },
+        join_keys: AreaPostcodeJoinKeys {
+            postcode_display: snapshot.postcode_display.clone(),
+            latitude: snapshot.latitude,
+            longitude: snapshot.longitude,
+            lsoa_code: snapshot.lsoa_code.clone(),
+            lsoa_name: snapshot.lsoa_name.clone(),
+            msoa_code: snapshot.msoa_code.clone(),
+            msoa_name: snapshot.msoa_name.clone(),
+        },
+        sections,
+        facts,
+        broadband: snapshot.broadband.clone(),
+        nearby: AreaNearbyEvidence {
+            naptan_stops: snapshot.naptan_stops.clone(),
+            uprn_candidates: snapshot.uprn_candidates.clone(),
+        },
+        missing_sources: snapshot.unavailable_sources.clone(),
+        next_actions,
+    })
+}
+
 pub fn verify(params: VerifyParams) -> Result<VerifyResponse> {
     let bundle = if params.refresh == RefreshPolicy::None {
         let db = IntelligenceDb::open(&params.inspect.database_path)?;
@@ -392,6 +539,15 @@ pub fn assess_get(params: AssessGetParams) -> Result<AssessmentRecord> {
             format!("no assessment found for `{}`", params.id),
             "run `let assess save <id> <assessment-json>` first",
         )
+    })
+}
+
+pub fn assess_list(params: AssessListParams) -> Result<AssessListResponse> {
+    let db = IntelligenceDb::open(params.database_path)?;
+    let assessments = db.list_assessment_summaries(&params.filters)?;
+    Ok(AssessListResponse {
+        assessments,
+        filters: params.filters,
     })
 }
 
@@ -1459,6 +1615,354 @@ fn source_facts(sources_dir: &Path, listing: &mut Listing) -> Vec<FactEvidence> 
         listing.area.crime.robbery_12m.map(|value| json!(value)),
     );
     facts
+}
+
+fn area_facts(snapshot: &AreaPostcodeSnapshot) -> Vec<FactEvidence> {
+    let mut facts = Vec::new();
+    push_source_fact(
+        &mut facts,
+        FactProvider::PostcodesDb,
+        "area",
+        "postcodeDisplay",
+        snapshot.postcode_display.as_ref().map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::PostcodesDb,
+        "area",
+        "latitude",
+        snapshot.latitude.map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::PostcodesDb,
+        "area",
+        "longitude",
+        snapshot.longitude.map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::PostcodesDb,
+        "area",
+        "lsoaCode",
+        snapshot.lsoa_code.as_ref().map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::PostcodesDb,
+        "area",
+        "lsoaName",
+        snapshot.lsoa_name.as_ref().map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::PostcodesDb,
+        "area",
+        "msoaCode",
+        snapshot.msoa_code.as_ref().map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::PostcodesDb,
+        "area",
+        "msoaName",
+        snapshot.msoa_name.as_ref().map(|value| json!(value)),
+    );
+    if let Some(broadband) = &snapshot.broadband {
+        push_source_fact(
+            &mut facts,
+            FactProvider::BroadbandDb,
+            "broadband",
+            "gigabitAvailability",
+            broadband.gigabit_availability.map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::BroadbandDb,
+            "broadband",
+            "pctOver300mbps",
+            broadband.pct_over_300mbps.map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::BroadbandDb,
+            "broadband",
+            "ufbbAvailability",
+            broadband.ufbb_availability.map(|value| json!(value)),
+        );
+    }
+    if let Some(deprivation) = &snapshot.deprivation {
+        push_source_fact(
+            &mut facts,
+            FactProvider::DeprivationDb,
+            "deprivation",
+            "imdRank",
+            deprivation.rank.map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::DeprivationDb,
+            "deprivation",
+            "imdDecile",
+            deprivation.decile.map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::DeprivationDb,
+            "deprivation",
+            "imdScore",
+            deprivation.score.map(|value| json!(value)),
+        );
+    }
+    push_source_fact(
+        &mut facts,
+        FactProvider::CensusDb,
+        "housing",
+        "socialHousingPct",
+        snapshot
+            .demographics
+            .social_housing_pct
+            .map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::PopulationDb,
+        "population",
+        "population",
+        snapshot.demographics.population.map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::IncomeDb,
+        "income",
+        "incomeBhc",
+        snapshot.demographics.income_bhc.map(|value| json!(value)),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::IncomeDb,
+        "income",
+        "incomeAhc",
+        snapshot.demographics.income_ahc.map(|value| json!(value)),
+    );
+    if let Some(flood) = &snapshot.flood {
+        push_source_fact(
+            &mut facts,
+            FactProvider::FloodDb,
+            "flood",
+            "riskLevel",
+            flood.level.as_ref().map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::FloodDb,
+            "flood",
+            "riskSource",
+            flood.source.as_ref().map(|value| json!(value)),
+        );
+    }
+    if let Some(crime) = &snapshot.crime {
+        push_source_fact(
+            &mut facts,
+            FactProvider::CrimeDb,
+            "crime",
+            "count12m",
+            crime.count_12m.map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::CrimeDb,
+            "crime",
+            "ratePer1k",
+            crime.rate_per_1k.map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::CrimeDb,
+            "crime",
+            "violent12m",
+            crime.violent_12m.map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::CrimeDb,
+            "crime",
+            "burglary12m",
+            crime.burglary_12m.map(|value| json!(value)),
+        );
+        push_source_fact(
+            &mut facts,
+            FactProvider::CrimeDb,
+            "crime",
+            "robbery12m",
+            crime.robbery_12m.map(|value| json!(value)),
+        );
+    }
+    push_source_fact(
+        &mut facts,
+        FactProvider::NaptanDb,
+        "nearby",
+        "naptanStopCount",
+        (!snapshot.naptan_stops.is_empty()).then(|| json!(snapshot.naptan_stops.len())),
+    );
+    push_source_fact(
+        &mut facts,
+        FactProvider::UprnDb,
+        "nearby",
+        "uprnCandidateCount",
+        (!snapshot.uprn_candidates.is_empty()).then(|| json!(snapshot.uprn_candidates.len())),
+    );
+    facts
+}
+
+fn area_sections(snapshot: &AreaPostcodeSnapshot) -> BTreeMap<String, SectionState> {
+    let mut sections = BTreeMap::new();
+    sections.insert(
+        "postcodes".to_owned(),
+        area_section(
+            snapshot,
+            "postcodes",
+            snapshot.postcode_display.is_some(),
+            "postcode matched local ONSPD source",
+            "postcode was not found in local ONSPD source",
+        ),
+    );
+    sections.insert(
+        "broadband".to_owned(),
+        area_section(
+            snapshot,
+            "broadband",
+            snapshot.broadband.is_some(),
+            "postcode matched local broadband source",
+            "postcode was not found in local broadband source",
+        ),
+    );
+    sections.insert(
+        "deprivation".to_owned(),
+        area_section(
+            snapshot,
+            "deprivation",
+            snapshot.deprivation.is_some(),
+            "LSOA matched local deprivation source",
+            "LSOA was not found in local deprivation source",
+        ),
+    );
+    sections.insert("demographics".to_owned(), demographics_section(snapshot));
+    sections.insert(
+        "flood".to_owned(),
+        area_section(
+            snapshot,
+            "flood",
+            snapshot.flood.is_some(),
+            "postcode matched local flood source",
+            "postcode was not found in local flood source",
+        ),
+    );
+    sections.insert(
+        "crime".to_owned(),
+        area_section(
+            snapshot,
+            "crime",
+            snapshot.crime.is_some(),
+            "LSOA matched local crime source",
+            "LSOA was not found in local crime source",
+        ),
+    );
+    sections.insert(
+        "nearby".to_owned(),
+        if snapshot
+            .unavailable_sources
+            .iter()
+            .any(|source| source == "naptan")
+            && snapshot
+                .unavailable_sources
+                .iter()
+                .any(|source| source == "uprn")
+        {
+            SectionState::degraded(
+                "nearby stop and UPRN sources are missing",
+                vec!["run `let sources build naptan` and `let sources build uprn`".to_owned()],
+            )
+        } else if !snapshot.naptan_stops.is_empty() || !snapshot.uprn_candidates.is_empty() {
+            SectionState::ok(
+                "nearby local proximity candidates found",
+                ConfidenceLevel::Probable,
+            )
+        } else {
+            SectionState::skipped("no nearby local proximity candidates found in radius")
+        },
+    );
+    sections
+}
+
+fn demographics_section(snapshot: &AreaPostcodeSnapshot) -> SectionState {
+    let demographic_sources = ["census", "population", "income"];
+    let missing_sources = demographic_sources
+        .iter()
+        .filter(|source| {
+            snapshot
+                .unavailable_sources
+                .iter()
+                .any(|missing| missing == **source)
+        })
+        .map(|source| format!("run `let sources build {source}`"))
+        .collect::<Vec<_>>();
+    if !missing_sources.is_empty() {
+        return SectionState::degraded(
+            "one or more demographic source databases are missing",
+            missing_sources,
+        );
+    }
+    if snapshot.demographics.social_housing_pct.is_some()
+        || snapshot.demographics.population.is_some()
+        || snapshot.demographics.income_bhc.is_some()
+        || snapshot.demographics.income_ahc.is_some()
+    {
+        SectionState::ok(
+            "local demographic sources matched area join keys",
+            ConfidenceLevel::Probable,
+        )
+    } else {
+        SectionState::degraded(
+            "local demographic sources did not match area join keys",
+            Vec::new(),
+        )
+    }
+}
+
+fn area_section(
+    snapshot: &AreaPostcodeSnapshot,
+    source: &str,
+    has_data: bool,
+    ok_summary: &str,
+    missing_summary: &str,
+) -> SectionState {
+    if snapshot
+        .unavailable_sources
+        .iter()
+        .any(|value| value == source)
+    {
+        return SectionState::degraded(
+            format!("{source} source database is missing"),
+            vec![format!("run `let sources build {source}`")],
+        );
+    }
+    if has_data {
+        SectionState::ok(ok_summary, ConfidenceLevel::Probable)
+    } else {
+        SectionState::degraded(missing_summary, vec![])
+    }
+}
+
+fn area_next_actions(snapshot: &AreaPostcodeSnapshot) -> Vec<String> {
+    let mut actions = snapshot
+        .unavailable_sources
+        .iter()
+        .map(|source| format!("run `let sources build {source}`"))
+        .collect::<Vec<_>>();
+    actions.sort();
+    actions.dedup();
+    actions
 }
 
 fn push_source_fact(

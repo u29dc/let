@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use let_sdk::intelligence::{EvidenceSection, InspectDepth, InspectParams, RefreshPolicy};
-use let_sdk::paths::resolve_paths;
 
 use crate::commands::{CommandOutput, CommandResult, SharedArgs, to_camel_json};
 
@@ -14,14 +13,15 @@ pub struct InspectCommandParams {
 }
 
 pub fn run(shared: &SharedArgs, params: InspectCommandParams) -> CommandResult {
-    let paths = resolve_paths(Some(shared.overrides.clone()));
+    let paths = shared.resolved_paths();
+    let config_path = shared.config_path(&paths)?;
     let bundle = let_sdk::intelligence::inspect(InspectParams {
         id_or_url: params.id_or_url,
         depth: params.depth,
         refresh: params.refresh,
         sections: params.sections,
         database_path: paths.derived.database,
-        config_path: paths.derived.config_file,
+        config_path,
         env_path: paths.derived.env_file,
         cache_dir: paths.resolved.cache,
         sources_dir: paths.resolved.sources,

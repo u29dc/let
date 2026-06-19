@@ -1,10 +1,13 @@
 #![forbid(unsafe_code)]
 
-use let_sdk::paths::PathOverrides;
+use std::path::PathBuf;
+
+use let_sdk::paths::{PathBundle, PathOverrides};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod agent_assess;
+pub mod area;
 pub mod build;
 pub mod config;
 pub mod correct;
@@ -20,6 +23,20 @@ pub mod verify;
 #[derive(Debug, Clone)]
 pub struct SharedArgs {
     pub overrides: PathOverrides,
+    pub profile: Option<String>,
+}
+
+impl SharedArgs {
+    pub fn resolved_paths(&self) -> PathBundle {
+        let_sdk::paths::resolve_paths(Some(self.overrides.clone()))
+    }
+
+    pub fn config_path(&self, paths: &PathBundle) -> let_sdk::Result<PathBuf> {
+        let_sdk::config::config_path_for_profile(
+            &paths.derived.config_file,
+            self.profile.as_deref(),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default)]
