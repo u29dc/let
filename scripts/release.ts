@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const REQUIRED_BINARIES = ['let', 'let-tui'] as const;
@@ -49,9 +50,32 @@ function writeRenderedDiagnostic(message: unknown): void {
 	process.stderr.write(rendered.endsWith('\n') ? rendered : `${rendered}\n`);
 }
 
+function findCargo(): string {
+	const binary = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
+	for (const directory of (process.env['PATH'] ?? '').split(delimiter).filter(Boolean)) {
+		const candidate = join(directory, binary);
+		if (existsSync(candidate)) {
+			return candidate;
+		}
+	}
+
+	const home = process.env['HOME'] ?? process.env['USERPROFILE'];
+	const cargoHomes = [process.env['CARGO_HOME'], home ? join(home, '.cargo') : undefined]
+		.filter((value): value is string => Boolean(value));
+	for (const cargoHome of cargoHomes) {
+		const candidate = join(cargoHome, 'bin', binary);
+		if (existsSync(candidate)) {
+			return candidate;
+		}
+	}
+
+	return binary;
+}
+
 async function runCargoBuild(): Promise<Map<RequiredBinary, string>> {
+	const cargoExecutable = findCargo();
 	const cargo = spawn(
-		'cargo',
+		cargoExecutable,
 		['build', '--workspace', '--release', '--message-format=json-render-diagnostics'],
 		{ stdio: ['ignore', 'pipe', 'inherit'] },
 	);
