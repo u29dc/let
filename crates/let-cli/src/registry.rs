@@ -51,7 +51,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     "assess",
                     "Read an AI-authored assessment for a listing.",
                     vec![param("id", "string", true, "Rightmove id or entity id.")],
-                    vec!["entityId", "assessment", "savedAt"],
+                    vec!["entityId", "assessment", "normalizedAssessment", "savedAt"],
                     ASSESS_GET_INPUT,
                     ASSESS_RECORD_OUTPUT,
                     true,
@@ -65,6 +65,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     "List saved AI-authored assessments with optional listing summary filters.",
                     vec![
                         param("--recommendation", "string", false, "Saved assessment recommendation."),
+                        param("--confidence", "string", false, "Saved assessment confidence."),
                         param("--area", "string", false, "Area, address, postcode, or assessment area text."),
                         param("--max-price", "number", false, "Maximum monthly rent."),
                         param("--postcode-prefix", "string", false, "Postcode prefix such as M1 or YO1."),
@@ -85,7 +86,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                         param("id", "string", true, "Rightmove id or entity id."),
                         param("assessment", "json", true, "AI-authored assessment object."),
                     ],
-                    vec!["entityId", "assessment", "savedAt"],
+                    vec!["entityId", "assessment", "normalizedAssessment", "savedAt"],
                     ASSESS_SAVE_INPUT,
                     ASSESS_RECORD_OUTPUT,
                     false,
@@ -227,19 +228,19 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                 ),
                 tool(
                     "evidence",
-                    "let evidence <id>",
+                    "let evidence [id ...]",
                     "inspect",
-                    "Read the stored evidence bundle for a listing.",
+                    "Read one or more stored evidence bundles; reads stdin when ids are omitted.",
                     vec![
-                        param("id", "string", true, "Rightmove id or entity id."),
+                        param("id", "string[]", false, "One or more Rightmove ids or entity ids. If omitted, ids are read from stdin."),
                         param("--section", "string[]", false, "Optional comma-separated evidence sections."),
                     ],
-                    vec!["bundle", "requestedSections"],
+                    vec!["bundle", "requestedSections", "items", "count", "okCount", "errorCount"],
                     EVIDENCE_INPUT,
                     EVIDENCE_OUTPUT,
                     true,
                     None,
-                    "let evidence 170448131 --section broadband,verifications",
+                    "let evidence 170448131 170448132 --section broadband,verifications",
                 ),
                 tool(
                     "evidence.list",
@@ -248,6 +249,7 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     "List stored evidence bundles with stable listing summary fields and optional filters.",
                     vec![
                         param("--recommendation", "string", false, "Saved assessment recommendation."),
+                        param("--confidence", "string", false, "Saved assessment confidence."),
                         param("--area", "string", false, "Area, address, postcode, or assessment area text."),
                         param("--max-price", "number", false, "Maximum monthly rent."),
                         param("--postcode-prefix", "string", false, "Postcode prefix such as M1 or YO1."),
@@ -274,11 +276,11 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                 ),
                 tool(
                     "inspect",
-                    "let inspect <id-or-url>",
+                    "let inspect [id-or-url ...]",
                     "inspect",
-                    "Gather Rightmove, address, source, claim, verification, and media evidence for one listing.",
+                    "Gather Rightmove, address, source, claim, verification, and media evidence for one or more listings; reads stdin when ids are omitted.",
                     vec![
-                        param("id-or-url", "string", true, "Rightmove id or listing URL."),
+                        param("id-or-url", "string[]", false, "One or more Rightmove ids or listing URLs. If omitted, ids or URLs are read from stdin."),
                         param("--depth", "string", false, "quick|standard|deep."),
                         param("--refresh", "string", false, "none|stale|all."),
                         param("--section", "string[]", false, "Optional comma-separated evidence sections."),
@@ -293,12 +295,17 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                         "claims",
                         "verifications",
                         "media",
+                        "flags",
+                        "items",
+                        "count",
+                        "okCount",
+                        "errorCount",
                     ],
                     INSPECT_INPUT,
                     EVIDENCE_BUNDLE_OUTPUT,
                     false,
                     Some("Rightmove, Mapbox, EPC, and source-dataset limits apply."),
-                    "let inspect 170448131 --depth standard",
+                    "let inspect 170448131 170448132 --depth standard",
                 ),
                 tool(
                     "search.discover",
@@ -564,8 +571,8 @@ const TOOLS_INPUT: &str =
     r#"{"type":"object","additionalProperties":false,"properties":{"name":{"type":"string"}}}"#;
 const CONFIG_SHOW_INPUT: &str =
     r#"{"type":"object","additionalProperties":false,"properties":{"profile":{"type":"string"}}}"#;
-const INSPECT_INPUT: &str = r#"{"type":"object","required":["idOrUrl"],"properties":{"idOrUrl":{"type":"string"},"depth":{"enum":["quick","standard","deep"]},"refresh":{"enum":["none","stale","all"]},"section":{"type":"array","items":{"enum":["rightmove","description","address","facts","claims","broadband","epc","media","verifications","assessment"]}}}}"#;
-const EVIDENCE_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"section":{"type":"array","items":{"type":"string"}}}}"#;
+const INSPECT_INPUT: &str = r#"{"type":"object","properties":{"idOrUrl":{"type":["string","array"],"items":{"type":"string"},"description":"one or more ids/URLs; stdin is read when omitted"},"depth":{"enum":["quick","standard","deep"]},"refresh":{"enum":["none","stale","all"]},"section":{"type":"array","items":{"enum":["rightmove","description","address","facts","claims","broadband","epc","media","verifications","assessment"]}}}}"#;
+const EVIDENCE_INPUT: &str = r#"{"type":"object","properties":{"id":{"type":["string","array"],"items":{"type":"string"},"description":"one or more ids; stdin is read when omitted"},"section":{"type":"array","items":{"type":"string"}}}}"#;
 const VERIFY_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"claim":{"enum":["all","address","broadband","epc","media","description"],"default":"all"},"refresh":{"enum":["none","stale","all"]}}}"#;
 const CORRECT_ADDRESS_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"address":{"type":"string"},"postcode":{"type":"string"},"lat":{"type":"number"},"lng":{"type":"number"},"note":{"type":"string"}}}"#;
 const CORRECT_EPC_INPUT: &str = r#"{"type":"object","required":["id"],"anyOf":[{"required":["certificateUrl"]},{"required":["lmkKey"]},{"required":["uprn"]}],"properties":{"id":{"type":"string"},"certificateUrl":{"type":"string"},"lmkKey":{"type":"string"},"uprn":{"type":"string"},"rating":{"type":"string"},"floorAreaSqm":{"type":"number"},"note":{"type":"string"}}}"#;
@@ -575,7 +582,7 @@ const ASSESS_SAVE_INPUT: &str = r#"{"type":"object","required":["id","assessment
 const ASSESS_GET_INPUT: &str =
     r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}"#;
 const AREA_POSTCODE_INPUT: &str = r#"{"type":"object","required":["postcode"],"properties":{"postcode":{"type":"string"},"radiusM":{"type":"number","default":800},"limit":{"type":"integer","default":8}}}"#;
-const LIST_FILTERS_INPUT: &str = r#"{"type":"object","properties":{"recommendation":{"type":"string"},"area":{"type":"string"},"maxPrice":{"type":"integer"},"postcodePrefix":{"type":"string"}}}"#;
+const LIST_FILTERS_INPUT: &str = r#"{"type":"object","properties":{"recommendation":{"type":"string"},"confidence":{"type":"string"},"area":{"type":"string"},"maxPrice":{"type":"integer"},"postcodePrefix":{"type":"string"}}}"#;
 const SEARCH_RESOLVE_INPUT: &str =
     r#"{"type":"object","required":["location"],"properties":{"location":{"type":"string"}}}"#;
 const SEARCH_DISCOVER_INPUT: &str = r#"{"type":"object","properties":{"region":{"type":"string"},"location":{"type":"string"},"minPrice":{"type":"integer"},"maxPrice":{"type":"integer"},"minBedrooms":{"type":"integer"},"maxBedrooms":{"type":"integer"},"radius":{"type":"number"},"includeLetAgreed":{"type":"boolean"},"propertyTypes":{"type":"string"},"mustHave":{"type":"string"},"dontShow":{"type":"string"},"locationName":{"type":"string"},"limit":{"type":"integer"}}}"#;
@@ -586,13 +593,13 @@ const TOOLS_OUTPUT: &str = r#"{"type":"object","required":["version","globalFlag
 const HEALTH_OUTPUT: &str = r#"{"type":"object","required":["status","paths","checks","summary"],"properties":{"status":{"enum":["ready","degraded","blocked"]},"checks":{"type":"array"}}}"#;
 const CONFIG_OUTPUT: &str = r#"{"type":"object","required":["path","profile","config"],"properties":{"path":{"type":"string"},"profile":{"type":["string","null"]},"config":{"type":"object"}}}"#;
 const CONFIG_PROFILES_OUTPUT: &str = r#"{"type":"object","required":["profileDir","profiles"],"properties":{"profileDir":{"type":"string"},"profiles":{"type":"array","items":{"type":"object","required":["name","path"],"properties":{"name":{"type":"string"},"path":{"type":"string"}}}}}}"#;
-const EVIDENCE_BUNDLE_OUTPUT: &str = r#"{"type":"object","required":["entityId","rightmoveId","sections","rightmove","address","facts","claims","verifications","media"],"properties":{"sections":{"type":"object"},"facts":{"type":"array"},"claims":{"type":"array"},"verifications":{"type":"array"}}}"#;
-const EVIDENCE_OUTPUT: &str = r#"{"type":"object","required":["bundle","requestedSections"],"properties":{"bundle":{"type":"object"},"requestedSections":{"type":"array"}}}"#;
+const EVIDENCE_BUNDLE_OUTPUT: &str = r#"{"type":"object","required":["entityId","rightmoveId","sections","rightmove","address","facts","claims","verifications","media"],"properties":{"sections":{"type":"object"},"facts":{"type":"array"},"claims":{"type":"array"},"verifications":{"type":"array"},"flags":{"type":"array","items":{"type":"object","required":["severity","category","code","summary","sources","recommendedAction"]}},"assessment":{"type":["object","null"],"properties":{"assessment":{"type":"object"},"normalizedAssessment":{"type":"object"}}},"media":{"type":"object","properties":{"contactSheet":{"type":"object","properties":{"status":{"type":"string"},"localPath":{"type":"string"},"photoCount":{"type":"integer"},"generatedAt":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"contentHash":{"type":"string"}}}}}}}"#;
+const EVIDENCE_OUTPUT: &str = r#"{"oneOf":[{"type":"object","required":["bundle","requestedSections"],"properties":{"bundle":{"type":"object"},"requestedSections":{"type":"array"}}},{"type":"object","required":["items","count","okCount","errorCount"],"properties":{"items":{"type":"array","items":{"type":"object","required":["input","id","ok","elapsed","warnings"],"properties":{"bundle":{"type":"object"},"error":{"type":"object"},"warnings":{"type":"array"}}}},"count":{"type":"integer"},"okCount":{"type":"integer"},"errorCount":{"type":"integer"}}}]}"#;
 const VERIFY_OUTPUT: &str = r#"{"type":"object","required":["id","claim","verifications","sections"],"properties":{"verifications":{"type":"array"},"sections":{"type":"object"}}}"#;
 const CORRECTION_OUTPUT: &str = r#"{"type":"object","required":["correction","affectedSections","warnings","nextCommands"],"properties":{"correction":{"type":"object"},"affectedSections":{"type":"array"},"warnings":{"type":"array"},"nextCommands":{"type":"array"}}}"#;
-const ASSESS_RECORD_OUTPUT: &str = r#"{"type":"object","required":["entityId","assessment","savedAt"],"properties":{"assessment":{"type":"object"}}}"#;
+const ASSESS_RECORD_OUTPUT: &str = r#"{"type":"object","required":["entityId","assessment","normalizedAssessment","savedAt"],"properties":{"assessment":{"type":"object"},"normalizedAssessment":{"type":"object","properties":{"recommendation":{"type":["string","null"]},"confidence":{"type":["string","null"]},"summary":{"type":["string","null"]},"positives":{"type":"array"},"risks":{"type":"array"},"nextActions":{"type":"array"},"tradeoffs":{"type":"array"},"areaNotes":{"type":["string","null"]},"commuteNotes":{"type":["string","null"]},"familyFit":{"type":["string","null"]},"evidenceGaps":{"type":"array"},"source":{"type":["string","null"]},"warnings":{"type":"array"}}}}}"#;
 const AREA_POSTCODE_OUTPUT: &str = r#"{"type":"object","required":["query","joinKeys","sections","facts","nearby","missingSources","nextActions"],"properties":{"query":{"type":"object"},"joinKeys":{"type":"object"},"sections":{"type":"object"},"facts":{"type":"array"},"broadband":{"type":["object","null"]},"nearby":{"type":"object"},"missingSources":{"type":"array"},"nextActions":{"type":"array"}}}"#;
-const ASSESS_LIST_OUTPUT: &str = r#"{"type":"object","required":["assessments","filters"],"properties":{"assessments":{"type":"array","items":{"type":"object","required":["id","entityId","url","address","postcode","area","price","pricePcm","recommendation","confidence","savedAt","inspectedAt","updatedAt","assessment"],"properties":{"assessment":{"type":"object"}}}},"filters":{"type":"object"}}}"#;
+const ASSESS_LIST_OUTPUT: &str = r#"{"type":"object","required":["assessments","filters"],"properties":{"assessments":{"type":"array","items":{"type":"object","required":["id","entityId","recommendation","confidence","assessment","normalizedAssessment"],"properties":{"assessment":{"type":"object"},"normalizedAssessment":{"type":"object"},"summary":{"type":["string","null"]},"positives":{"type":"array"},"risks":{"type":"array"},"nextActions":{"type":"array"},"tradeoffs":{"type":"array"},"areaNotes":{"type":["string","null"]},"commuteNotes":{"type":["string","null"]},"familyFit":{"type":["string","null"]},"evidenceGaps":{"type":"array"},"source":{"type":["string","null"]}}}},"filters":{"type":"object"}}}"#;
 const EVIDENCE_LIST_OUTPUT: &str = r#"{"type":"object","required":["listings","filters"],"properties":{"listings":{"type":"array","items":{"type":"object","required":["id","entityId","url","address","postcode","area","price","pricePcm","recommendation","confidence","savedAt","inspectedAt","updatedAt"]}},"filters":{"type":"object"}}}"#;
 const SEARCH_RESOLVE_OUTPUT: &str = r#"{"type":"object","required":["location","matches"],"properties":{"matches":{"type":"array"}}}"#;
 const SEARCH_DISCOVER_OUTPUT: &str = r#"{"type":"object","required":["ids","listings","total","locations"],"properties":{"ids":{"type":"array","items":{"type":"string"}},"idsByLocation":{"type":"object"},"listings":{"type":"array"},"locationMatchesById":{"type":"object"},"duplicateIds":{"type":"array"},"duplicateLocationMatches":{"type":"object"},"locations":{"type":"array"},"total":{"type":"integer"}}}"#;

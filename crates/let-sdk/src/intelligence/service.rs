@@ -14,17 +14,19 @@ use crate::errors::{ErrorCode, LetError, Result};
 use crate::intelligence::repository::{IntelligenceDb, extract_rightmove_id, normalize_entity_id};
 use crate::intelligence::types::{
     AddressCandidateEvidence, AddressEvidence, AssessmentRecord, BroadbandEvidence, ClaimEvidence,
-    ConfidenceLevel, CorrectionKind, CorrectionRecord, DescriptionEvidence, EpcEvidence,
-    EvidenceBundle, EvidenceSection, FactEvidence, FactProvider, InspectDepth, ListingListFilters,
-    MediaEvidence, MediaItemEvidence, RefreshPolicy, RightmoveEvidence, SectionState,
-    SectionStatus, SourceRef, SourceSnapshotEvidence, StoredAssessmentSummary,
+    ConfidenceLevel, ContactSheetEvidence, CorrectionKind, CorrectionRecord, DescriptionEvidence,
+    EpcEvidence, EvidenceBundle, EvidenceSection, FactEvidence, FactProvider, InspectDepth,
+    ListingListFilters, MediaEvidence, MediaItemEvidence, RefreshPolicy, RightmoveEvidence,
+    SectionState, SectionStatus, SourceRef, SourceSnapshotEvidence, StoredAssessmentSummary,
     StoredListingSummary, VerificationEvidence, VerificationStatus,
 };
 use crate::pipeline::enrich::{
     AreaPostcodeSnapshot, BroadbandProfile, EnrichmentMode, SourceEnricher,
 };
 use crate::pipeline::epc::{EpcCredentials, EpcLookup, lookup_domestic_epc};
-use crate::pipeline::fetch::media::{MediaNormalizationConfig, populate_listing_media};
+use crate::pipeline::fetch::media::{
+    ContactSheetArtifact, MediaNormalizationConfig, populate_listing_media,
+};
 use crate::pipeline::fetch::rightmove::{
     RightmovePropertyExtract, extract_property_evidence, fetch_page_capture, listing_from_capture,
 };
@@ -331,9 +333,11 @@ pub fn inspect(params: InspectParams) -> Result<EvidenceBundle> {
         assessment,
         corrections,
         next_actions: Vec::new(),
+        flags: Vec::new(),
     };
     bundle.sections = section_states(&bundle, &sections, &source_ref, epc_warnings);
     bundle.next_actions = next_actions(&bundle);
+    bundle.refresh_derived();
     db.save_bundle(&bundle)?;
     Ok(bundle)
 }
@@ -1098,14 +1102,14 @@ fn resolve_media(
     };
 
     let media_config = media_normalization_config(fetch_config, env_path);
-    let _stats = runtime.block_on(populate_listing_media(
+    let stats = runtime.block_on(populate_listing_media(
         client,
         listing,
         cache_dir,
         &media_config,
     ));
 
-    media_evidence_from_listing(listing, cache_dir)
+    media_evidence_from_listing(listing, cache_dir, stats.contact_sheet.as_ref())
 }
 
 fn media_normalization_config(
@@ -1156,6 +1160,15 @@ fn media_evidence(extracted: &RightmovePropertyExtract) -> MediaEvidence {
             .map(|url| remote_media("epcGraph", url))
             .collect(),
         maps: Vec::new(),
+        contact_sheet: Some(ContactSheetEvidence {
+            status: "skipped".to_owned(),
+            photo_count: 0,
+            local_path: None,
+            generated_at: None,
+            width: None,
+            height: None,
+            content_hash: None,
+        }),
     }
 }
 
@@ -1171,7 +1184,11 @@ fn remote_media(kind: &str, url: &str) -> MediaItemEvidence {
     }
 }
 
-fn media_evidence_from_listing(listing: &Listing, cache_dir: &Path) -> MediaEvidence {
+fn media_evidence_from_listing(
+    listing: &Listing,
+    cache_dir: &Path,
+    contact_sheet: Option<&ContactSheetArtifact>,
+) -> MediaEvidence {
     let mut maps = Vec::new();
     if let Some(item) = asset_media("mapSatellite", &listing.map_views.satellite, cache_dir) {
         maps.push(item);
@@ -1193,6 +1210,31 @@ fn media_evidence_from_listing(listing: &Listing, cache_dir: &Path) -> MediaEvid
             .into_iter()
             .collect(),
         maps,
+        contact_sheet: contact_sheet.map(|artifact| contact_sheet_evidence(artifact, cache_dir)),
+    }
+}
+
+fn contact_sheet_evidence(
+    artifact: &ContactSheetArtifact,
+    cache_dir: &Path,
+) -> ContactSheetEvidence {
+    ContactSheetEvidence {
+        status: artifact.status.clone(),
+        photo_count: artifact.photo_count,
+        local_path: artifact.local_path.as_ref().map(|path| {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                cache_dir.join(path)
+            }
+            .display()
+            .to_string()
+        }),
+        generated_at: (artifact.status == "generated").then(now_iso),
+        width: artifact.width,
+        height: artifact.height,
+        content_hash: artifact.content_hash.clone(),
     }
 }
 

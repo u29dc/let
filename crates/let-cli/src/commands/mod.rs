@@ -8,6 +8,7 @@ use serde_json::Value;
 
 pub mod agent_assess;
 pub mod area;
+pub mod batch;
 pub mod build;
 pub mod config;
 pub mod correct;

@@ -74,10 +74,11 @@ enum Command {
         #[command(subcommand)]
         command: Option<SearchCommand>,
     },
-    /// Gather and persist property evidence for one Rightmove listing.
+    /// Gather and persist property evidence for one or more Rightmove listings.
     Inspect {
-        /// Rightmove portal id or listing URL.
-        id_or_url: String,
+        /// Rightmove portal ids or listing URLs. Reads stdin when omitted.
+        #[arg(value_name = "ID_OR_URL", num_args = 0..)]
+        id_or_url: Vec<String>,
         /// Evidence depth.
         #[arg(long, value_enum, default_value_t = CliInspectDepth::Standard)]
         depth: CliInspectDepth,
@@ -88,10 +89,11 @@ enum Command {
         #[arg(long, value_enum, value_delimiter = ',')]
         section: Vec<CliEvidenceSection>,
     },
-    /// Read a stored evidence bundle.
+    /// Read one or more stored evidence bundles.
     Evidence {
-        /// Rightmove id or entity id.
-        id: String,
+        /// Rightmove ids or entity ids. Reads stdin when omitted.
+        #[arg(value_name = "ID", num_args = 0..)]
+        id: Vec<String>,
         /// Restrict sections; repeat or comma-separate values.
         #[arg(long, value_enum, value_delimiter = ',')]
         section: Vec<CliEvidenceSection>,
@@ -242,6 +244,9 @@ struct CliListFilters {
     /// Match a saved assessment recommendation.
     #[arg(long)]
     recommendation: Option<String>,
+    /// Match a saved assessment confidence.
+    #[arg(long)]
+    confidence: Option<String>,
     /// Match saved area, address, postcode, or assessment area text.
     #[arg(long)]
     area: Option<String>,
@@ -256,6 +261,7 @@ struct CliListFilters {
 impl CliListFilters {
     fn has_values(&self) -> bool {
         self.recommendation.is_some()
+            || self.confidence.is_some()
             || self.area.is_some()
             || self.max_price.is_some()
             || self.postcode_prefix.is_some()
@@ -266,6 +272,7 @@ impl From<&CliListFilters> for ListingListFilters {
     fn from(value: &CliListFilters) -> Self {
         Self {
             recommendation: value.recommendation.clone(),
+            confidence: value.confidence.clone(),
             area: value.area.clone(),
             max_price: value.max_price,
             postcode_prefix: value.postcode_prefix.clone(),
@@ -641,7 +648,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             commands::inspect::run(
                 shared,
                 commands::inspect::InspectCommandParams {
-                    id_or_url: id_or_url.clone(),
+                    id_or_urls: id_or_url.clone(),
                     depth: (*depth).into(),
                     refresh: (*refresh).into(),
                     sections: map_sections(section),
@@ -652,7 +659,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
             id,
             section,
             filters,
-        } if id == "list" => {
+        } if id.len() == 1 && id[0] == "list" => {
             if !section.is_empty() {
                 DispatchOutcome::local(
                     "evidence.list",
@@ -668,6 +675,16 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     commands::evidence::list(shared, filters.into()),
                 )
             }
+        }
+        Command::Evidence { id, .. } if id.iter().any(|value| value == "list") => {
+            DispatchOutcome::local(
+                "evidence",
+                Err(CommandError::runtime(
+                    "VALIDATION_ERROR",
+                    "`list` is only valid as the sole `let evidence list` argument",
+                    "run `let evidence list` or pass only listing ids",
+                )),
+            )
         }
         Command::Evidence {
             id,
@@ -689,7 +706,7 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
                     commands::evidence::run(
                         shared,
                         commands::evidence::EvidenceCommandParams {
-                            id: id.clone(),
+                            ids: id.clone(),
                             sections: map_sections(section),
                         },
                     ),

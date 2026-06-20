@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::errors::{ErrorCode, LetError, Result};
 use crate::intelligence::types::{
     AssessmentRecord, CorrectionKind, CorrectionRecord, EvidenceBundle, ListingListFilters,
-    StoredAssessmentSummary, StoredListingSummary,
+    MediaItemEvidence, StoredAssessmentSummary, StoredListingSummary,
 };
 use crate::utils::time::now_iso;
 
@@ -21,6 +21,31 @@ const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 pub struct IntelligenceDb {
     connection: Connection,
+}
+
+#[derive(Debug, Clone)]
+struct MediaAssetRow {
+    kind: String,
+    remote_url: String,
+    local_path: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    content_hash: Option<String>,
+    status: String,
+}
+
+impl From<&MediaItemEvidence> for MediaAssetRow {
+    fn from(item: &MediaItemEvidence) -> Self {
+        Self {
+            kind: item.kind.clone(),
+            remote_url: item.remote_url.clone(),
+            local_path: item.local_path.clone(),
+            width: item.width,
+            height: item.height,
+            content_hash: item.content_hash.clone(),
+            status: item.status.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,10 +118,14 @@ impl IntelligenceDb {
     fn deserialize_bundle(&self, raw: &str) -> Result<EvidenceBundle> {
         let mut bundle = deserialize_json::<EvidenceBundle>(raw, "evidence bundle")?;
         bundle.corrections = self.load_active_corrections(&bundle.entity_id)?;
+        bundle.refresh_derived();
         Ok(bundle)
     }
 
     pub fn save_bundle(&mut self, bundle: &EvidenceBundle) -> Result<()> {
+        let mut bundle = bundle.clone();
+        bundle.refresh_derived();
+        let bundle = &bundle;
         let tx = self.connection.transaction()?;
         let now = now_iso();
 
@@ -235,6 +264,19 @@ impl IntelligenceDb {
             "DELETE FROM media_assets WHERE entity_id = ?1",
             params![bundle.entity_id],
         )?;
+        let contact_sheet = bundle
+            .media
+            .contact_sheet
+            .as_ref()
+            .map(|sheet| MediaAssetRow {
+                kind: "contactSheet".to_owned(),
+                remote_url: format!("local://contact-sheet/{}", bundle.entity_id),
+                local_path: sheet.local_path.clone(),
+                width: sheet.width,
+                height: sheet.height,
+                content_hash: sheet.content_hash.clone(),
+                status: sheet.status.clone(),
+            });
         for item in bundle
             .media
             .photos
@@ -242,6 +284,8 @@ impl IntelligenceDb {
             .chain(bundle.media.floorplans.iter())
             .chain(bundle.media.epc_graphs.iter())
             .chain(bundle.media.maps.iter())
+            .map(MediaAssetRow::from)
+            .chain(contact_sheet.iter().cloned())
         {
             tx.execute(
                 "INSERT INTO media_assets
@@ -366,11 +410,7 @@ impl IntelligenceDb {
         assessment: serde_json::Value,
     ) -> Result<AssessmentRecord> {
         let normalized = normalize_entity_id(entity_id);
-        let record = AssessmentRecord {
-            entity_id: normalized,
-            assessment,
-            saved_at: now_iso(),
-        };
+        let record = AssessmentRecord::new(normalized, assessment, now_iso());
         self.connection.execute(
             "INSERT INTO entities (id, entity_type, created_at, updated_at)
              VALUES (?1, 'property_listing', ?2, ?2)
@@ -404,11 +444,11 @@ impl IntelligenceDb {
             .optional()?;
 
         raw.map(|(assessment_json, saved_at)| {
-            Ok(AssessmentRecord {
-                entity_id: normalize_entity_id(entity_id),
-                assessment: deserialize_json(&assessment_json, "assessment")?,
+            Ok(AssessmentRecord::new(
+                normalize_entity_id(entity_id),
+                deserialize_json(&assessment_json, "assessment")?,
                 saved_at,
-            })
+            ))
         })
         .transpose()
     }
@@ -476,11 +516,11 @@ impl IntelligenceDb {
         let mut summaries = Vec::new();
         for row in rows {
             let (entity_id, assessment_json, saved_at, bundle_json, updated_at) = row?;
-            let assessment = AssessmentRecord {
-                entity_id: entity_id.clone(),
-                assessment: deserialize_json(&assessment_json, "assessment")?,
+            let assessment = AssessmentRecord::new(
+                entity_id.clone(),
+                deserialize_json(&assessment_json, "assessment")?,
                 saved_at,
-            };
+            );
             let bundle = bundle_json
                 .as_deref()
                 .map(|raw| self.deserialize_bundle(raw))
@@ -490,8 +530,21 @@ impl IntelligenceDb {
                 None => summary_from_assessment(&assessment, updated_at),
             };
             if matches_filters(&listing, Some(&assessment.assessment), filters) {
+                let normalized = assessment.normalized_assessment.clone();
                 summaries.push(StoredAssessmentSummary {
                     listing,
+                    summary: normalized.summary.clone(),
+                    positives: normalized.positives.clone(),
+                    risks: normalized.risks.clone(),
+                    next_actions: normalized.next_actions.clone(),
+                    tradeoffs: normalized.tradeoffs.clone(),
+                    area_notes: normalized.area_notes.clone(),
+                    commute_notes: normalized.commute_notes.clone(),
+                    family_fit: normalized.family_fit.clone(),
+                    evidence_gaps: normalized.evidence_gaps.clone(),
+                    source: normalized.source.clone(),
+                    normalized_warnings: normalized.warnings.clone(),
+                    normalized_assessment: normalized,
                     assessment: assessment.assessment,
                 });
             }
@@ -511,11 +564,11 @@ fn joined_assessment(
     let Some(saved_at) = saved_at else {
         return Ok(None);
     };
-    Ok(Some(AssessmentRecord {
-        entity_id: entity_id.to_owned(),
-        assessment: deserialize_json(&assessment_json, "assessment")?,
+    Ok(Some(AssessmentRecord::new(
+        entity_id.to_owned(),
+        deserialize_json(&assessment_json, "assessment")?,
         saved_at,
-    }))
+    )))
 }
 
 fn summary_from_bundle(
@@ -556,6 +609,7 @@ fn summary_from_bundle(
             .map(|price| format!("{price} pcm"))
     });
     let assessment_value = assessment.map(|record| &record.assessment);
+    let normalized_assessment = assessment.map(|record| &record.normalized_assessment);
     let area =
         assessment_text(assessment_value, &["area", "locationArea", "region"]).or_else(|| {
             bundle
@@ -573,8 +627,12 @@ fn summary_from_bundle(
         area,
         price,
         price_pcm: bundle.rightmove.price_pcm,
-        recommendation: assessment_text(assessment_value, &["recommendation"]),
-        confidence: assessment_text(assessment_value, &["confidence"]),
+        recommendation: normalized_assessment
+            .and_then(|assessment| assessment.recommendation.clone())
+            .or_else(|| assessment_text(assessment_value, &["recommendation"])),
+        confidence: normalized_assessment
+            .and_then(|assessment| assessment.confidence.clone())
+            .or_else(|| assessment_text(assessment_value, &["confidence"])),
         saved_at: assessment.map(|record| record.saved_at.clone()),
         inspected_at: Some(bundle.generated_at.clone()),
         updated_at,
@@ -597,8 +655,16 @@ fn summary_from_assessment(
         ),
         price: None,
         price_pcm: None,
-        recommendation: assessment_text(Some(&assessment.assessment), &["recommendation"]),
-        confidence: assessment_text(Some(&assessment.assessment), &["confidence"]),
+        recommendation: assessment
+            .normalized_assessment
+            .recommendation
+            .clone()
+            .or_else(|| assessment_text(Some(&assessment.assessment), &["recommendation"])),
+        confidence: assessment
+            .normalized_assessment
+            .confidence
+            .clone()
+            .or_else(|| assessment_text(Some(&assessment.assessment), &["confidence"])),
         saved_at: Some(assessment.saved_at.clone()),
         inspected_at: None,
         updated_at,
@@ -643,6 +709,7 @@ fn matches_filters(
     filters: &ListingListFilters,
 ) -> bool {
     matches_recommendation(summary, filters)
+        && matches_confidence(summary, filters)
         && matches_max_price(summary, filters)
         && matches_postcode_prefix(summary, filters)
         && matches_area(summary, assessment, filters)
@@ -654,6 +721,16 @@ fn matches_recommendation(summary: &StoredListingSummary, filters: &ListingListF
     };
     summary
         .recommendation
+        .as_deref()
+        .is_some_and(|actual| actual.eq_ignore_ascii_case(&expected))
+}
+
+fn matches_confidence(summary: &StoredListingSummary, filters: &ListingListFilters) -> bool {
+    let Some(expected) = filters.confidence.as_deref().and_then(non_empty_text) else {
+        return true;
+    };
+    summary
+        .confidence
         .as_deref()
         .is_some_and(|actual| actual.eq_ignore_ascii_case(&expected))
 }
@@ -1115,8 +1192,8 @@ mod tests {
 
     use crate::intelligence::types::{
         AddressCandidateEvidence, AddressEvidence, BroadbandEvidence, ConfidenceLevel,
-        DescriptionEvidence, EvidenceBundle, InspectDepth, ListingListFilters, MediaEvidence,
-        RefreshPolicy, RightmoveEvidence, SectionStatus,
+        ContactSheetEvidence, DescriptionEvidence, EvidenceBundle, InspectDepth,
+        ListingListFilters, MediaEvidence, RefreshPolicy, RightmoveEvidence, SectionStatus,
     };
 
     use super::{
@@ -1260,6 +1337,7 @@ mod tests {
 
         let filters = ListingListFilters {
             recommendation: Some("view".to_owned()),
+            confidence: Some("high".to_owned()),
             area: Some("manchester".to_owned()),
             max_price: Some(1300),
             postcode_prefix: Some("M1".to_owned()),
@@ -1285,6 +1363,43 @@ mod tests {
         assert_eq!(assessments.len(), 1);
         assert_eq!(assessments[0].listing.id, "170448131");
         assert_eq!(assessments[0].assessment["recommendation"], "view");
+    }
+
+    #[test]
+    fn repository_persists_contact_sheet_media_asset() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("let.db");
+        let mut db = IntelligenceDb::open(&path).expect("open db");
+        let mut bundle = test_bundle("170448131", "M1 1AA", 1250);
+        bundle.media.contact_sheet = Some(ContactSheetEvidence {
+            status: "generated".to_owned(),
+            photo_count: 3,
+            local_path: Some("/tmp/contact-sheet.jpg".to_owned()),
+            generated_at: Some("2026-06-20T00:00:00Z".to_owned()),
+            width: Some(932),
+            height: Some(241),
+            content_hash: Some("hash".to_owned()),
+        });
+
+        db.save_bundle(&bundle).expect("save bundle");
+
+        let row = db
+            .connection
+            .query_row(
+                "SELECT remote_url, local_path, status FROM media_assets WHERE kind = 'contactSheet'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .expect("contact sheet row");
+        assert_eq!(row.0, "local://contact-sheet/rightmove:170448131");
+        assert_eq!(row.1.as_deref(), Some("/tmp/contact-sheet.jpg"));
+        assert_eq!(row.2, "generated");
     }
 
     fn test_bundle(rightmove_id: &str, postcode: &str, price_pcm: i64) -> EvidenceBundle {
@@ -1362,6 +1477,7 @@ mod tests {
             assessment: None,
             corrections: Vec::new(),
             next_actions: Vec::new(),
+            flags: Vec::new(),
         }
     }
 }

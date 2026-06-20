@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 
 use let_sdk::intelligence::{
@@ -769,6 +769,122 @@ fn evidence_reads_seeded_bundle() {
 }
 
 #[test]
+fn evidence_reads_multiple_seeded_bundles() {
+    let fixture = Fixture::new();
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448131",
+        "1 Example Street, Manchester",
+        "M1 1AA",
+        1250,
+        "2026-06-18T00:00:00.000Z",
+    ));
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448132",
+        "2 Example Street, Manchester",
+        "M2 2BB",
+        1750,
+        "2026-06-18T01:00:00.000Z",
+    ));
+
+    let output = fixture
+        .cmd()
+        .args([
+            "evidence",
+            "170448131",
+            "170448132",
+            "--section",
+            "rightmove",
+        ])
+        .output()
+        .expect("run evidence batch");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "evidence");
+    assert_eq!(envelope["meta"]["count"], 2);
+    assert_eq!(envelope["data"]["count"], 2);
+    assert_eq!(envelope["data"]["okCount"], 2);
+    assert_eq!(envelope["data"]["errorCount"], 0);
+    let items = envelope["data"]["items"].as_array().expect("items array");
+    assert_eq!(items[0]["input"], "170448131");
+    assert_eq!(items[0]["id"], "170448131");
+    assert_eq!(items[0]["ok"], true);
+    assert_eq!(items[0]["bundle"]["rightmoveId"], "170448131");
+    assert_eq!(items[1]["bundle"]["rightmoveId"], "170448132");
+}
+
+#[test]
+fn evidence_reads_stdin_when_no_ids_are_positional() {
+    let fixture = Fixture::new();
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448131",
+        "1 Example Street, Manchester",
+        "M1 1AA",
+        1250,
+        "2026-06-18T00:00:00.000Z",
+    ));
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448132",
+        "2 Example Street, Manchester",
+        "M2 2BB",
+        1750,
+        "2026-06-18T01:00:00.000Z",
+    ));
+
+    let mut command = fixture.cmd();
+    command.args(["evidence", "--section", "rightmove"]);
+    let output = output_with_stdin(command, "170448131, 170448132\n");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "evidence");
+    assert_eq!(envelope["data"]["count"], 2);
+    let items = envelope["data"]["items"].as_array().expect("items array");
+    assert_eq!(items[0]["bundle"]["rightmoveId"], "170448131");
+    assert_eq!(items[1]["bundle"]["rightmoveId"], "170448132");
+}
+
+#[test]
+fn evidence_list_rejects_mixed_ids() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["evidence", "list", "170448131"])
+        .output()
+        .expect("run mixed evidence list");
+    assert_eq!(output.status.code(), Some(1));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "validation_error");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("sole `let evidence list`"))
+    );
+}
+
+#[test]
+fn evidence_rejects_list_filters_without_list_subcommand() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["evidence", "--confidence", "high"])
+        .output()
+        .expect("run evidence with list filter");
+    assert_eq!(output.status.code(), Some(1));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "validation_error");
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("list filters require `let evidence list`"))
+    );
+}
+
+#[test]
 fn evidence_list_returns_summary_and_applies_filters() {
     let fixture = Fixture::new();
     fixture.seed_bundle_record(&sample_bundle_variant(
@@ -809,6 +925,8 @@ fn evidence_list_returns_summary_and_applies_filters() {
             "list",
             "--recommendation",
             "view",
+            "--confidence",
+            "high",
             "--area",
             "manchester",
             "--max-price",
@@ -824,6 +942,7 @@ fn evidence_list_returns_summary_and_applies_filters() {
     assert_eq!(envelope["meta"]["tool"], "evidence.list");
     assert_eq!(envelope["meta"]["count"], 1);
     assert_eq!(envelope["data"]["filters"]["recommendation"], "view");
+    assert_eq!(envelope["data"]["filters"]["confidence"], "high");
     let listings = envelope["data"]["listings"]
         .as_array()
         .expect("listings array");
@@ -899,6 +1018,10 @@ fn assess_save_and_get_persist_agent_json() {
     let save_json = assert_single_json_envelope(&output);
     assert_eq!(save_json["meta"]["tool"], "assess.save");
     assert_eq!(save_json["data"]["assessment"]["recommendation"], "view");
+    assert_eq!(
+        save_json["data"]["normalizedAssessment"]["recommendation"],
+        "view"
+    );
 
     let get = fixture
         .cmd()
@@ -909,6 +1032,10 @@ fn assess_save_and_get_persist_agent_json() {
     let get_json = assert_single_json_envelope(&get);
     assert_eq!(get_json["meta"]["tool"], "assess.get");
     assert_eq!(get_json["data"]["assessment"]["reasoning"], "good evidence");
+    assert_eq!(
+        get_json["data"]["normalizedAssessment"]["recommendation"],
+        "view"
+    );
 }
 
 #[test]
@@ -953,6 +1080,8 @@ fn assess_list_returns_saved_assessments_and_applies_filters() {
             "list",
             "--recommendation",
             "view",
+            "--confidence",
+            "high",
             "--area",
             "manchester",
             "--max-price",
@@ -978,6 +1107,7 @@ fn assess_list_returns_saved_assessments_and_applies_filters() {
     assert_eq!(assessment["pricePcm"], 1250);
     assert_eq!(assessment["recommendation"], "view");
     assert_eq!(assessment["confidence"], "high");
+    assert_eq!(assessment["normalizedAssessment"]["confidence"], "high");
     assert_eq!(assessment["assessment"]["reasoning"], "good evidence");
     assert!(assessment["savedAt"].is_string());
 }
@@ -1111,6 +1241,46 @@ fn inspect_rejects_non_rightmove_ids_with_json_envelope() {
 }
 
 #[test]
+fn inspect_batch_returns_per_item_errors() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .cmd()
+        .args(["inspect", "not-a-listing", "still-not-a-listing"])
+        .output()
+        .expect("run inspect batch");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "inspect");
+    assert_eq!(envelope["meta"]["count"], 2);
+    assert_eq!(envelope["data"]["count"], 2);
+    assert_eq!(envelope["data"]["okCount"], 0);
+    assert_eq!(envelope["data"]["errorCount"], 2);
+    let items = envelope["data"]["items"].as_array().expect("items array");
+    assert_eq!(items[0]["input"], "not-a-listing");
+    assert_eq!(items[0]["ok"], false);
+    assert_eq!(items[0]["error"]["code"], "invalid_input");
+    assert_eq!(items[1]["input"], "still-not-a-listing");
+    assert_eq!(items[1]["error"]["code"], "invalid_input");
+}
+
+#[test]
+fn inspect_reads_stdin_when_no_ids_are_positional() {
+    let fixture = Fixture::new();
+    let mut command = fixture.cmd();
+    command.args(["inspect", "--depth", "quick"]);
+    let output = output_with_stdin(command, "not-a-listing, still-not-a-listing\n");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "inspect");
+    assert_eq!(envelope["data"]["count"], 2);
+    let items = envelope["data"]["items"].as_array().expect("items array");
+    assert_eq!(items[0]["input"], "not-a-listing");
+    assert_eq!(items[1]["input"], "still-not-a-listing");
+}
+
+#[test]
 fn unsupported_group_subcommands_return_json_envelope() {
     let fixture = Fixture::new();
     let output = fixture
@@ -1185,6 +1355,22 @@ fn assert_single_toon_envelope(output: &Output) -> serde_json::Value {
         panic!("expected Toon envelope stdout to end with one newline, got: {stdout:?}");
     };
     toon_format::decode_default(document).expect("decode Toon envelope")
+}
+
+fn output_with_stdin(mut command: Command, stdin: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn command with stdin");
+    {
+        let mut child_stdin = child.stdin.take().expect("stdin pipe");
+        child_stdin
+            .write_all(stdin.as_bytes())
+            .expect("write stdin");
+    }
+    child.wait_with_output().expect("wait for command output")
 }
 
 fn assert_single_json_envelope_stdout(stdout: &str) -> serde_json::Value {
@@ -1388,11 +1574,11 @@ fn sample_bundle() -> EvidenceBundle {
         url: None,
         captured_at: None,
     };
-    let assessment = AssessmentRecord {
-        entity_id: "rightmove:170448131".to_owned(),
-        assessment: json!({"recommendation":"view"}),
-        saved_at: "2026-06-18T00:00:00.000Z".to_owned(),
-    };
+    let assessment = AssessmentRecord::new(
+        "rightmove:170448131".to_owned(),
+        json!({"recommendation":"view"}),
+        "2026-06-18T00:00:00.000Z".to_owned(),
+    );
 
     EvidenceBundle {
         entity_id: "rightmove:170448131".to_owned(),
@@ -1519,9 +1705,11 @@ fn sample_bundle() -> EvidenceBundle {
             floorplans: Vec::new(),
             epc_graphs: Vec::new(),
             maps: Vec::new(),
+            contact_sheet: None,
         },
         assessment: Some(assessment),
         corrections: Vec::new(),
         next_actions: Vec::new(),
+        flags: Vec::new(),
     }
 }

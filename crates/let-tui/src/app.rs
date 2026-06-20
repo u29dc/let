@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -42,6 +43,7 @@ pub(crate) struct SourceStatus {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ListingMedia {
     pub(crate) cache_dir: Option<PathBuf>,
+    pub(crate) contact_sheet: Option<PathBuf>,
     pub(crate) images: Vec<PathBuf>,
     pub(crate) floorplan: Option<PathBuf>,
     pub(crate) satellite: Option<PathBuf>,
@@ -49,8 +51,8 @@ pub(crate) struct ListingMedia {
 }
 
 impl ListingMedia {
-    fn first_image(&self) -> Option<&PathBuf> {
-        self.images.first()
+    fn primary_image(&self) -> Option<&PathBuf> {
+        self.contact_sheet.as_ref().or_else(|| self.images.first())
     }
 }
 
@@ -405,9 +407,13 @@ impl App {
             });
 
             let media = self.selected_media();
-            if let Some(path) = media.first_image().cloned() {
+            if let Some(path) = media.primary_image().cloned() {
                 actions.push(PaletteAction {
-                    label: "quick look first image".to_owned(),
+                    label: if media.contact_sheet.is_some() {
+                        "quick look contact sheet".to_owned()
+                    } else {
+                        "quick look first image".to_owned()
+                    },
                     kind: PaletteActionKind::QuickLook(path),
                 });
             }
@@ -765,6 +771,15 @@ fn build_context_media_items(listing: &Listing, media: &ListingMedia) -> Vec<Con
         .to_owned();
     let mut items = Vec::new();
 
+    if let Some(path) = &media.contact_sheet {
+        items.push(ContextMediaItem {
+            kind: "contact-sheet".to_owned(),
+            asset: compact_media_asset(&listing_key, path),
+            path: path.clone(),
+            asset_kind: PreviewAssetKind::Photo,
+        });
+    }
+
     for (index, path) in media.images.iter().enumerate() {
         items.push(ContextMediaItem {
             kind: format!("img_{:02}", index + 1),
@@ -935,15 +950,7 @@ fn listing_from_bundle(bundle: &EvidenceBundle) -> Listing {
         property_type: bundle.rightmove.property_type.clone().unwrap_or_default(),
         description: bundle.rightmove.description.text.clone(),
         notes: bundle.rightmove.description.key_features.clone(),
-        images: bundle
-            .media
-            .photos
-            .iter()
-            .map(|item| ListingImage {
-                remote: item.remote_url.clone(),
-                local: item.local_path.clone(),
-            })
-            .collect(),
+        images: bundle_media_images(bundle),
         floorplan: bundle
             .media
             .floorplans
@@ -1017,6 +1024,24 @@ fn remote_local_asset_from_media(
     }
 }
 
+fn bundle_media_images(bundle: &EvidenceBundle) -> Vec<ListingImage> {
+    let mut images = Vec::new();
+    if let Some(sheet) = bundle.media.contact_sheet.as_ref()
+        && sheet.status == "generated"
+        && let Some(local_path) = sheet.local_path.clone()
+    {
+        images.push(ListingImage {
+            remote: format!("local://contact-sheet/{}", bundle.entity_id),
+            local: Some(local_path),
+        });
+    }
+    images.extend(bundle.media.photos.iter().map(|item| ListingImage {
+        remote: item.remote_url.clone(),
+        local: item.local_path.clone(),
+    }));
+    images
+}
+
 fn filtered_action_indices(actions: &[PaletteAction], query: &str) -> Vec<usize> {
     let normalized = query.trim().to_ascii_lowercase();
     if normalized.is_empty() {
@@ -1040,12 +1065,21 @@ fn build_media_index(cache_root: &Path, listing: &Listing) -> ListingMedia {
     let mut images = listing
         .images
         .iter()
+        .filter(|image| !image.remote.starts_with("local://contact-sheet/"))
         .filter_map(|image| {
             resolve_local_asset(cache_root, cache_dir_ref, image.local.as_deref(), listing)
         })
         .collect::<Vec<_>>();
     images.sort();
     images.dedup();
+    let contact_sheet = listing
+        .images
+        .iter()
+        .find(|image| image.remote.starts_with("local://contact-sheet/"))
+        .and_then(|image| {
+            resolve_local_asset(cache_root, cache_dir_ref, image.local.as_deref(), listing)
+        })
+        .or_else(|| cache_dir_ref.and_then(find_contact_sheet));
 
     let floorplan = resolve_local_asset(
         cache_root,
@@ -1065,14 +1099,31 @@ fn build_media_index(cache_root: &Path, listing: &Listing) -> ListingMedia {
         listing.map_views.street.local.as_deref(),
         listing,
     );
-
     ListingMedia {
         cache_dir,
+        contact_sheet,
         images,
         floorplan,
         satellite,
         street,
     }
+}
+
+fn find_contact_sheet(cache_dir: &Path) -> Option<PathBuf> {
+    let mut sheets = fs::read_dir(cache_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains("-contact-sheet-") && name.ends_with(".jpg"))
+        })
+        .collect::<Vec<_>>();
+    sheets.sort();
+    sheets.pop()
 }
 
 fn resolve_cache_dir(cache_root: &Path, listing: &Listing) -> Option<PathBuf> {
@@ -1275,6 +1326,7 @@ fn reveal_in_finder(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1284,7 +1336,10 @@ mod tests {
     };
     use ratatui::{Terminal, backend::TestBackend, style::Color};
 
-    use super::{App, ContextMediaItem, FocusPane};
+    use super::{
+        App, ContextMediaItem, FocusPane, ListingMedia, build_context_media_items,
+        build_media_index,
+    };
     use crate::preview::{PreviewAssetKind, PreviewController};
     use crate::theme::Theme;
 
@@ -1373,6 +1428,60 @@ mod tests {
         app.context_selected = 0;
         app.context_offset = 0;
         app
+    }
+
+    #[test]
+    fn contact_sheet_is_first_context_media_item() {
+        let listing = sample_listing(1);
+        let media = ListingMedia {
+            cache_dir: Some(PathBuf::from("/tmp/cache")),
+            contact_sheet: Some(PathBuf::from("/tmp/cache/contact-sheet.jpg")),
+            images: vec![PathBuf::from("/tmp/cache/photo.jpg")],
+            floorplan: None,
+            satellite: None,
+            street: None,
+        };
+
+        let items = build_context_media_items(&listing, &media);
+
+        assert_eq!(items[0].kind, "contact-sheet");
+        assert_eq!(items[1].kind, "img_01");
+        assert_eq!(items[0].asset_kind, PreviewAssetKind::Photo);
+    }
+
+    #[test]
+    fn bundle_contact_sheet_path_becomes_primary_media() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "let-tui-media-index-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time after unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).expect("create test media dir");
+        let sheet_path = test_dir.join("exact-contact-sheet.jpg");
+        let photo_path = test_dir.join("photo.jpg");
+        fs::write(&sheet_path, b"sheet").expect("write contact sheet");
+        fs::write(&photo_path, b"photo").expect("write photo");
+
+        let mut listing = sample_listing(1);
+        listing.images = vec![
+            let_sdk::schema::listing::ListingImage {
+                remote: "local://contact-sheet/rightmove:900001".to_owned(),
+                local: Some(sheet_path.display().to_string()),
+            },
+            let_sdk::schema::listing::ListingImage {
+                remote: "https://media.rightmove.co.uk/photo.jpg".to_owned(),
+                local: Some(photo_path.display().to_string()),
+            },
+        ];
+
+        let media = build_media_index(&test_dir, &listing);
+
+        assert_eq!(media.contact_sheet.as_deref(), Some(sheet_path.as_path()));
+        assert_eq!(media.images, vec![photo_path]);
+        fs::remove_dir_all(test_dir).expect("remove test media dir");
     }
 
     #[test]

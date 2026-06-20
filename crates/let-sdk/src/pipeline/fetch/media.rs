@@ -1,11 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb, codecs::jpeg::JpegEncoder};
+use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
 use crate::schema::listing::{Listing, RemoteLocalAsset};
@@ -71,6 +72,17 @@ pub struct MediaStageStats {
     pub maps_downloaded: usize,
     pub maps_skipped: usize,
     pub maps_failed: usize,
+    pub contact_sheet: Option<ContactSheetArtifact>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContactSheetArtifact {
+    pub status: String,
+    pub local_path: Option<String>,
+    pub photo_count: usize,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub content_hash: Option<String>,
 }
 
 pub async fn populate_listing_media(
@@ -104,6 +116,12 @@ pub async fn populate_listing_media(
         &mut stats,
     )
     .await;
+    stats.contact_sheet = Some(generate_contact_sheet(
+        listing,
+        cache_root,
+        &listing_dir,
+        &profile_hash,
+    ));
 
     let listing_snapshot = listing.clone();
     if config.download_floorplan {
@@ -249,6 +267,115 @@ async fn process_listing_images(
             }
         }
     }
+}
+
+fn generate_contact_sheet(
+    listing: &Listing,
+    cache_root: &Path,
+    listing_dir: &Path,
+    profile_hash: &str,
+) -> ContactSheetArtifact {
+    let photos = listing
+        .images
+        .iter()
+        .filter_map(|image| image.local.as_deref())
+        .map(|local| local_media_path(cache_root, local))
+        .filter(|path| cached_image_is_valid(path))
+        .take(16)
+        .collect::<Vec<_>>();
+
+    if photos.is_empty() {
+        return ContactSheetArtifact {
+            status: "skipped".to_owned(),
+            local_path: None,
+            photo_count: 0,
+            width: None,
+            height: None,
+            content_hash: None,
+        };
+    }
+
+    let filename = asset_filename(
+        listing,
+        AssetKind::ContactSheet,
+        "contact-sheet",
+        profile_hash,
+        None,
+    );
+    let output_path = listing_dir.join(&filename);
+    let local_path = local_asset_path(listing, &filename);
+    let photo_count = photos.len();
+
+    match render_contact_sheet(&photos).and_then(|image| {
+        let width = image.width();
+        let height = image.height();
+        let bytes = encode_jpeg(image, 88)?;
+        write_atomically(&output_path, &bytes).map_err(|_| AssetProcessError::WriteFailed)?;
+        let content_hash = sha256_hex(&bytes);
+        Ok((width, height, content_hash))
+    }) {
+        Ok((width, height, content_hash)) => ContactSheetArtifact {
+            status: "generated".to_owned(),
+            local_path: Some(local_path),
+            photo_count,
+            width: Some(width),
+            height: Some(height),
+            content_hash: Some(content_hash),
+        },
+        Err(_) => ContactSheetArtifact {
+            status: "failed".to_owned(),
+            local_path: None,
+            photo_count,
+            width: None,
+            height: None,
+            content_hash: None,
+        },
+    }
+}
+
+fn local_media_path(cache_root: &Path, local: &str) -> PathBuf {
+    let path = PathBuf::from(local);
+    if path.is_absolute() {
+        path
+    } else {
+        cache_root.join(path)
+    }
+}
+
+fn render_contact_sheet(paths: &[PathBuf]) -> Result<DynamicImage, AssetProcessError> {
+    const CELL_W: u32 = 300;
+    const CELL_H: u32 = 225;
+    const GUTTER: u32 = 8;
+
+    let count = paths.len() as u32;
+    let columns = if count >= 9 { 4 } else { 3 }.min(count).max(1);
+    let rows = count.div_ceil(columns);
+    let width = columns * CELL_W + (columns + 1) * GUTTER;
+    let height = rows * CELL_H + (rows + 1) * GUTTER;
+    let mut canvas = ImageBuffer::from_pixel(width, height, Rgb([248, 248, 248]));
+
+    for (index, path) in paths.iter().enumerate() {
+        let image = image::open(path).map_err(|_| AssetProcessError::DecodeFailed)?;
+        let thumb = normalize_contain(image, CELL_W, CELL_H).to_rgb8();
+        let index = index as u32;
+        let column = index % columns;
+        let row = index / columns;
+        let x = GUTTER + column * (CELL_W + GUTTER);
+        let y = GUTTER + row * (CELL_H + GUTTER);
+        image::imageops::replace(&mut canvas, &thumb, i64::from(x), i64::from(y));
+    }
+
+    Ok(DynamicImage::ImageRgb8(canvas))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for value in digest {
+        out.push(char::from(b"0123456789abcdef"[(value >> 4) as usize]));
+        out.push(char::from(b"0123456789abcdef"[(value & 0x0f) as usize]));
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -492,9 +619,14 @@ enum AssetProcessError {
 mod tests {
     use image::{ImageBuffer, Rgb};
 
+    use crate::schema::listing::{
+        Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingImage,
+        ListingStatus, MapViews, PortalIds, RemoteLocalAsset,
+    };
+
     use super::{
-        MediaNormalizationConfig, cached_image_is_valid, is_allowed_remote_media_url,
-        normalize_contain, normalize_cover,
+        MediaNormalizationConfig, cached_image_is_valid, generate_contact_sheet,
+        is_allowed_remote_media_url, normalize_contain, normalize_cover,
     };
 
     #[test]
@@ -549,6 +681,38 @@ mod tests {
         assert!(cached_image_is_valid(&valid));
     }
 
+    #[test]
+    fn contact_sheet_is_generated_from_cached_photos() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let listing = sample_listing();
+        let listing_dir = temp.path().join("170448131");
+        std::fs::create_dir_all(&listing_dir).expect("listing dir");
+        for (index, color) in [[200, 0, 0], [0, 200, 0], [0, 0, 200]]
+            .into_iter()
+            .enumerate()
+        {
+            let path = listing_dir.join(format!("photo-{index}.jpg"));
+            image::DynamicImage::ImageRgb8(ImageBuffer::from_pixel(32, 24, Rgb(color)))
+                .save(path)
+                .expect("write photo");
+        }
+
+        let artifact = generate_contact_sheet(&listing, temp.path(), &listing_dir, "profile");
+
+        assert_eq!(artifact.status, "generated");
+        assert_eq!(artifact.photo_count, 3);
+        let local = artifact.local_path.expect("local path");
+        let absolute = temp.path().join(local);
+        assert!(
+            absolute.is_file(),
+            "missing contact sheet {}",
+            absolute.display()
+        );
+        assert_eq!(artifact.width, Some(932));
+        assert_eq!(artifact.height, Some(241));
+        assert!(artifact.content_hash.is_some());
+    }
+
     fn sample_config() -> MediaNormalizationConfig {
         MediaNormalizationConfig {
             photo_landscape_width: 1200,
@@ -570,6 +734,65 @@ mod tests {
             download_floorplan: true,
             download_epc_asset: true,
             mapbox_access_token: None,
+        }
+    }
+
+    fn sample_listing() -> Listing {
+        Listing {
+            id: "170448131".to_owned(),
+            portal_ids: PortalIds {
+                rightmove: Some("170448131".to_owned()),
+                ..PortalIds::default()
+            },
+            uprn: None,
+            uprn_source: None,
+            uprn_confidence: None,
+            url: "https://www.rightmove.co.uk/properties/170448131".to_owned(),
+            location: GeoLocation {
+                lat: 0.0,
+                lng: 0.0,
+                pin_type: None,
+            },
+            postcode: "M1 1AA".to_owned(),
+            address: "1 Example Street".to_owned(),
+            region: None,
+            google_maps_url: String::new(),
+            google_maps_street_view_url: String::new(),
+            area: AreaMetrics::default(),
+            price: 1250,
+            price_display: "£1,250 pcm".to_owned(),
+            bedrooms: 2,
+            bathrooms: 1,
+            property_type: "Flat".to_owned(),
+            description: String::new(),
+            notes: Vec::new(),
+            images: (0..3)
+                .map(|index| ListingImage {
+                    remote: format!("https://media.rightmove.co.uk/photo-{index}.jpg"),
+                    local: Some(format!("170448131/photo-{index}.jpg")),
+                })
+                .collect(),
+            floorplan: RemoteLocalAsset::default(),
+            epc: RemoteLocalAsset::default(),
+            map_views: MapViews::default(),
+            epc_rating: None,
+            floor_area_sqm: None,
+            epc_lodgement_date: None,
+            epc_address_match: None,
+            epc_search_url: None,
+            nearest_stations: Vec::new(),
+            gigabit_availability: None,
+            listed_date: None,
+            lettings: Lettings::default(),
+            agent: Agent::default(),
+            assessment: None,
+            assessed_at: None,
+            assessed_score: None,
+            scores: None,
+            fetched_at: "2026-06-20T00:00:00Z".to_owned(),
+            extraction_status: ExtractionStatus::Success,
+            status: ListingStatus::Active,
+            notion_page_id: None,
         }
     }
 }

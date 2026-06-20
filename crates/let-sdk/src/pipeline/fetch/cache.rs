@@ -15,6 +15,7 @@ pub enum AssetKind {
     Epc,
     MapSatellite,
     MapStreet,
+    ContactSheet,
 }
 
 impl AssetKind {
@@ -25,6 +26,7 @@ impl AssetKind {
             AssetKind::Epc => "epc",
             AssetKind::MapSatellite => "map-satellite",
             AssetKind::MapStreet => "map-street",
+            AssetKind::ContactSheet => "contact-sheet",
         }
     }
 }
