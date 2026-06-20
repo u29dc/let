@@ -93,12 +93,14 @@ Discovery guidance:
 Inspection guidance:
 
 - Use quick inspection for fast triage, standard inspection for normal evidence, and deeper inspection when media, EPC, verification, or maps materially affect the decision.
-- Inspect 2-5 promising listings at a time rather than building a huge stale batch.
+- Inspect 2-5 promising listings at a time rather than building a huge stale batch. `inspect` accepts multiple ids/URLs, and when no id is provided it reads ids/URLs from piped stdin automatically.
 - Removed listings, rate limits, missing media, and upstream parse drift are normal; skip or retry once, then continue degraded.
 
 Verification guidance:
 
-- Use `evidence <id>` to read the stored bundle.
+- Use `evidence <id>` to read the stored bundle. `evidence` also accepts multiple ids or piped stdin for mechanical comparison reads.
+- Treat bundle `flags[]` as evidence-quality warnings, not final judgment. They highlight missing evidence, source conflicts, degraded sources, suspicious values, or manual checks to remember.
+- When media is inspected and photos are cached, use `media.contactSheet.localPath` for fast visual review before opening individual photos.
 - Use `verify <id> --claim <type>` for checkable claims such as broadband, EPC, address, media, or description.
 - Distinguish `supported`, `contradicted`, `unknown`, and `insufficientEvidence`; do not collapse them into a boolean.
 - If a listing description claims something important, verify it before relying on it.
@@ -126,7 +128,9 @@ Save assessments as JSON objects with `assess save`; read them with `assess get`
 Assessment guidance:
 
 - The CLI persists agent-authored assessment JSON; it does not enforce a built-in recommendation rubric.
-- Include recommendation, reasoning, red flags, evidence gaps, confidence, and viewing priority when useful.
+- Prefer the recommended comparison fields when saving assessments: `recommendation`, `confidence`, `summary`, `positives`, `risks`, `nextActions`, `tradeoffs`, `areaNotes`, `commuteNotes`, `familyFit`, `evidenceGaps`, and `source`.
+- Recommended `recommendation` values are `view`, `stretch_view`, `backup_view`, `watch`, `pass`, and `benchmark`; recommended `confidence` values are `high`, `medium_high`, `medium`, and `low`.
+- The raw assessment remains flexible, but `assess get`, `assess list`, and evidence bundles expose `normalizedAssessment` for comparison.
 - Keep listing quality and location quality separate.
 - Lower confidence when key evidence is missing instead of inventing values.
 - Use deterministic scores only as background context unless the user explicitly asks for scoring experiments.
