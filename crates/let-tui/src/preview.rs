@@ -1,24 +1,32 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba};
+use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui_image::errors::Errors;
+use ratatui::widgets::Widget;
+use ratatui_image::Image as RatatuiImage;
+use ratatui_image::Resize as RatatuiResize;
+use ratatui_image::picker::cap_parser::Parser;
 use ratatui_image::picker::{Picker, ProtocolType};
-use ratatui_image::thread::{ResizeRequest, ResizeResponse, ThreadProtocol};
+use ratatui_image::protocol::Protocol;
 
 const PREVIEW_ASPECT_WIDTH: u32 = 4;
 const PREVIEW_ASPECT_HEIGHT: u32 = 3;
 const DEFAULT_FONT_SIZE: (u16, u16) = (10, 20);
 const DECODE_CACHE_CAPACITY: usize = 12;
 const PREVIEW_BG: Rgba<u8> = Rgba([255, 255, 255, 255]);
+const KITTY_CHARS_PER_CHUNK: usize = 4096;
+const KITTY_CHUNK_SIZE: usize = (KITTY_CHARS_PER_CHUNK / 4) * 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum PreviewAssetKind {
@@ -135,6 +143,10 @@ impl RequestKey {
             height: area.height,
         }
     }
+
+    fn area(&self) -> Rect {
+        Rect::new(0, 0, self.width, self.height)
+    }
 }
 
 enum PreviewState {
@@ -147,7 +159,7 @@ enum PreviewState {
     },
     Ready {
         key: RequestKey,
-        protocol: Box<ThreadProtocol>,
+        protocol: Box<PreviewProtocol>,
         source_width: u32,
         source_height: u32,
     },
@@ -164,35 +176,111 @@ impl PreviewState {
     }
 }
 
-pub(crate) struct PreviewView {
+pub(crate) struct PreviewView<'a> {
     pub(crate) title: String,
-    pub(crate) ready: bool,
+    pub(crate) protocol: Option<&'a PreviewProtocol>,
+    pub(crate) clear_graphics: bool,
     pub(crate) lines: Vec<Line<'static>>,
+}
+
+pub(crate) enum PreviewProtocol {
+    KittyDirect(KittyDirectProtocol),
+    Ratatui(Protocol),
+}
+
+impl PreviewProtocol {
+    #[cfg(test)]
+    fn area(&self) -> Rect {
+        match self {
+            Self::KittyDirect(protocol) => protocol.area,
+            Self::Ratatui(protocol) => protocol.area(),
+        }
+    }
+}
+
+impl Widget for &PreviewProtocol {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        match self {
+            PreviewProtocol::KittyDirect(protocol) => protocol.render(area, buf),
+            PreviewProtocol::Ratatui(protocol) => RatatuiImage::new(protocol).render(area, buf),
+        }
+    }
+}
+
+pub(crate) struct PreviewGraphicsClear;
+
+impl Widget for PreviewGraphicsClear {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        render_kitty_clear(area, buf);
+    }
+}
+
+pub(crate) struct KittyDirectProtocol {
+    sequence: String,
+    transmitted: AtomicBool,
+    area: Rect,
+}
+
+impl KittyDirectProtocol {
+    fn new(image: DynamicImage, area: Rect, id: u64) -> Self {
+        Self {
+            sequence: kitty_direct_sequence(&image, area, id, is_tmux_session()),
+            transmitted: AtomicBool::new(false),
+            area,
+        }
+    }
+
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let area = Rect {
+            width: area.width.min(self.area.width),
+            height: area.height.min(self.area.height),
+            ..area
+        };
+        let should_transmit = !self.transmitted.swap(true, Ordering::SeqCst);
+        let top_left = (area.left(), area.top());
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                if (x, y) == top_left {
+                    continue;
+                }
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_diff_option(CellDiffOption::Skip);
+                }
+            }
+        }
+
+        if should_transmit && let Some(cell) = buf.cell_mut((area.left(), area.top())) {
+            cell.set_symbol(&self.sequence);
+        } else if let Some(cell) = buf.cell_mut(top_left) {
+            cell.set_diff_option(CellDiffOption::Skip);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct PreviewRequest {
     id: u64,
     key: RequestKey,
+    picker: Picker,
     pixel_width: u32,
     pixel_height: u32,
 }
 
-#[derive(Debug)]
 struct PreviewResponse {
     id: u64,
     key: RequestKey,
     result: Result<PreparedPreview, String>,
 }
 
-#[derive(Debug)]
 struct PreparedPreview {
-    image: DynamicImage,
+    protocol: PreviewProtocol,
     source_width: u32,
     source_height: u32,
 }
-
-type ResizeResult = Result<ResizeResponse, Errors>;
 
 #[derive(Debug, Clone)]
 struct PendingPreview {
@@ -299,8 +387,6 @@ pub(crate) struct PreviewController {
     picker: Option<Picker>,
     queue: Option<PreviewJobQueue>,
     response_rx: Option<Receiver<PreviewResponse>>,
-    resize_tx: Option<mpsc::Sender<ResizeRequest>>,
-    resize_response_rx: Option<Receiver<ResizeResult>>,
     state: PreviewState,
     pending: Option<PendingPreview>,
     mode: PreviewMode,
@@ -312,16 +398,16 @@ impl PreviewController {
     pub(crate) fn detect() -> Self {
         match Picker::from_query_stdio() {
             Ok(mut picker) => {
-                picker.set_protocol_type(
-                    preview_protocol_override().unwrap_or(ProtocolType::Halfblocks),
-                );
+                let requested_protocol = preview_protocol_override()
+                    .or_else(default_protocol_override)
+                    .unwrap_or_else(|| picker.protocol_type());
                 let raw_font_size = picker.font_size();
-                let font_size = usable_font_size(raw_font_size);
-                if font_size != raw_font_size {
-                    let protocol_type = picker.protocol_type();
+                let (protocol_type, font_size, use_fallback_picker) =
+                    resolve_preview_protocol(requested_protocol, raw_font_size);
+                if use_fallback_picker {
                     picker = Picker::halfblocks();
-                    picker.set_protocol_type(protocol_type);
                 }
+                picker.set_protocol_type(protocol_type);
                 let queue = PreviewJobQueue::new();
                 let worker_queue = queue.clone();
                 let (response_tx, response_rx) = mpsc::channel();
@@ -330,19 +416,10 @@ impl PreviewController {
                     .spawn(move || preview_worker_main(worker_queue, response_tx))
                     .expect("spawn preview worker");
 
-                let (resize_tx, resize_rx) = mpsc::channel();
-                let (resize_response_tx, resize_response_rx) = mpsc::channel();
-                thread::Builder::new()
-                    .name("let-tui-preview-resize".to_owned())
-                    .spawn(move || preview_resize_worker_main(resize_rx, resize_response_tx))
-                    .expect("spawn preview resize worker");
-
                 Self {
                     picker: Some(picker),
                     queue: Some(queue),
                     response_rx: Some(response_rx),
-                    resize_tx: Some(resize_tx),
-                    resize_response_rx: Some(resize_response_rx),
                     state: PreviewState::Empty("select a listing to preview".to_owned()),
                     pending: None,
                     mode: PreviewMode::Auto,
@@ -359,8 +436,6 @@ impl PreviewController {
             picker: None,
             queue: None,
             response_rx: None,
-            resize_tx: None,
-            resize_response_rx: None,
             state: PreviewState::Disabled(reason.into()),
             pending: None,
             mode: PreviewMode::Auto,
@@ -371,7 +446,6 @@ impl PreviewController {
 
     pub(crate) fn tick(&mut self) {
         self.poll_preview_responses();
-        self.poll_resize_responses();
     }
 
     fn poll_preview_responses(&mut self) {
@@ -391,25 +465,11 @@ impl PreviewController {
             }
             self.pending = None;
 
-            let Some(picker) = self.picker.as_ref() else {
-                self.state = PreviewState::Disabled("preview unavailable".to_owned());
-                continue;
-            };
-
-            let Some(resize_tx) = self.resize_tx.as_ref() else {
-                self.state = PreviewState::Disabled("preview unavailable".to_owned());
-                continue;
-            };
-
             match response.result {
                 Ok(prepared) => {
-                    let protocol = ThreadProtocol::new(
-                        resize_tx.clone(),
-                        Some(picker.new_resize_protocol(prepared.image)),
-                    );
                     self.state = PreviewState::Ready {
                         key: response.key,
-                        protocol: Box::new(protocol),
+                        protocol: Box::new(prepared.protocol),
                         source_width: prepared.source_width,
                         source_height: prepared.source_height,
                     };
@@ -420,23 +480,6 @@ impl PreviewController {
                         message,
                     };
                 }
-            }
-        }
-    }
-
-    fn poll_resize_responses(&mut self) {
-        let responses = self
-            .resize_response_rx
-            .as_ref()
-            .map(|resize_response_rx| resize_response_rx.try_iter().collect::<Vec<_>>())
-            .unwrap_or_default();
-
-        for response in responses {
-            let Ok(completed) = response else {
-                continue;
-            };
-            if let PreviewState::Ready { protocol, .. } = &mut self.state {
-                let _ = protocol.update_resized_protocol(completed);
             }
         }
     }
@@ -470,10 +513,6 @@ impl PreviewController {
 
     pub(crate) fn needs_fast_tick(&self) -> bool {
         self.pending.is_some()
-            || matches!(
-                &self.state,
-                PreviewState::Ready { protocol, .. } if protocol.protocol_type().is_none()
-            )
     }
 
     pub(crate) fn sync(
@@ -517,10 +556,7 @@ impl PreviewController {
             id: self.request_id,
             key: key.clone(),
         });
-        // Preserve the last successful preview while the replacement renders.
-        if !matches!(self.state, PreviewState::Ready { .. }) {
-            self.state = PreviewState::Pending(key.clone());
-        }
+        self.state = PreviewState::Pending(key.clone());
 
         let Some(queue) = self.queue.as_ref() else {
             self.pending = None;
@@ -531,31 +567,36 @@ impl PreviewController {
         queue.replace(PreviewRequest {
             id: self.request_id,
             key,
+            picker: self.picker.as_ref().expect("preview picker").clone(),
             pixel_width,
             pixel_height,
         });
     }
 
-    pub(crate) fn view(&self) -> PreviewView {
+    pub(crate) fn view(&self) -> PreviewView<'_> {
         match &self.state {
             PreviewState::Disabled(message) => PreviewView {
                 title: " preview unavailable ".to_owned(),
-                ready: false,
+                protocol: None,
+                clear_graphics: self.uses_kitty_graphics(),
                 lines: vec![Line::from("Preview disabled"), Line::from(message.clone())],
             },
             PreviewState::Empty(message) => PreviewView {
                 title: format!(" preview {} ", self.mode.label()),
-                ready: false,
+                protocol: None,
+                clear_graphics: self.uses_kitty_graphics(),
                 lines: vec![Line::from(message.clone())],
             },
             PreviewState::Pending(key) => PreviewView {
                 title: title_for_key(key),
-                ready: false,
+                protocol: None,
+                clear_graphics: self.uses_kitty_graphics(),
                 lines: Vec::new(),
             },
             PreviewState::Failed { key, message } => PreviewView {
                 title: title_for_key(key),
-                ready: false,
+                protocol: None,
+                clear_graphics: self.uses_kitty_graphics(),
                 lines: vec![
                     Line::from(format!("failed to render {}", key.kind.label())),
                     Line::from(compact_path(&key.path)),
@@ -566,10 +607,11 @@ impl PreviewController {
                 key,
                 source_width,
                 source_height,
-                ..
+                protocol,
             } => PreviewView {
                 title: title_for_key(key),
-                ready: true,
+                protocol: Some(protocol.as_ref()),
+                clear_graphics: false,
                 lines: vec![
                     Line::from(format!("{}x{} source", source_width, source_height)),
                     loading_mode_line(key),
@@ -578,14 +620,10 @@ impl PreviewController {
         }
     }
 
-    pub(crate) fn protocol_mut(&mut self) -> Option<&mut ThreadProtocol> {
-        match &mut self.state {
-            PreviewState::Ready { protocol, .. } => Some(protocol.as_mut()),
-            PreviewState::Disabled(_)
-            | PreviewState::Empty(_)
-            | PreviewState::Pending(_)
-            | PreviewState::Failed { .. } => None,
-        }
+    fn uses_kitty_graphics(&self) -> bool {
+        self.picker
+            .as_ref()
+            .is_some_and(|picker| picker.protocol_type() == ProtocolType::Kitty)
     }
 }
 
@@ -631,17 +669,6 @@ fn preview_worker_main(queue: PreviewJobQueue, response_tx: mpsc::Sender<Preview
     }
 }
 
-fn preview_resize_worker_main(
-    resize_rx: Receiver<ResizeRequest>,
-    resize_response_tx: mpsc::Sender<ResizeResult>,
-) {
-    while let Ok(request) = resize_rx.recv() {
-        if resize_response_tx.send(request.resize_encode()).is_err() {
-            break;
-        }
-    }
-}
-
 fn prepare_preview(
     cache: &mut DecodeCache,
     request: &PreviewRequest,
@@ -663,12 +690,92 @@ fn prepare_preview(
             normalize_contain(source, request.pixel_width, request.pixel_height, true)
         }
     };
+    let protocol = if request.picker.protocol_type() == ProtocolType::Kitty {
+        PreviewProtocol::KittyDirect(KittyDirectProtocol::new(
+            image,
+            request.key.area(),
+            request.id,
+        ))
+    } else {
+        PreviewProtocol::Ratatui(
+            request
+                .picker
+                .new_protocol(
+                    image,
+                    request.key.area(),
+                    RatatuiResize::Scale(Some(FilterType::CatmullRom)),
+                )
+                .map_err(|error| format!("protocol build failed: {error}"))?,
+        )
+    };
 
     Ok(PreparedPreview {
-        image,
+        protocol,
         source_width,
         source_height,
     })
+}
+
+fn kitty_direct_sequence(image: &DynamicImage, area: Rect, id: u64, is_tmux: bool) -> String {
+    let rgba = image.to_rgba8();
+    let (width, height) = (rgba.width(), rgba.height());
+    let bytes = rgba.as_raw();
+    let chunks = bytes.chunks(KITTY_CHUNK_SIZE);
+    let chunk_count = chunks.len();
+    let (start, escape, end) = Parser::escape_tmux(is_tmux);
+    let mut data = String::with_capacity(
+        kitty_delete_sequence(is_tmux).len()
+            + chunk_count.saturating_mul(KITTY_CHARS_PER_CHUNK + 32 + escape.len() * 2),
+    );
+
+    data.push_str(&kitty_delete_sequence(is_tmux));
+    for (index, chunk) in chunks.enumerate() {
+        data.push_str(start);
+        write!(data, "{escape}_Gq=2,").expect("write kitty sequence");
+        if index == 0 {
+            write!(
+                data,
+                "i={},a=T,f=32,t=d,s={width},v={height},c={},r={},",
+                kitty_image_id(id),
+                area.width.max(1),
+                area.height.max(1)
+            )
+            .expect("write kitty header");
+        }
+        let more = u8::from(chunk_count > index + 1);
+        write!(data, "m={more};").expect("write kitty chunk header");
+        base64_simd::STANDARD.encode_append(chunk, &mut data);
+        write!(data, "{escape}\\").expect("write kitty sequence terminator");
+        data.push_str(end);
+    }
+
+    data
+}
+
+fn kitty_delete_sequence(is_tmux: bool) -> String {
+    let (start, escape, end) = Parser::escape_tmux(is_tmux);
+    format!("{start}{escape}_Gq=2,a=d,d=c;{escape}\\{end}")
+}
+
+fn render_kitty_clear(area: Rect, buf: &mut Buffer) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let sequence = kitty_delete_sequence(is_tmux_session());
+    if let Some(cell) = buf.cell_mut((area.left(), area.top())) {
+        cell.set_symbol(&sequence);
+    }
+}
+
+fn kitty_image_id(id: u64) -> u32 {
+    const PREVIEW_ID_PREFIX: u32 = 0x1E70_0000;
+    PREVIEW_ID_PREFIX | ((id as u32) & 0x000F_FFFF)
+}
+
+fn is_tmux_session() -> bool {
+    std::env::var("TERM").is_ok_and(|term| term.starts_with("tmux"))
+        || std::env::var("TERM_PROGRAM").is_ok_and(|term_program| term_program == "tmux")
 }
 
 fn normalize_cover(image: &DynamicImage, target_w: u32, target_h: u32) -> DynamicImage {
@@ -759,14 +866,47 @@ fn preview_protocol_override() -> Option<ProtocolType> {
     protocol_type_from_str(&value)
 }
 
+fn default_protocol_override() -> Option<ProtocolType> {
+    default_protocol_override_for(
+        std::env::var("TERM_PROGRAM").ok().as_deref(),
+        std::env::var("TERM").ok().as_deref(),
+    )
+}
+
+fn resolve_preview_protocol(
+    requested_protocol: ProtocolType,
+    raw_font_size: (u16, u16),
+) -> (ProtocolType, (u16, u16), bool) {
+    let font_size = usable_font_size(raw_font_size);
+    let unreliable_geometry = font_size != raw_font_size;
+    (requested_protocol, font_size, unreliable_geometry)
+}
+
 fn protocol_type_from_str(value: &str) -> Option<ProtocolType> {
     match value.trim().to_ascii_lowercase().as_str() {
         "halfblock" | "halfblocks" => Some(ProtocolType::Halfblocks),
+        "kitty" => Some(ProtocolType::Kitty),
         "iterm" | "iterm2" => Some(ProtocolType::Iterm2),
         "sixel" => Some(ProtocolType::Sixel),
         "auto" | "" => None,
         _ => None,
     }
+}
+
+fn default_protocol_override_for(
+    term_program: Option<&str>,
+    term: Option<&str>,
+) -> Option<ProtocolType> {
+    if is_ghostty(term_program, term) {
+        Some(ProtocolType::Kitty)
+    } else {
+        None
+    }
+}
+
+fn is_ghostty(term_program: Option<&str>, term: Option<&str>) -> bool {
+    term_program.is_some_and(|value| value.eq_ignore_ascii_case("ghostty"))
+        || term.is_some_and(|value| value.contains("ghostty"))
 }
 
 fn usable_font_size(font_size: (u16, u16)) -> (u16, u16) {
@@ -780,18 +920,23 @@ fn usable_font_size(font_size: (u16, u16)) -> (u16, u16) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    use image::imageops::FilterType;
     use image::{DynamicImage, ImageBuffer, Rgba};
+    use ratatui::buffer::{Buffer, CellDiffOption};
     use ratatui::layout::Rect;
-    use ratatui_image::errors::Errors;
+    use ratatui::widgets::Widget;
+    use ratatui_image::Resize as RatatuiResize;
     use ratatui_image::picker::{Picker, ProtocolType};
-    use ratatui_image::thread::{ResizeRequest, ResizeResponse, ThreadProtocol};
 
     use super::{
-        DEFAULT_FONT_SIZE, PREVIEW_ASPECT_HEIGHT, PREVIEW_ASPECT_WIDTH, PreviewAssetKind,
-        PreviewController, PreviewMode, PreviewState, PreviewTarget, PreviewView, RequestKey,
-        normalize_contain, normalize_cover, protocol_type_from_str, usable_font_size,
+        DECODE_CACHE_CAPACITY, DEFAULT_FONT_SIZE, DecodeCache, PREVIEW_ASPECT_HEIGHT,
+        PREVIEW_ASPECT_WIDTH, PreviewAssetKind, PreviewController, PreviewMode, PreviewProtocol,
+        PreviewRequest, PreviewState, PreviewTarget, PreviewView, RequestKey,
+        default_protocol_override_for, normalize_contain, normalize_cover, prepare_preview,
+        protocol_type_from_str, resolve_preview_protocol, usable_font_size,
     };
 
     fn sample_image() -> DynamicImage {
@@ -806,23 +951,11 @@ mod tests {
         )
     }
 
-    fn resize_channels() -> (
-        mpsc::Sender<ResizeRequest>,
-        mpsc::Receiver<Result<ResizeResponse, Errors>>,
-    ) {
-        let (resize_tx, _resize_rx) = mpsc::channel();
-        let (_resize_response_tx, resize_response_rx) = mpsc::channel();
-        (resize_tx, resize_response_rx)
-    }
-
     fn sample_controller() -> PreviewController {
-        let (resize_tx, resize_response_rx) = resize_channels();
         PreviewController {
             picker: Some(Picker::halfblocks()),
             queue: Some(super::PreviewJobQueue::new()),
             response_rx: None,
-            resize_tx: Some(resize_tx),
-            resize_response_rx: Some(resize_response_rx),
             state: PreviewState::Empty("empty".to_owned()),
             pending: None,
             mode: PreviewMode::Auto,
@@ -833,20 +966,20 @@ mod tests {
 
     fn ready_controller(key: RequestKey) -> PreviewController {
         let picker = Picker::halfblocks();
-        let (resize_tx, resize_response_rx) = resize_channels();
-        let protocol = ThreadProtocol::new(
-            resize_tx.clone(),
-            Some(picker.new_resize_protocol(sample_image())),
-        );
+        let protocol = picker
+            .new_protocol(
+                sample_image(),
+                key.area(),
+                RatatuiResize::Scale(Some(FilterType::CatmullRom)),
+            )
+            .expect("sample protocol");
         PreviewController {
             picker: Some(picker),
             queue: Some(super::PreviewJobQueue::new()),
             response_rx: None,
-            resize_tx: Some(resize_tx),
-            resize_response_rx: Some(resize_response_rx),
             state: PreviewState::Ready {
                 key,
-                protocol: Box::new(protocol),
+                protocol: Box::new(PreviewProtocol::Ratatui(protocol)),
                 source_width: 12,
                 source_height: 8,
             },
@@ -855,6 +988,18 @@ mod tests {
             font_size: DEFAULT_FONT_SIZE,
             request_id: 0,
         }
+    }
+
+    fn temp_image_path(label: &str, image: &DynamicImage) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("let-tui-preview-{label}-{nanos}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("image.png");
+        image.save(&path).expect("write temp image");
+        path
     }
 
     #[test]
@@ -902,6 +1047,20 @@ mod tests {
     }
 
     #[test]
+    fn contain_fit_letterboxes_instead_of_cropping_wide_images() {
+        let input =
+            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(1000, 250, Rgba([0, 0, 0, 255])));
+        let output = normalize_contain(&input, 400, 300, true).to_rgba8();
+
+        assert_eq!(output.width(), 400);
+        assert_eq!(output.height(), 300);
+        assert_eq!(output.get_pixel(200, 99).0, [255, 255, 255, 255]);
+        assert_eq!(output.get_pixel(200, 100).0, [0, 0, 0, 255]);
+        assert_eq!(output.get_pixel(399, 199).0, [0, 0, 0, 255]);
+        assert_eq!(output.get_pixel(200, 200).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
     fn unusable_font_size_falls_back_to_default_geometry() {
         assert_eq!(usable_font_size((1, 1)), DEFAULT_FONT_SIZE);
         assert_eq!(usable_font_size((10, 1)), DEFAULT_FONT_SIZE);
@@ -915,7 +1074,7 @@ mod tests {
             protocol_type_from_str("halfblocks"),
             Some(ProtocolType::Halfblocks)
         );
-        assert_eq!(protocol_type_from_str("kitty"), None);
+        assert_eq!(protocol_type_from_str("kitty"), Some(ProtocolType::Kitty));
         assert_eq!(protocol_type_from_str("iterm2"), Some(ProtocolType::Iterm2));
         assert_eq!(protocol_type_from_str("sixel"), Some(ProtocolType::Sixel));
         assert_eq!(protocol_type_from_str("auto"), None);
@@ -923,11 +1082,49 @@ mod tests {
     }
 
     #[test]
-    fn default_preview_protocol_is_halfblocks() {
-        let mut picker = Picker::halfblocks();
-        picker
-            .set_protocol_type(protocol_type_from_str("auto").unwrap_or(ProtocolType::Halfblocks));
-        assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
+    fn default_preview_protocol_uses_detected_native_protocol() {
+        let (protocol, font_size, fallback) =
+            resolve_preview_protocol(ProtocolType::Kitty, (10, 20));
+
+        assert_eq!(protocol, ProtocolType::Kitty);
+        assert_eq!(font_size, (10, 20));
+        assert!(!fallback);
+    }
+
+    #[test]
+    fn ghostty_default_uses_native_kitty_protocol() {
+        assert_eq!(
+            default_protocol_override_for(Some("Ghostty"), None),
+            Some(ProtocolType::Kitty)
+        );
+        assert_eq!(
+            default_protocol_override_for(None, Some("xterm-ghostty")),
+            Some(ProtocolType::Kitty)
+        );
+        assert_eq!(
+            default_protocol_override_for(Some("Apple_Terminal"), None),
+            None
+        );
+    }
+
+    #[test]
+    fn explicit_protocol_override_is_respected() {
+        let (protocol, font_size, fallback) =
+            resolve_preview_protocol(ProtocolType::Kitty, (10, 20));
+
+        assert_eq!(protocol, ProtocolType::Kitty);
+        assert_eq!(font_size, (10, 20));
+        assert!(!fallback);
+    }
+
+    #[test]
+    fn unreliable_geometry_keeps_requested_protocol_but_uses_fallback_font_size() {
+        let (protocol, font_size, fallback) =
+            resolve_preview_protocol(ProtocolType::Halfblocks, (1, 1));
+
+        assert_eq!(protocol, ProtocolType::Halfblocks);
+        assert_eq!(font_size, DEFAULT_FONT_SIZE);
+        assert!(fallback);
     }
 
     #[test]
@@ -945,48 +1142,98 @@ mod tests {
 
         let PreviewView {
             title,
-            ready,
+            protocol,
+            clear_graphics: _,
             lines,
         } = controller.view();
         assert_eq!(title, " preview fit img_01 ");
-        assert!(!ready);
+        assert!(protocol.is_none());
         assert!(lines.is_empty());
     }
 
     #[test]
-    fn keeps_ready_preview_visible_while_next_image_loads() {
+    fn next_image_replaces_ready_preview_with_pending_state() {
         let area = Rect::new(0, 0, 40, 20);
         let current_key = RequestKey::from_target(sample_target("img_01"), PreviewMode::Auto, area);
-        let mut controller = ready_controller(current_key.clone());
+        let mut controller = ready_controller(current_key);
 
         controller.sync(Some(sample_target("img_02")), area, "empty");
 
         assert!(controller.needs_fast_tick());
         assert!(matches!(
             controller.state,
-            PreviewState::Ready { ref key, .. } if key == &current_key
+            PreviewState::Pending(ref key) if key.label == "img_02"
         ));
 
         let view = controller.view();
-        assert!(view.ready);
-        assert!(controller.protocol_mut().is_some());
-        assert!(view.lines.len() >= 2);
-        assert_eq!(view.title, " preview fit img_01 ");
+        assert!(view.protocol.is_none());
+        assert!(view.lines.is_empty());
+        assert_eq!(view.title, " preview fit img_02 ");
     }
 
     #[test]
-    fn resize_pending_preview_requests_fast_tick() {
+    fn ready_preview_does_not_request_fast_tick() {
         let area = Rect::new(0, 0, 40, 20);
         let current_key = RequestKey::from_target(sample_target("img_01"), PreviewMode::Auto, area);
-        let mut controller = ready_controller(current_key);
+        let controller = ready_controller(current_key);
 
         assert!(!controller.needs_fast_tick());
-        controller
-            .protocol_mut()
-            .expect("ready protocol")
-            .empty_protocol();
+    }
 
-        assert!(controller.needs_fast_tick());
+    #[test]
+    fn native_preview_protocol_covers_full_render_height() {
+        let input =
+            DynamicImage::ImageRgba8(ImageBuffer::from_pixel(900, 1200, Rgba([0, 0, 0, 255])));
+        let image_path = temp_image_path("kitty", &input);
+        let area = Rect::new(0, 0, 18, 10);
+        let key = RequestKey::from_target(
+            PreviewTarget::new(
+                image_path.clone(),
+                PreviewAssetKind::Photo,
+                "img_01".to_owned(),
+            ),
+            PreviewMode::Auto,
+            area,
+        );
+        let mut picker = Picker::halfblocks();
+        picker.set_protocol_type(ProtocolType::Kitty);
+        let request = PreviewRequest {
+            id: 1,
+            key: key.clone(),
+            picker,
+            pixel_width: 180,
+            pixel_height: 200,
+        };
+        let mut cache = DecodeCache::new(DECODE_CACHE_CAPACITY);
+
+        let prepared = prepare_preview(&mut cache, &request).expect("prepare native preview");
+
+        assert_eq!(prepared.protocol.area(), key.area());
+
+        let mut buffer = Buffer::empty(area);
+        (&prepared.protocol).render(area, &mut buffer);
+        assert!(buffer[(0, 0)].symbol().contains("_Gq=2,"));
+        assert!(buffer[(0, 0)].symbol().contains("a=d,d=c"));
+        assert!(buffer[(0, 0)].symbol().contains("a=T"));
+        assert!(
+            buffer[(0, 0)]
+                .symbol()
+                .contains(&format!("c={},r={}", area.width, area.height))
+        );
+        let skipped_cells = (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                (x, y) != (0, 0) && buffer[(x, y)].diff_option == CellDiffOption::Skip
+            })
+            .count();
+
+        assert_eq!(
+            skipped_cells,
+            usize::from(area.width) * usize::from(area.height) - 1
+        );
+
+        let temp_dir = image_path.parent().expect("temp image parent");
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
     }
 
     #[test]
@@ -999,12 +1246,14 @@ mod tests {
         queue.replace(super::PreviewRequest {
             id: 1,
             key: first_key,
+            picker: Picker::halfblocks(),
             pixel_width: 400,
             pixel_height: 300,
         });
         queue.replace(super::PreviewRequest {
             id: 2,
             key: second_key.clone(),
+            picker: Picker::halfblocks(),
             pixel_width: 400,
             pixel_height: 300,
         });

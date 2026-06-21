@@ -29,6 +29,7 @@ clap = { version = "4.6.0", features = ["derive", "env"] }
 crossterm = "0.29.0"
 ratatui = "0.30.0"
 ratatui-image = { version = "10.0.6", default-features = false, features = ["crossterm"] }
+base64-simd = "0.8.0"
 
 # Storage / parsing
 rusqlite = { version = "0.39.0", features = ["bundled"] }

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,14 +9,13 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use let_sdk::intelligence::{EvidenceBundle, IntelligenceDb};
+use let_sdk::intelligence::{AssessmentRecord, EvidenceBundle, IntelligenceDb};
 use let_sdk::load_listings_file;
 use let_sdk::schema::listing::{
     Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingImage,
     ListingStatus, MapViews, PortalIds, RemoteLocalAsset,
 };
 use ratatui::layout::Rect;
-use ratatui_image::thread::ThreadProtocol;
 
 use crate::preview::{PreviewAssetKind, PreviewController, PreviewTarget, PreviewView};
 use crate::theme::{HEADER_CONTRACT, HeaderContract};
@@ -86,6 +86,12 @@ pub(crate) struct ContextMediaItem {
     pub(crate) asset_kind: PreviewAssetKind,
 }
 
+struct LoadedListings {
+    listings: Vec<Listing>,
+    bundle_context: HashMap<String, EvidenceBundle>,
+    status: String,
+}
+
 pub(crate) struct App {
     running: bool,
     listings: Vec<Listing>,
@@ -93,6 +99,7 @@ pub(crate) struct App {
     focus: FocusPane,
     context_selected: usize,
     context_offset: usize,
+    bundle_context: HashMap<String, EvidenceBundle>,
     selected_media: ListingMedia,
     context_items: Vec<ContextMediaItem>,
     status: String,
@@ -114,7 +121,8 @@ struct SourceBuildJob {
 
 impl App {
     pub(crate) fn with_preview(preview: PreviewController) -> Self {
-        let (listings, status) = load_ranked_listings();
+        let loaded = load_ranked_listings();
+        let listings = loaded.listings;
         let selected = initial_selection(&listings, env::var("LET_START_ID").ok().as_deref());
         let focus = if env::var("LET_START_SECTIONS")
             .ok()
@@ -131,9 +139,10 @@ impl App {
             focus,
             context_selected: 0,
             context_offset: 0,
+            bundle_context: loaded.bundle_context,
             selected_media: ListingMedia::default(),
             context_items: Vec::new(),
-            status,
+            status: loaded.status,
             header: HEADER_CONTRACT,
             palette_open: false,
             palette_query: String::new(),
@@ -183,6 +192,11 @@ impl App {
 
     pub(crate) fn selected_listing(&self) -> Option<&Listing> {
         self.listings.get(self.selected)
+    }
+
+    pub(crate) fn selected_bundle(&self) -> Option<&EvidenceBundle> {
+        let listing = self.selected_listing()?;
+        bundle_lookup_keys(listing).find_map(|key| self.bundle_context.get(key))
     }
 
     pub(crate) fn selected_media(&self) -> &ListingMedia {
@@ -269,12 +283,8 @@ impl App {
         self.preview.sync(target, area, empty_message);
     }
 
-    pub(crate) fn preview_view(&self) -> PreviewView {
+    pub(crate) fn preview_view(&self) -> PreviewView<'_> {
         self.preview.view()
-    }
-
-    pub(crate) fn preview_protocol_mut(&mut self) -> Option<&mut ThreadProtocol> {
-        self.preview.protocol_mut()
     }
 
     pub(crate) fn on_key(&mut self, key: KeyEvent) {
@@ -678,13 +688,14 @@ impl App {
     }
 
     fn refresh_all(&mut self) {
-        let (listings, status) = load_ranked_listings();
-        self.listings = listings;
+        let loaded = load_ranked_listings();
+        self.listings = loaded.listings;
+        self.bundle_context = loaded.bundle_context;
         if self.selected >= self.listings.len() {
             self.selected = self.listings.len().saturating_sub(1);
         }
         self.rebuild_context_cache(true);
-        self.status = status;
+        self.status = loaded.status;
         self.refresh_sources();
     }
 
@@ -816,13 +827,14 @@ fn build_context_media_items(listing: &Listing, media: &ListingMedia) -> Vec<Con
     items
 }
 
-fn load_ranked_listings() -> (Vec<Listing>, String) {
+fn load_ranked_listings() -> LoadedListings {
     let paths = let_sdk::paths::paths();
     let db_path = paths.derived.database;
 
     match IntelligenceDb::open_readonly(&db_path).and_then(|db| db.load_bundles()) {
         Ok(bundles) if !bundles.is_empty() => {
             let mut listings = bundles.iter().map(listing_from_bundle).collect::<Vec<_>>();
+            let bundle_context = bundle_context_index(&bundles);
             let listing_count = listings.len();
             listings.sort_by(|a, b| {
                 let left = a.assessed_score.unwrap_or(0.0);
@@ -831,14 +843,15 @@ fn load_ranked_listings() -> (Vec<Listing>, String) {
                     .partial_cmp(&left)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            return (
+            return LoadedListings {
                 listings,
-                format!(
+                bundle_context,
+                status: format!(
                     "loaded {} evidence bundles from {}",
                     listing_count,
                     db_path.display()
                 ),
-            );
+            };
         }
         Ok(_) => {}
         Err(_) => {}
@@ -861,20 +874,42 @@ fn load_ranked_listings() -> (Vec<Listing>, String) {
                     .partial_cmp(&left)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            (
+            LoadedListings {
                 listings,
-                format!(
+                bundle_context: HashMap::new(),
+                status: format!(
                     "loaded {} listings from {}",
                     listing_count,
                     db_path.display()
                 ),
-            )
+            }
         }
-        Err(error) => (
-            Vec::new(),
-            format!("load failed: {} ({})", error.message, db_path.display()),
-        ),
+        Err(error) => LoadedListings {
+            listings: Vec::new(),
+            bundle_context: HashMap::new(),
+            status: format!("load failed: {} ({})", error.message, db_path.display()),
+        },
     }
+}
+
+fn bundle_context_index(bundles: &[EvidenceBundle]) -> HashMap<String, EvidenceBundle> {
+    let mut index = HashMap::new();
+    for bundle in bundles {
+        index.insert(bundle.entity_id.clone(), bundle.clone());
+        index.insert(bundle.rightmove_id.clone(), bundle.clone());
+        index.insert(format!("rightmove:{}", bundle.rightmove_id), bundle.clone());
+    }
+    index
+}
+
+fn bundle_lookup_keys(listing: &Listing) -> impl Iterator<Item = &str> {
+    [
+        Some(listing.id.as_str()),
+        listing.portal_ids.rightmove.as_deref(),
+        listing.id.strip_prefix("rightmove:"),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 fn initial_selection(listings: &[Listing], requested_id: Option<&str>) -> usize {
@@ -914,11 +949,7 @@ fn listing_from_bundle(bundle: &EvidenceBundle) -> Listing {
         .and_then(|candidate| candidate.longitude)
         .or(bundle.rightmove.longitude)
         .unwrap_or_default();
-    let assessed_score = bundle
-        .assessment
-        .as_ref()
-        .and_then(|assessment| assessment.assessment.get("score"))
-        .and_then(serde_json::Value::as_f64);
+    let assessed_score = bundle.assessment.as_ref().and_then(assessment_score);
 
     Listing {
         id: bundle.rightmove_id.clone(),
@@ -1013,6 +1044,13 @@ fn listing_from_bundle(bundle: &EvidenceBundle) -> Listing {
         status: ListingStatus::Active,
         notion_page_id: None,
     }
+}
+
+fn assessment_score(record: &AssessmentRecord) -> Option<f64> {
+    ["score", "assessedScore", "assessed_score"]
+        .iter()
+        .find_map(|key| record.assessment.get(*key))
+        .and_then(serde_json::Value::as_f64)
 }
 
 fn remote_local_asset_from_media(
@@ -1326,19 +1364,26 @@ fn reveal_in_finder(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use let_sdk::intelligence::{
+        AddressEvidence, AssessmentRecord, BroadbandEvidence, ConfidenceLevel, DescriptionEvidence,
+        EvidenceBundle, InspectDepth, MediaEvidence, RefreshPolicy, RightmoveEvidence,
+        SectionState, SectionStatus,
+    };
     use let_sdk::schema::listing::{
         Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingStatus,
         MapViews, PortalIds, RemoteLocalAsset,
     };
     use ratatui::{Terminal, backend::TestBackend, style::Color};
+    use serde_json::json;
 
     use super::{
         App, ContextMediaItem, FocusPane, ListingMedia, build_context_media_items,
-        build_media_index,
+        build_media_index, bundle_context_index, listing_from_bundle,
     };
     use crate::preview::{PreviewAssetKind, PreviewController};
     use crate::theme::Theme;
@@ -1430,6 +1475,115 @@ mod tests {
         app
     }
 
+    fn app_with_bundle(bundle: EvidenceBundle) -> App {
+        let mut app = App::with_preview(PreviewController::disabled("test preview"));
+        app.listings = vec![listing_from_bundle(&bundle)];
+        app.bundle_context = bundle_context_index(&[bundle]);
+        app.selected = 0;
+        app.rebuild_context_cache(true);
+        app
+    }
+
+    fn sample_evidence_bundle() -> EvidenceBundle {
+        let mut sections = BTreeMap::new();
+        sections.insert(
+            "rightmove".to_owned(),
+            SectionState::ok("Rightmove evidence captured", ConfidenceLevel::Exact),
+        );
+        sections.insert(
+            "media".to_owned(),
+            SectionState::ok(
+                "20 media assets extracted; 18 cached locally",
+                ConfidenceLevel::Probable,
+            ),
+        );
+        sections.insert(
+            "assessment".to_owned(),
+            SectionState::ok("agent assessment is saved", ConfidenceLevel::Exact),
+        );
+
+        EvidenceBundle {
+            entity_id: "rightmove:900001".to_owned(),
+            rightmove_id: "900001".to_owned(),
+            url: "https://www.rightmove.co.uk/properties/900001".to_owned(),
+            generated_at: "2026-06-21T10:00:00Z".to_owned(),
+            depth: InspectDepth::Standard,
+            refresh: RefreshPolicy::None,
+            sections,
+            source_snapshots: Vec::new(),
+            rightmove: RightmoveEvidence {
+                rightmove_id: "900001".to_owned(),
+                url: "https://www.rightmove.co.uk/properties/900001".to_owned(),
+                page_status: "active".to_owned(),
+                fetched_at: "2026-06-21T10:00:00Z".to_owned(),
+                content_hash: "hash".to_owned(),
+                title: Some("2 bedroom flat".to_owned()),
+                address: Some("1 Test Street".to_owned()),
+                postcode: Some("TN1 1AA".to_owned()),
+                display_price: Some("£1,750 pcm".to_owned()),
+                price_pcm: Some(1750),
+                bedrooms: Some(2),
+                bathrooms: Some(1),
+                property_type: Some("Flat".to_owned()),
+                agent_name: Some("Example Agent".to_owned()),
+                agent_phone: Some("020 0000 0000".to_owned()),
+                latitude: Some(51.2),
+                longitude: Some(0.2),
+                pin_type: None,
+                listed_date: Some("2026-06-01".to_owned()),
+                available_date: Some("2026-07-01".to_owned()),
+                deposit: Some(2019),
+                description: DescriptionEvidence {
+                    raw_html: String::new(),
+                    text: "Good light and practical layout.".to_owned(),
+                    key_features: vec!["balcony".to_owned()],
+                    normalized_text: "good light and practical layout".to_owned(),
+                },
+                media: Vec::new(),
+            },
+            address: AddressEvidence {
+                candidates: Vec::new(),
+                selected: None,
+                status: SectionStatus::Ok,
+                confidence: ConfidenceLevel::Probable,
+                warnings: Vec::new(),
+            },
+            facts: Vec::new(),
+            broadband: Some(BroadbandEvidence {
+                postcode: "TN1 1AA".to_owned(),
+                postcode_display: Some("TN1 1AA".to_owned()),
+                outward: Some("TN1".to_owned()),
+                area: Some("Tonbridge".to_owned()),
+                gigabit_availability: Some(100.0),
+                pct_over_300mbps: Some(97.0),
+                ufbb_availability: None,
+                sfbb_availability: None,
+            }),
+            epc: None,
+            claims: Vec::new(),
+            verifications: Vec::new(),
+            media: MediaEvidence::default(),
+            assessment: Some(AssessmentRecord::new(
+                "rightmove:900001".to_owned(),
+                json!({
+                    "recommendation": "stretch_view",
+                    "confidence": "medium_high",
+                    "score": 82,
+                    "summary": "Worth viewing if the photos hold up.",
+                    "positives": ["good station access", "usable layout"],
+                    "risks": ["needs photo review"],
+                    "nextActions": ["call agent"],
+                    "familyFit": "workable for the household",
+                    "evidenceGaps": ["floor area"]
+                }),
+                "2026-06-21T11:00:00Z".to_owned(),
+            )),
+            corrections: Vec::new(),
+            next_actions: Vec::new(),
+            flags: Vec::new(),
+        }
+    }
+
     #[test]
     fn contact_sheet_is_first_context_media_item() {
         let listing = sample_listing(1);
@@ -1482,6 +1636,27 @@ mod tests {
         assert_eq!(media.contact_sheet.as_deref(), Some(sheet_path.as_path()));
         assert_eq!(media.images, vec![photo_path]);
         fs::remove_dir_all(test_dir).expect("remove test media dir");
+    }
+
+    #[test]
+    fn context_panel_renders_saved_assessment_and_evidence_details() {
+        let mut app = app_with_bundle(sample_evidence_bundle());
+        let theme = Theme::default();
+        let backend = TestBackend::new(240, 60);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        terminal
+            .draw(|frame| crate::ui::render(frame, &mut app, &theme))
+            .expect("render context");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("assessment"));
+        assert!(text.contains("stretch_view"));
+        assert!(text.contains("medium_high"));
+        assert!(text.contains("Worth viewing"));
+        assert!(text.contains("rightmove"));
+        assert!(text.contains("media"));
+        assert!(text.contains("20 media assets"));
     }
 
     #[test]
@@ -1559,6 +1734,24 @@ mod tests {
     }
 
     #[test]
+    fn rapid_media_navigation_renders_one_selected_row() {
+        let mut app = app_with_context_media(30);
+        let theme = Theme::default();
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        for _ in 0..25 {
+            app.on_key(down_key());
+        }
+        terminal
+            .draw(|frame| crate::ui::render(frame, &mut app, &theme))
+            .expect("render rapid media navigation");
+
+        assert_eq!(app.context_selected_index(), 25);
+        assert_eq!(selected_background_rows(&terminal), 1);
+    }
+
+    #[test]
     fn opens_and_closes_palette() {
         let mut app = App::default();
         app.on_key(KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE));
@@ -1603,5 +1796,17 @@ mod tests {
         (0..buffer.area.height)
             .filter(|y| (0..buffer.area.width).any(|x| buffer[(x, *y)].bg == Color::Cyan))
             .count()
+    }
+
+    fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer();
+        let mut output = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                output.push_str(buffer[(x, y)].symbol());
+            }
+            output.push('\n');
+        }
+        output
     }
 }

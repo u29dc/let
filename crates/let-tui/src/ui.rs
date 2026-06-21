@@ -1,16 +1,15 @@
 #![forbid(unsafe_code)]
 
-use image::imageops::FilterType;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
 };
-use ratatui_image::{Resize as RatatuiResize, StatefulImage as PreviewImage};
 
 use crate::{
     app::{App, FocusPane},
+    preview::PreviewGraphicsClear,
     theme::Theme,
 };
 
@@ -315,6 +314,7 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme:
     }
 
     let media_items = app.context_items();
+    frame.render_widget(Clear, layout.media);
     let media_rows = media_items
         .iter()
         .map(|item| {
@@ -554,15 +554,13 @@ fn render_preview_panel(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme:
     frame.render_widget(block, area);
     frame.render_widget(Clear, inner);
 
-    if preview.ready
-        && let Some(protocol) = app.preview_protocol_mut()
-    {
-        frame.render_stateful_widget(
-            PreviewImage::new().resize(RatatuiResize::Scale(Some(FilterType::CatmullRom))),
-            inner,
-            protocol,
-        );
+    if let Some(protocol) = preview.protocol {
+        frame.render_widget(protocol, inner);
         return;
+    }
+
+    if preview.clear_graphics {
+        frame.render_widget(PreviewGraphicsClear, inner);
     }
 
     if preview.lines.is_empty() {
@@ -598,15 +596,270 @@ fn build_context_summary_lines(app: &App, theme: &Theme, compact: bool) -> Vec<L
     let media_count = app.context_items().len();
 
     lines.push(kv_line("id", id, theme));
-    lines.push(kv_line("rightmove", truncate(&listing.url, 96), theme));
+    append_listing_detail_lines(&mut lines, listing, cache, media_count, theme, compact);
+
+    if let Some(bundle) = app.selected_bundle() {
+        append_bundle_assessment_lines(&mut lines, bundle, listing.assessed_score, theme, compact);
+        append_bundle_evidence_lines(&mut lines, bundle, theme, compact);
+    } else {
+        append_legacy_assessment_lines(&mut lines, listing, theme, compact);
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("tab ", theme.section_heading),
+        Span::styled("switch pane ", theme.footer_meta),
+        Span::styled("enter ", theme.section_heading),
+        Span::styled("quicklook media ", theme.footer_meta),
+        Span::styled("m ", theme.section_heading),
+        Span::styled("cycle preview mode", theme.footer_meta),
+    ]));
+    lines
+}
+
+fn append_listing_detail_lines(
+    lines: &mut Vec<Line<'static>>,
+    listing: &let_sdk::schema::listing::Listing,
+    cache: String,
+    media_count: usize,
+    theme: &Theme,
+    compact: bool,
+) {
+    let max = if compact { 112 } else { 180 };
+    let price = if listing.price_display.trim().is_empty() {
+        format!("£{} pcm", listing.price)
+    } else {
+        listing.price_display.clone()
+    };
+    let deposit = listing
+        .lettings
+        .deposit
+        .map(|value| format!("£{value}"))
+        .unwrap_or_else(|| "--".to_owned());
+    let available = listing.lettings.available_date.as_deref().unwrap_or("--");
+    let epc = listing
+        .epc_rating
+        .as_ref()
+        .map(epc_band_label)
+        .or_else(|| listing.epc.remote.clone())
+        .unwrap_or_else(|| "--".to_owned());
+    let floor_area = listing
+        .floor_area_sqm
+        .map(|value| format!("{value:.0} sqm"))
+        .unwrap_or_else(|| "--".to_owned());
+    let broadband = listing
+        .gigabit_availability
+        .map(|value| format!("{value:.0}% gigabit"))
+        .unwrap_or_else(|| "--".to_owned());
+
     lines.push(kv_line(
-        "maps",
-        truncate(&listing.google_maps_url, 96),
+        "links",
+        truncate(
+            &format!(
+                "rightmove: {} / maps: {}",
+                listing.url, listing.google_maps_url
+            ),
+            max,
+        ),
         theme,
     ));
-    lines.push(kv_line("cache", truncate(&cache, 96), theme));
-    lines.push(kv_line("media items", media_count.to_string(), theme));
+    lines.push(kv_line(
+        "price/deposit",
+        format!("{price} / {deposit}"),
+        theme,
+    ));
+    lines.push(kv_line(
+        "home",
+        format!(
+            "{} bed / {} bath / {} / available {}",
+            listing.bedrooms, listing.bathrooms, listing.property_type, available
+        ),
+        theme,
+    ));
+    lines.push(kv_line("address", truncate(&listing.address, max), theme));
+    lines.push(kv_line(
+        "evidence",
+        format!("{epc} / {floor_area} / {broadband}"),
+        theme,
+    ));
+    lines.push(kv_line(
+        "cache/media",
+        truncate(&format!("{cache} / {media_count} items"), max),
+        theme,
+    ));
 
+    if let Some(name) = listing.agent.name.as_deref() {
+        let phone = listing.agent.phone.as_deref().unwrap_or("--");
+        lines.push(kv_line(
+            "agent",
+            truncate(&format!("{name} / {phone}"), max),
+            theme,
+        ));
+    }
+}
+
+fn append_bundle_assessment_lines(
+    lines: &mut Vec<Line<'static>>,
+    bundle: &let_sdk::intelligence::EvidenceBundle,
+    assessed_score: Option<f64>,
+    theme: &Theme,
+    compact: bool,
+) {
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "assessment",
+        theme.section_heading,
+    )));
+
+    let Some(record) = bundle.assessment.as_ref() else {
+        lines.push(kv_line("status", "no saved assessment", theme));
+        return;
+    };
+
+    let normalized = &record.normalized_assessment;
+    let max = if compact { 140 } else { 220 };
+    let recommendation = normalized
+        .recommendation
+        .as_deref()
+        .unwrap_or("--")
+        .to_owned();
+    let confidence = normalized.confidence.as_deref().unwrap_or("--");
+    let score = assessed_score
+        .map(|value| format!("{value:.0}"))
+        .unwrap_or_else(|| "--".to_owned());
+
+    lines.push(kv_line(
+        "recommendation",
+        format!("{recommendation} / {confidence} / score {score}"),
+        theme,
+    ));
+    lines.push(kv_line("saved", record.saved_at.clone(), theme));
+    if let Some(summary) = normalized.summary.as_deref() {
+        lines.push(kv_line("summary", truncate(summary, max), theme));
+    }
+    if let Some(family_fit) = normalized.family_fit.as_deref() {
+        lines.push(kv_line("family", truncate(family_fit, max), theme));
+    }
+    if let Some(area_notes) = normalized.area_notes.as_deref() {
+        lines.push(kv_line("area", truncate(area_notes, max), theme));
+    }
+    if let Some(commute_notes) = normalized.commute_notes.as_deref() {
+        lines.push(kv_line("commute", truncate(commute_notes, max), theme));
+    }
+    append_list_kv(lines, "positives", &normalized.positives, theme, compact);
+    append_list_kv(lines, "risks", &normalized.risks, theme, compact);
+    append_list_kv(lines, "tradeoffs", &normalized.tradeoffs, theme, compact);
+    if normalized.next_actions.is_empty() {
+        append_list_kv(lines, "next", &bundle.next_actions, theme, compact);
+    } else {
+        append_list_kv(lines, "next", &normalized.next_actions, theme, compact);
+    }
+    append_list_kv(lines, "gaps", &normalized.evidence_gaps, theme, compact);
+    append_list_kv(lines, "warnings", &normalized.warnings, theme, compact);
+}
+
+fn append_bundle_evidence_lines(
+    lines: &mut Vec<Line<'static>>,
+    bundle: &let_sdk::intelligence::EvidenceBundle,
+    theme: &Theme,
+    compact: bool,
+) {
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("evidence", theme.section_heading)));
+    let max = if compact { 120 } else { 180 };
+    for section in [
+        "rightmove",
+        "description",
+        "address",
+        "facts",
+        "broadband",
+        "epc",
+        "media",
+        "verifications",
+        "assessment",
+    ] {
+        if let Some(state) = bundle.sections.get(section) {
+            lines.push(kv_line(
+                section,
+                truncate(
+                    &format!("{} / {}", section_status_label(state.status), state.summary),
+                    max,
+                ),
+                theme,
+            ));
+        }
+    }
+
+    lines.push(kv_line(
+        "media",
+        format!(
+            "{} photos / {} local / contact sheet {}",
+            bundle.media.photos.len(),
+            local_media_count(bundle),
+            bundle
+                .media
+                .contact_sheet
+                .as_ref()
+                .map(|sheet| sheet.status.as_str())
+                .unwrap_or("--")
+        ),
+        theme,
+    ));
+
+    if let Some(broadband) = bundle.broadband.as_ref() {
+        let gigabit = broadband
+            .gigabit_availability
+            .map(|value| format!("{value:.0}%"))
+            .unwrap_or_else(|| "--".to_owned());
+        let over_300 = broadband
+            .pct_over_300mbps
+            .map(|value| format!("{value:.0}% over 300mbps"))
+            .unwrap_or_else(|| "--".to_owned());
+        lines.push(kv_line(
+            "broadband",
+            format!("{gigabit} gigabit / {over_300}"),
+            theme,
+        ));
+    }
+
+    if let Some(epc) = bundle.epc.as_ref() {
+        let rating = epc.rating.as_deref().unwrap_or("--");
+        let floor_area = epc
+            .floor_area_sqm
+            .map(|value| format!("{value:.0} sqm"))
+            .unwrap_or_else(|| "--".to_owned());
+        let match_label = if epc.address_match {
+            "address match"
+        } else {
+            "address mismatch"
+        };
+        lines.push(kv_line(
+            "epc",
+            truncate(&format!("{rating} / {floor_area} / {match_label}"), max),
+            theme,
+        ));
+    }
+
+    if !bundle.verifications.is_empty() {
+        lines.push(kv_line("verified", verification_summary(bundle), theme));
+    }
+    if !bundle.flags.is_empty() {
+        let flags = bundle
+            .flags
+            .iter()
+            .take(if compact { 2 } else { 4 })
+            .map(|flag| format!("{}: {}", flag.severity, flag.summary))
+            .collect::<Vec<_>>();
+        append_list_kv(lines, "flags", &flags, theme, compact);
+    }
+}
+
+fn append_legacy_assessment_lines(
+    lines: &mut Vec<Line<'static>>,
+    listing: &let_sdk::schema::listing::Listing,
+    theme: &Theme,
+    compact: bool,
+) {
     if let Some(assessment) = &listing.assessment {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -628,43 +881,14 @@ fn build_context_summary_lines(app: &App, theme: &Theme, compact: bool) -> Vec<L
             format!("{:?}", assessment.family_suitability).to_lowercase(),
             theme,
         ));
-
-        if compact {
-            lines.push(kv_line(
-                "reasoning",
-                truncate(&assessment.reasoning, 156),
-                theme,
-            ));
-            if let Some(tradeoffs) = &assessment.tradeoffs {
-                lines.push(kv_line("tradeoffs", truncate(tradeoffs, 156), theme));
-            }
-        } else {
-            lines.push(kv_line(
-                "score adjustment",
-                format!("{:.1}", assessment.score_adjustment),
-                theme,
-            ));
-            lines.push(kv_line(
-                "light/space",
-                truncate(&assessment.light_and_space, 220),
-                theme,
-            ));
-            lines.push(kv_line(
-                "photo analysis",
-                truncate(&assessment.photo_analysis, 220),
-                theme,
-            ));
-            lines.push(kv_line(
-                "reasoning",
-                truncate(&assessment.reasoning, 220),
-                theme,
-            ));
-            if let Some(tradeoffs) = &assessment.tradeoffs {
-                lines.push(kv_line("tradeoffs", truncate(tradeoffs, 220), theme));
-            }
-            if let Some(neighborhood) = &assessment.neighborhood_analysis {
-                lines.push(kv_line("neighborhood", truncate(neighborhood, 220), theme));
-            }
+        let max = if compact { 156 } else { 220 };
+        lines.push(kv_line(
+            "reasoning",
+            truncate(&assessment.reasoning, max),
+            theme,
+        ));
+        if let Some(tradeoffs) = &assessment.tradeoffs {
+            lines.push(kv_line("tradeoffs", truncate(tradeoffs, max), theme));
         }
     }
 
@@ -678,17 +902,73 @@ fn build_context_summary_lines(app: &App, theme: &Theme, compact: bool) -> Vec<L
             )));
         }
     }
+}
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("tab ", theme.section_heading),
-        Span::styled("switch pane ", theme.footer_meta),
-        Span::styled("enter ", theme.section_heading),
-        Span::styled("quicklook media ", theme.footer_meta),
-        Span::styled("m ", theme.section_heading),
-        Span::styled("cycle preview mode", theme.footer_meta),
-    ]));
-    lines
+fn append_list_kv(
+    lines: &mut Vec<Line<'static>>,
+    key: &str,
+    values: &[String],
+    theme: &Theme,
+    compact: bool,
+) {
+    if values.is_empty() {
+        return;
+    }
+    let limit = if compact { 2 } else { 4 };
+    let max = if compact { 150 } else { 220 };
+    let mut text = values
+        .iter()
+        .take(limit)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("; ");
+    if values.len() > limit {
+        text.push_str("; ...");
+    }
+    lines.push(kv_line(key, truncate(&text, max), theme));
+}
+
+fn local_media_count(bundle: &let_sdk::intelligence::EvidenceBundle) -> usize {
+    bundle
+        .media
+        .photos
+        .iter()
+        .chain(bundle.media.floorplans.iter())
+        .chain(bundle.media.epc_graphs.iter())
+        .chain(bundle.media.maps.iter())
+        .filter(|item| item.local_path.is_some())
+        .count()
+}
+
+fn verification_summary(bundle: &let_sdk::intelligence::EvidenceBundle) -> String {
+    let mut supported = 0usize;
+    let mut contradicted = 0usize;
+    let mut unknown = 0usize;
+    let mut insufficient = 0usize;
+
+    for verification in &bundle.verifications {
+        match verification.status {
+            let_sdk::intelligence::VerificationStatus::Supported => supported += 1,
+            let_sdk::intelligence::VerificationStatus::Contradicted => contradicted += 1,
+            let_sdk::intelligence::VerificationStatus::Unknown => unknown += 1,
+            let_sdk::intelligence::VerificationStatus::InsufficientEvidence => insufficient += 1,
+        }
+    }
+
+    format!(
+        "{supported} supported / {contradicted} contradicted / {unknown} unknown / {insufficient} insufficient"
+    )
+}
+
+fn section_status_label(status: let_sdk::intelligence::SectionStatus) -> &'static str {
+    match status {
+        let_sdk::intelligence::SectionStatus::Ok => "ok",
+        let_sdk::intelligence::SectionStatus::Partial => "partial",
+        let_sdk::intelligence::SectionStatus::Degraded => "degraded",
+        let_sdk::intelligence::SectionStatus::Blocked => "blocked",
+        let_sdk::intelligence::SectionStatus::Skipped => "skipped",
+        let_sdk::intelligence::SectionStatus::Stale => "stale",
+    }
 }
 
 fn kv_line(key: &str, value: impl Into<String>, theme: &Theme) -> Line<'static> {

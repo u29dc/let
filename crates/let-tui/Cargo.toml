@@ -17,6 +17,7 @@ let-sdk = { path = "../let-sdk" }
 chrono = { workspace = true }
 crossterm = { workspace = true }
 image = { workspace = true }
+base64-simd = { workspace = true }
 ratatui = { workspace = true }
 ratatui-image = { workspace = true }
 secrecy = { workspace = true }
