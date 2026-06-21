@@ -8,14 +8,14 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use let_sdk::intelligence::{AssessmentRecord, EvidenceBundle, IntelligenceDb};
 use let_sdk::load_listings_file;
 use let_sdk::schema::listing::{
     Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingImage,
     ListingStatus, MapViews, PortalIds, RemoteLocalAsset,
 };
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 
 use crate::preview::{PreviewAssetKind, PreviewController, PreviewTarget, PreviewView};
 use crate::theme::{HEADER_CONTRACT, HeaderContract};
@@ -99,6 +99,10 @@ pub(crate) struct App {
     focus: FocusPane,
     context_selected: usize,
     context_offset: usize,
+    context_summary_offset: usize,
+    context_summary_max_offset: usize,
+    context_summary_page_size: usize,
+    context_summary_area: Option<Rect>,
     bundle_context: HashMap<String, EvidenceBundle>,
     selected_media: ListingMedia,
     context_items: Vec<ContextMediaItem>,
@@ -139,6 +143,10 @@ impl App {
             focus,
             context_selected: 0,
             context_offset: 0,
+            context_summary_offset: 0,
+            context_summary_max_offset: 0,
+            context_summary_page_size: 1,
+            context_summary_area: None,
             bundle_context: loaded.bundle_context,
             selected_media: ListingMedia::default(),
             context_items: Vec::new(),
@@ -270,6 +278,27 @@ impl App {
         self.context_offset = offset;
     }
 
+    pub(crate) fn context_summary_scroll_offset(&self) -> u16 {
+        self.context_summary_offset.min(u16::MAX as usize) as u16
+    }
+
+    pub(crate) fn context_summary_scroll_position(&self) -> (usize, usize) {
+        (self.context_summary_offset, self.context_summary_max_offset)
+    }
+
+    pub(crate) fn set_context_summary_viewport(
+        &mut self,
+        area: Rect,
+        content_rows: usize,
+        viewport_rows: usize,
+    ) {
+        self.context_summary_area = Some(area);
+        let visible_rows = viewport_rows.saturating_sub(2).max(1);
+        self.context_summary_page_size = visible_rows.saturating_sub(2).max(1);
+        self.context_summary_max_offset = content_rows.saturating_sub(viewport_rows);
+        self.clamp_context_summary_scroll();
+    }
+
     pub(crate) fn preview_mode_label(&self) -> &'static str {
         self.preview.mode().label()
     }
@@ -318,6 +347,12 @@ impl App {
                 FocusPane::Listings => self.select_last(),
                 FocusPane::Context => self.context_last(),
             },
+            KeyCode::PageDown => {
+                self.scroll_context_summary_down(self.context_summary_page_size);
+            }
+            KeyCode::PageUp => {
+                self.scroll_context_summary_up(self.context_summary_page_size);
+            }
             KeyCode::Char('m') | KeyCode::Char('M') => self.cycle_preview_mode(),
             KeyCode::Char('r') | KeyCode::Char('R') => self.refresh_all(),
             KeyCode::Char(':') => self.open_palette(),
@@ -325,6 +360,18 @@ impl App {
                 FocusPane::Listings => self.open_selected_on_rightmove(),
                 FocusPane::Context => self.quicklook_selected_context_media(),
             },
+            _ => {}
+        }
+    }
+
+    pub(crate) fn on_mouse(&mut self, mouse: MouseEvent) {
+        if !self.mouse_over_context_summary(mouse.column, mouse.row) {
+            return;
+        }
+
+        match mouse.kind {
+            MouseEventKind::ScrollDown => self.scroll_context_summary_down(3),
+            MouseEventKind::ScrollUp => self.scroll_context_summary_up(3),
             _ => {}
         }
     }
@@ -560,6 +607,28 @@ impl App {
         }
     }
 
+    fn scroll_context_summary_down(&mut self, amount: usize) {
+        self.context_summary_offset = self
+            .context_summary_offset
+            .saturating_add(amount)
+            .min(self.context_summary_max_offset);
+    }
+
+    fn scroll_context_summary_up(&mut self, amount: usize) {
+        self.context_summary_offset = self.context_summary_offset.saturating_sub(amount);
+    }
+
+    fn clamp_context_summary_scroll(&mut self) {
+        self.context_summary_offset = self
+            .context_summary_offset
+            .min(self.context_summary_max_offset);
+    }
+
+    fn mouse_over_context_summary(&self, column: u16, row: u16) -> bool {
+        self.context_summary_area
+            .is_some_and(|area| area.contains(Position { x: column, y: row }))
+    }
+
     fn open_selected_on_rightmove(&mut self) {
         let Some(listing) = self.selected_listing() else {
             self.status = "no listing selected".to_owned();
@@ -720,6 +789,9 @@ impl App {
         if reset_selection {
             self.context_selected = 0;
             self.context_offset = 0;
+            self.context_summary_offset = 0;
+            self.context_summary_max_offset = 0;
+            self.context_summary_page_size = 1;
         }
         self.clamp_context_selection();
     }
@@ -1368,17 +1440,17 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use let_sdk::intelligence::{
         AddressEvidence, AssessmentRecord, BroadbandEvidence, ConfidenceLevel, DescriptionEvidence,
-        EvidenceBundle, InspectDepth, MediaEvidence, RefreshPolicy, RightmoveEvidence,
-        SectionState, SectionStatus,
+        EvidenceBundle, InspectDepth, IntelligenceDb, MediaEvidence, RefreshPolicy,
+        RightmoveEvidence, SectionState, SectionStatus,
     };
     use let_sdk::schema::listing::{
         Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingStatus,
         MapViews, PortalIds, RemoteLocalAsset,
     };
-    use ratatui::{Terminal, backend::TestBackend, style::Color};
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Color};
     use serde_json::json;
 
     use super::{
@@ -1657,6 +1729,158 @@ mod tests {
         assert!(text.contains("rightmove"));
         assert!(text.contains("media"));
         assert!(text.contains("20 media assets"));
+    }
+
+    #[test]
+    fn context_panel_renders_assessment_loaded_from_repository() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "let-tui-assessment-hydration-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time after unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&test_dir).expect("create test db dir");
+        let db_path = test_dir.join("let.db");
+        let mut bundle = sample_evidence_bundle();
+        bundle.assessment = None;
+        bundle.sections.insert(
+            "assessment".to_owned(),
+            SectionState::skipped("no agent assessment saved"),
+        );
+        bundle.next_actions.push(
+            "save the agent assessment with `let assess save <id> <assessment-json>`".to_owned(),
+        );
+
+        let mut db = IntelligenceDb::open(&db_path).expect("open db");
+        db.save_bundle(&bundle).expect("save bundle");
+        db.save_assessment(
+            &bundle.rightmove_id,
+            json!({
+                "recommendation": "stretch_view",
+                "confidence": "medium_high",
+                "summary": "Worth viewing if the photos hold up."
+            }),
+        )
+        .expect("save assessment");
+        let loaded = db
+            .load_bundle(&bundle.rightmove_id)
+            .expect("load bundle")
+            .expect("bundle exists");
+        drop(db);
+
+        let mut app = app_with_bundle(loaded);
+        let theme = Theme::default();
+        let backend = TestBackend::new(240, 60);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        terminal
+            .draw(|frame| crate::ui::render(frame, &mut app, &theme))
+            .expect("render context");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("stretch_view"));
+        assert!(text.contains("medium_high"));
+        assert!(text.contains("Worth viewing if the photos hold up."));
+        assert!(!text.contains("no saved assessment"));
+        assert!(!text.contains("let assess save"));
+        fs::remove_dir_all(test_dir).expect("remove test db dir");
+    }
+
+    #[test]
+    fn context_summary_page_keys_scroll_without_moving_media_selection() {
+        let mut app = app_with_context_media(14);
+        app.set_context_summary_viewport(Rect::new(120, 2, 58, 12), 40, 12);
+
+        app.on_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.context_selected_index(), 0);
+        assert_eq!(app.context_summary_scroll_position().0, 8);
+
+        app.on_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(app.context_selected_index(), 0);
+        assert_eq!(app.context_summary_scroll_position().0, 0);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_context_summary_when_pointer_is_over_it() {
+        let mut app = app_with_context_media(14);
+        app.set_context_summary_viewport(Rect::new(120, 2, 58, 12), 40, 12);
+
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 130,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.context_summary_scroll_position().0, 3);
+
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 20,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.context_summary_scroll_position().0, 3);
+
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 130,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.context_summary_scroll_position().0, 0);
+    }
+
+    #[test]
+    fn context_summary_scroll_reveals_long_assessment_content() {
+        let mut bundle = sample_evidence_bundle();
+        bundle.assessment = Some(AssessmentRecord::new(
+            bundle.entity_id.clone(),
+            json!({
+                "recommendation": "stretch_view",
+                "confidence": "medium_high",
+                "summary": "This is a deliberately long assessment summary with enough detail to wrap over multiple rendered lines in the context pane. It should stay readable through the summary scroll path instead of being truncated away.",
+                "positives": [
+                    "good station access",
+                    "workable layout",
+                    "cached media is available",
+                    "pricing is within range"
+                ],
+                "risks": [
+                    "risk one has enough words to wrap on a narrow context pane",
+                    "risk two also has enough words to wrap on a narrow context pane"
+                ],
+                "tradeoffs": [
+                    "tradeoff text should remain available after scrolling the assessment context"
+                ],
+                "evidenceGaps": [
+                    "tail marker TAIL_TOKEN_VISIBLE_AFTER_SCROLL"
+                ]
+            }),
+            "2026-06-21T11:00:00Z".to_owned(),
+        ));
+        let mut app = app_with_bundle(bundle);
+        app.focus = FocusPane::Context;
+        let theme = Theme::default();
+        let backend = TestBackend::new(120, 26);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        terminal
+            .draw(|frame| crate::ui::render(frame, &mut app, &theme))
+            .expect("render initial context");
+        assert!(!buffer_text(&terminal).contains("TAIL_TOKEN_VISIBLE_AFTER_SCROLL"));
+
+        let mut saw_tail = false;
+        for _ in 0..10 {
+            app.on_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+            terminal
+                .draw(|frame| crate::ui::render(frame, &mut app, &theme))
+                .expect("render scrolled context");
+            saw_tail |= buffer_text(&terminal).contains("TAIL_TOKEN_VISIBLE_AFTER_SCROLL");
+        }
+
+        assert!(saw_tail);
     }
 
     #[test]

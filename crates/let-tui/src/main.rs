@@ -11,7 +11,7 @@ use std::time::Duration;
 use app::App;
 use crossterm::{
     cursor::{Hide, Show},
-    event::{self, Event, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -32,11 +32,12 @@ fn main() -> AppResult<()> {
             .terminal
             .draw(|frame| ui::render(frame, &mut app, &theme))?;
 
-        if event::poll(Duration::from_millis(app.poll_timeout_ms()))?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            app.on_key(key);
+        if event::poll(Duration::from_millis(app.poll_timeout_ms()))? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
+                Event::Mouse(mouse) => app.on_mouse(mouse),
+                _ => {}
+            }
         }
     }
 
@@ -53,6 +54,7 @@ impl TerminalGuard {
         setup.enable_raw_mode()?;
         let mut stdout = io::stdout();
         setup.enter_alternate_screen(&mut stdout)?;
+        setup.enable_mouse_capture(&mut stdout)?;
         setup.hide_cursor(&mut stdout)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
@@ -65,7 +67,12 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            Show,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
     }
 }
 
@@ -73,6 +80,7 @@ impl Drop for TerminalGuard {
 struct TerminalSetupGuard {
     raw_mode: bool,
     alternate_screen: bool,
+    mouse_capture: bool,
     cursor_hidden: bool,
 }
 
@@ -89,6 +97,12 @@ impl TerminalSetupGuard {
         Ok(())
     }
 
+    fn enable_mouse_capture(&mut self, stdout: &mut Stdout) -> AppResult<()> {
+        execute!(stdout, EnableMouseCapture)?;
+        self.mouse_capture = true;
+        Ok(())
+    }
+
     fn hide_cursor(&mut self, stdout: &mut Stdout) -> AppResult<()> {
         execute!(stdout, Hide)?;
         self.cursor_hidden = true;
@@ -98,6 +112,7 @@ impl TerminalSetupGuard {
     fn disarm(&mut self) {
         self.raw_mode = false;
         self.alternate_screen = false;
+        self.mouse_capture = false;
         self.cursor_hidden = false;
     }
 }
@@ -106,6 +121,9 @@ impl Drop for TerminalSetupGuard {
     fn drop(&mut self) {
         if self.cursor_hidden || self.alternate_screen {
             let _ = execute!(io::stdout(), Show);
+        }
+        if self.mouse_capture {
+            let _ = execute!(io::stdout(), DisableMouseCapture);
         }
         if self.alternate_screen {
             let _ = execute!(io::stdout(), LeaveAlternateScreen);

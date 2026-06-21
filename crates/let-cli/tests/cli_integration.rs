@@ -769,6 +769,59 @@ fn evidence_reads_seeded_bundle() {
 }
 
 #[test]
+fn evidence_hydrates_assessment_saved_after_bundle() {
+    let fixture = Fixture::new();
+    fixture.seed_bundle_record(&sample_bundle_variant(
+        "170448131",
+        "1 Example Street, Manchester",
+        "M1 1AA",
+        1250,
+        "2026-06-18T00:00:00.000Z",
+    ));
+    fixture.save_assessment(
+        "170448131",
+        json!({
+            "recommendation": "view",
+            "confidence": "high",
+            "summary": "Worth viewing."
+        }),
+    );
+
+    let output = fixture
+        .cmd()
+        .args(["evidence", "170448131", "--section", "assessment"])
+        .output()
+        .expect("run evidence");
+    assert_eq!(output.status.code(), Some(0));
+
+    let envelope = assert_single_json_envelope(&output);
+    assert_eq!(envelope["meta"]["tool"], "evidence");
+    assert_eq!(
+        envelope["data"]["bundle"]["assessment"]["normalizedAssessment"]["recommendation"],
+        "view"
+    );
+    assert_eq!(
+        envelope["data"]["bundle"]["sections"]["assessment"]["status"],
+        "ok"
+    );
+    assert_eq!(
+        envelope["data"]["bundle"]["sections"]["assessment"]["summary"],
+        "agent assessment is saved"
+    );
+    let has_stale_action = envelope
+        .pointer("/data/bundle/nextActions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|action| {
+            action
+                .as_str()
+                .is_some_and(|action| action.contains("let assess save"))
+        });
+    assert!(!has_stale_action);
+}
+
+#[test]
 fn evidence_reads_multiple_seeded_bundles() {
     let fixture = Fixture::new();
     fixture.seed_bundle_record(&sample_bundle_variant(

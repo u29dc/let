@@ -299,13 +299,26 @@ fn render_context_panel(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme:
     let layout = context_layout(area, app.preview_preferred_block_height(area.width));
     let summary_lines = build_context_summary_lines(app, theme, layout.compact_summary);
 
+    let content_rows = wrapped_line_count(&summary_lines, layout.summary.width);
+    app.set_context_summary_viewport(layout.summary, content_rows, layout.summary.height as usize);
+    let (summary_offset, summary_max_offset) = app.context_summary_scroll_position();
+    let summary_title = if summary_max_offset > 0 {
+        format!(
+            " context {}/{} pgup/pgdn ",
+            summary_offset.saturating_add(1),
+            summary_max_offset.saturating_add(1)
+        )
+    } else {
+        " context ".to_owned()
+    };
     let summary = Paragraph::new(summary_lines)
         .wrap(Wrap { trim: false })
+        .scroll((app.context_summary_scroll_offset(), 0))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(theme.border)
-                .title(Span::styled(" context ", theme.header_meta)),
+                .title(Span::styled(summary_title, theme.header_meta)),
         );
     frame.render_widget(summary, layout.summary);
 
@@ -543,6 +556,15 @@ fn context_layout(area: Rect, preview_block_height: u16) -> ContextLayout {
     }
 }
 
+fn wrapped_line_count(lines: &[Line<'_>], block_width: u16) -> usize {
+    let inner_width = block_width.saturating_sub(2).max(1) as usize;
+    lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(inner_width))
+        .sum::<usize>()
+        .saturating_add(2)
+}
+
 fn render_preview_panel(frame: &mut Frame<'_>, area: Rect, app: &mut App, theme: &Theme) {
     let inner = Block::default().borders(Borders::ALL).inner(area);
     app.sync_preview(inner);
@@ -611,6 +633,8 @@ fn build_context_summary_lines(app: &App, theme: &Theme, compact: bool) -> Vec<L
         Span::styled("switch pane ", theme.footer_meta),
         Span::styled("enter ", theme.section_heading),
         Span::styled("quicklook media ", theme.footer_meta),
+        Span::styled("pgup/pgdn ", theme.section_heading),
+        Span::styled("scroll context ", theme.footer_meta),
         Span::styled("m ", theme.section_heading),
         Span::styled("cycle preview mode", theme.footer_meta),
     ]));
@@ -703,7 +727,7 @@ fn append_bundle_assessment_lines(
     bundle: &let_sdk::intelligence::EvidenceBundle,
     assessed_score: Option<f64>,
     theme: &Theme,
-    compact: bool,
+    _compact: bool,
 ) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -717,7 +741,6 @@ fn append_bundle_assessment_lines(
     };
 
     let normalized = &record.normalized_assessment;
-    let max = if compact { 140 } else { 220 };
     let recommendation = normalized
         .recommendation
         .as_deref()
@@ -735,27 +758,27 @@ fn append_bundle_assessment_lines(
     ));
     lines.push(kv_line("saved", record.saved_at.clone(), theme));
     if let Some(summary) = normalized.summary.as_deref() {
-        lines.push(kv_line("summary", truncate(summary, max), theme));
+        lines.push(kv_line("summary", summary, theme));
     }
     if let Some(family_fit) = normalized.family_fit.as_deref() {
-        lines.push(kv_line("family", truncate(family_fit, max), theme));
+        lines.push(kv_line("family", family_fit, theme));
     }
     if let Some(area_notes) = normalized.area_notes.as_deref() {
-        lines.push(kv_line("area", truncate(area_notes, max), theme));
+        lines.push(kv_line("area", area_notes, theme));
     }
     if let Some(commute_notes) = normalized.commute_notes.as_deref() {
-        lines.push(kv_line("commute", truncate(commute_notes, max), theme));
+        lines.push(kv_line("commute", commute_notes, theme));
     }
-    append_list_kv(lines, "positives", &normalized.positives, theme, compact);
-    append_list_kv(lines, "risks", &normalized.risks, theme, compact);
-    append_list_kv(lines, "tradeoffs", &normalized.tradeoffs, theme, compact);
+    append_wrapped_list_kv(lines, "positives", &normalized.positives, theme);
+    append_wrapped_list_kv(lines, "risks", &normalized.risks, theme);
+    append_wrapped_list_kv(lines, "tradeoffs", &normalized.tradeoffs, theme);
     if normalized.next_actions.is_empty() {
-        append_list_kv(lines, "next", &bundle.next_actions, theme, compact);
+        append_wrapped_list_kv(lines, "next", &bundle.next_actions, theme);
     } else {
-        append_list_kv(lines, "next", &normalized.next_actions, theme, compact);
+        append_wrapped_list_kv(lines, "next", &normalized.next_actions, theme);
     }
-    append_list_kv(lines, "gaps", &normalized.evidence_gaps, theme, compact);
-    append_list_kv(lines, "warnings", &normalized.warnings, theme, compact);
+    append_wrapped_list_kv(lines, "gaps", &normalized.evidence_gaps, theme);
+    append_wrapped_list_kv(lines, "warnings", &normalized.warnings, theme);
 }
 
 fn append_bundle_evidence_lines(
@@ -926,6 +949,18 @@ fn append_list_kv(
         text.push_str("; ...");
     }
     lines.push(kv_line(key, truncate(&text, max), theme));
+}
+
+fn append_wrapped_list_kv(
+    lines: &mut Vec<Line<'static>>,
+    key: &str,
+    values: &[String],
+    theme: &Theme,
+) {
+    if values.is_empty() {
+        return;
+    }
+    lines.push(kv_line(key, values.join("; "), theme));
 }
 
 fn local_media_count(bundle: &let_sdk::intelligence::EvidenceBundle) -> usize {

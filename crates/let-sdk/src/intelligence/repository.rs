@@ -11,8 +11,9 @@ use serde_json::Value;
 
 use crate::errors::{ErrorCode, LetError, Result};
 use crate::intelligence::types::{
-    AssessmentRecord, CorrectionKind, CorrectionRecord, EvidenceBundle, ListingListFilters,
-    MediaItemEvidence, StoredAssessmentSummary, StoredListingSummary,
+    AssessmentRecord, ConfidenceLevel, CorrectionKind, CorrectionRecord, EvidenceBundle,
+    ListingListFilters, MediaItemEvidence, SectionState, StoredAssessmentSummary,
+    StoredListingSummary,
 };
 use crate::utils::time::now_iso;
 
@@ -89,35 +90,65 @@ impl IntelligenceDb {
     pub fn load_bundle(&self, id: &str) -> Result<Option<EvidenceBundle>> {
         let entity_id = normalize_entity_id(id);
         let mut statement = self.connection.prepare(
-            "SELECT bundle_json
-             FROM evidence_bundles
-             WHERE entity_id = ?1 OR rightmove_id = ?2
+            "SELECT b.bundle_json, a.assessment_json, a.saved_at
+             FROM evidence_bundles b
+             LEFT JOIN assessments a ON a.entity_id = b.entity_id
+             WHERE b.entity_id = ?1 OR b.rightmove_id = ?2
              LIMIT 1",
         )?;
 
         let raw = statement
-            .query_row(params![entity_id, id], |row| row.get::<_, String>(0))
+            .query_row(params![entity_id, id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
             .optional()?;
-        raw.map(|value| self.deserialize_bundle(&value)).transpose()
+        raw.map(|(bundle_json, assessment_json, assessment_saved_at)| {
+            self.deserialize_bundle(&bundle_json, assessment_json, assessment_saved_at)
+        })
+        .transpose()
     }
 
     pub fn load_bundles(&self) -> Result<Vec<EvidenceBundle>> {
         let mut statement = self.connection.prepare(
-            "SELECT bundle_json
-             FROM evidence_bundles
-             ORDER BY generated_at DESC",
+            "SELECT b.bundle_json, a.assessment_json, a.saved_at
+             FROM evidence_bundles b
+             LEFT JOIN assessments a ON a.entity_id = b.entity_id
+             ORDER BY b.generated_at DESC",
         )?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
         let mut bundles = Vec::new();
         for row in rows {
-            bundles.push(self.deserialize_bundle(&row?)?);
+            let (bundle_json, assessment_json, assessment_saved_at) = row?;
+            bundles.push(self.deserialize_bundle(
+                &bundle_json,
+                assessment_json,
+                assessment_saved_at,
+            )?);
         }
         Ok(bundles)
     }
 
-    fn deserialize_bundle(&self, raw: &str) -> Result<EvidenceBundle> {
+    fn deserialize_bundle(
+        &self,
+        raw: &str,
+        assessment_json: Option<String>,
+        assessment_saved_at: Option<String>,
+    ) -> Result<EvidenceBundle> {
         let mut bundle = deserialize_json::<EvidenceBundle>(raw, "evidence bundle")?;
         bundle.corrections = self.load_active_corrections(&bundle.entity_id)?;
+        let assessment =
+            joined_assessment(&bundle.entity_id, assessment_json, assessment_saved_at)?;
+        hydrate_bundle_assessment(&mut bundle, assessment);
         bundle.refresh_derived();
         Ok(bundle)
     }
@@ -476,14 +507,13 @@ impl IntelligenceDb {
         let mut summaries = Vec::new();
         for row in rows {
             let (bundle_json, assessment_json, assessment_saved_at, updated_at) = row?;
-            let bundle = self.deserialize_bundle(&bundle_json)?;
-            let assessment =
-                joined_assessment(&bundle.entity_id, assessment_json, assessment_saved_at)?
-                    .or_else(|| bundle.assessment.clone());
-            let summary = summary_from_bundle(&bundle, assessment.as_ref(), updated_at);
+            let bundle =
+                self.deserialize_bundle(&bundle_json, assessment_json, assessment_saved_at)?;
+            let assessment = bundle.assessment.as_ref();
+            let summary = summary_from_bundle(&bundle, assessment, updated_at);
             if matches_filters(
                 &summary,
-                assessment.as_ref().map(|record| &record.assessment),
+                assessment.map(|record| &record.assessment),
                 filters,
             ) {
                 summaries.push(summary);
@@ -519,11 +549,17 @@ impl IntelligenceDb {
             let assessment = AssessmentRecord::new(
                 entity_id.clone(),
                 deserialize_json(&assessment_json, "assessment")?,
-                saved_at,
+                saved_at.clone(),
             );
             let bundle = bundle_json
                 .as_deref()
-                .map(|raw| self.deserialize_bundle(raw))
+                .map(|raw| {
+                    self.deserialize_bundle(
+                        raw,
+                        Some(assessment_json.clone()),
+                        Some(saved_at.clone()),
+                    )
+                })
                 .transpose()?;
             let listing = match bundle.as_ref() {
                 Some(bundle) => summary_from_bundle(bundle, Some(&assessment), updated_at),
@@ -569,6 +605,26 @@ fn joined_assessment(
         deserialize_json(&assessment_json, "assessment")?,
         saved_at,
     )))
+}
+
+fn hydrate_bundle_assessment(bundle: &mut EvidenceBundle, assessment: Option<AssessmentRecord>) {
+    if let Some(assessment) = assessment {
+        bundle.assessment = Some(assessment);
+    }
+
+    if bundle.assessment.is_some() {
+        bundle.sections.insert(
+            "assessment".to_owned(),
+            SectionState::ok("agent assessment is saved", ConfidenceLevel::Exact),
+        );
+        bundle
+            .next_actions
+            .retain(|action| !is_save_assessment_next_action(action));
+    }
+}
+
+fn is_save_assessment_next_action(action: &str) -> bool {
+    action.contains("let assess save") || action.contains("save the agent assessment")
 }
 
 fn summary_from_bundle(
@@ -1193,7 +1249,8 @@ mod tests {
     use crate::intelligence::types::{
         AddressCandidateEvidence, AddressEvidence, BroadbandEvidence, ConfidenceLevel,
         ContactSheetEvidence, DescriptionEvidence, EvidenceBundle, InspectDepth,
-        ListingListFilters, MediaEvidence, RefreshPolicy, RightmoveEvidence, SectionStatus,
+        ListingListFilters, MediaEvidence, RefreshPolicy, RightmoveEvidence, SectionState,
+        SectionStatus,
     };
 
     use super::{
@@ -1363,6 +1420,69 @@ mod tests {
         assert_eq!(assessments.len(), 1);
         assert_eq!(assessments[0].listing.id, "170448131");
         assert_eq!(assessments[0].assessment["recommendation"], "view");
+    }
+
+    #[test]
+    fn repository_hydrates_saved_assessment_when_loading_bundles() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("let.db");
+        let mut db = IntelligenceDb::open(&path).expect("open db");
+        let mut bundle = test_bundle("170448131", "M1 1AA", 1250);
+        bundle.sections.insert(
+            "assessment".to_owned(),
+            SectionState::skipped("no agent assessment saved"),
+        );
+        bundle.next_actions.push(
+            "save the agent assessment with `let assess save <id> <assessment-json>`".to_owned(),
+        );
+        db.save_bundle(&bundle).expect("save bundle");
+        db.save_assessment(
+            "170448131",
+            json!({
+                "recommendation": "view",
+                "confidence": "high",
+                "summary": "Worth viewing."
+            }),
+        )
+        .expect("save assessment");
+
+        let loaded = db
+            .load_bundle("170448131")
+            .expect("load bundle")
+            .expect("bundle exists");
+        let assessment = loaded.assessment.as_ref().expect("assessment hydrated");
+        assert_eq!(
+            assessment.normalized_assessment.recommendation.as_deref(),
+            Some("view")
+        );
+        let section = loaded
+            .sections
+            .get("assessment")
+            .expect("assessment section");
+        assert_eq!(section.status, SectionStatus::Ok);
+        assert_eq!(section.summary, "agent assessment is saved");
+        assert!(
+            !loaded
+                .next_actions
+                .iter()
+                .any(|action| action.contains("let assess save"))
+        );
+
+        let loaded_from_list = db
+            .load_bundles()
+            .expect("load bundles")
+            .into_iter()
+            .find(|bundle| bundle.rightmove_id == "170448131")
+            .expect("bundle in load_bundles");
+        assert!(loaded_from_list.assessment.is_some());
+        assert_eq!(
+            loaded_from_list
+                .sections
+                .get("assessment")
+                .expect("assessment section")
+                .status,
+            SectionStatus::Ok
+        );
     }
 
     #[test]
