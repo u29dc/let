@@ -94,6 +94,88 @@ pub fn tool_registry() -> &'static [ToolMetadata] {
                     "let assess save 170448131 '{\"recommendation\":\"view\",\"reasoning\":\"...\"}'",
                 ),
                 tool(
+                    "score.compute",
+                    "let score compute <id>",
+                    "score",
+                    "Compute and persist a deterministic calibrated score for a stored evidence bundle; judgment calibration is read only from saved assessment JSON.",
+                    vec![
+                        param("id", "string", true, "Rightmove id or entity id."),
+                        param("--scorecard", "string", false, "Configured scorecard id; defaults to default."),
+                    ],
+                    vec!["score"],
+                    SCORE_COMPUTE_INPUT,
+                    SCORE_COMPUTE_OUTPUT,
+                    false,
+                    None,
+                    "let score compute 170448131 --scorecard default",
+                ),
+                tool(
+                    "score.get",
+                    "let score get <id>",
+                    "score",
+                    "Read the latest persisted deterministic calibrated score for a listing and scorecard.",
+                    vec![
+                        param("id", "string", true, "Rightmove id or entity id."),
+                        param("--scorecard", "string", false, "Configured scorecard id; defaults to default."),
+                    ],
+                    vec![
+                        "entityId",
+                        "rightmoveId",
+                        "scorecard",
+                        "baseOverall",
+                        "overall",
+                        "judgment",
+                        "band",
+                        "confidence",
+                        "domains",
+                        "summary",
+                    ],
+                    SCORE_GET_INPUT,
+                    SCORE_RESULT_OUTPUT,
+                    true,
+                    None,
+                    "let score get 170448131",
+                ),
+                tool(
+                    "score.list",
+                    "let score list",
+                    "score",
+                    "List persisted score summaries, ordered by final calibrated score within each scorecard.",
+                    vec![param("--scorecard", "string", false, "Optional scorecard id filter.")],
+                    vec!["scores", "scorecardId"],
+                    SCORE_LIST_INPUT,
+                    SCORE_LIST_OUTPUT,
+                    true,
+                    None,
+                    "let score list --scorecard default",
+                ),
+                tool(
+                    "scorecards.list",
+                    "let scorecards list",
+                    "score",
+                    "List resolved scorecard configurations after applying config overrides.",
+                    vec![],
+                    vec!["scorecards", "defaultScorecard"],
+                    EMPTY_INPUT,
+                    SCORECARDS_OUTPUT,
+                    true,
+                    None,
+                    "let scorecards list",
+                ),
+                tool(
+                    "scorecards.validate",
+                    "let scorecards validate",
+                    "score",
+                    "Validate scorecard configuration and return the resolved scorecards.",
+                    vec![],
+                    vec!["status", "scorecards", "defaultScorecard"],
+                    EMPTY_INPUT,
+                    SCORECARDS_VALIDATE_OUTPUT,
+                    true,
+                    None,
+                    "let scorecards validate",
+                ),
+                tool(
                     "config.show",
                     "let config show [--profile <name>]",
                     "infra",
@@ -581,6 +663,9 @@ const CORRECT_CLEAR_INPUT: &str = r#"{"type":"object","required":["id","kind","c
 const ASSESS_SAVE_INPUT: &str = r#"{"type":"object","required":["id","assessment"],"properties":{"id":{"type":"string"},"assessment":{"type":"object"}}}"#;
 const ASSESS_GET_INPUT: &str =
     r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}"#;
+const SCORE_COMPUTE_INPUT: &str = r#"{"type":"object","required":["id"],"properties":{"id":{"type":"string"},"scorecard":{"type":"string","default":"default"}}}"#;
+const SCORE_GET_INPUT: &str = SCORE_COMPUTE_INPUT;
+const SCORE_LIST_INPUT: &str = r#"{"type":"object","properties":{"scorecard":{"type":"string"}}}"#;
 const AREA_POSTCODE_INPUT: &str = r#"{"type":"object","required":["postcode"],"properties":{"postcode":{"type":"string"},"radiusM":{"type":"number","default":800},"limit":{"type":"integer","default":8}}}"#;
 const LIST_FILTERS_INPUT: &str = r#"{"type":"object","properties":{"recommendation":{"type":"string"},"confidence":{"type":"string"},"area":{"type":"string"},"maxPrice":{"type":"integer"},"postcodePrefix":{"type":"string"}}}"#;
 const SEARCH_RESOLVE_INPUT: &str =
@@ -597,7 +682,13 @@ const EVIDENCE_BUNDLE_OUTPUT: &str = r#"{"type":"object","required":["entityId",
 const EVIDENCE_OUTPUT: &str = r#"{"oneOf":[{"type":"object","required":["bundle","requestedSections"],"properties":{"bundle":{"type":"object"},"requestedSections":{"type":"array"}}},{"type":"object","required":["items","count","okCount","errorCount"],"properties":{"items":{"type":"array","items":{"type":"object","required":["input","id","ok","elapsed","warnings"],"properties":{"bundle":{"type":"object"},"error":{"type":"object"},"warnings":{"type":"array"}}}},"count":{"type":"integer"},"okCount":{"type":"integer"},"errorCount":{"type":"integer"}}}]}"#;
 const VERIFY_OUTPUT: &str = r#"{"type":"object","required":["id","claim","verifications","sections"],"properties":{"verifications":{"type":"array"},"sections":{"type":"object"}}}"#;
 const CORRECTION_OUTPUT: &str = r#"{"type":"object","required":["correction","affectedSections","warnings","nextCommands"],"properties":{"correction":{"type":"object"},"affectedSections":{"type":"array"},"warnings":{"type":"array"},"nextCommands":{"type":"array"}}}"#;
-const ASSESS_RECORD_OUTPUT: &str = r#"{"type":"object","required":["entityId","assessment","normalizedAssessment","savedAt"],"properties":{"assessment":{"type":"object"},"normalizedAssessment":{"type":"object","properties":{"recommendation":{"type":["string","null"]},"confidence":{"type":["string","null"]},"summary":{"type":["string","null"]},"positives":{"type":"array"},"risks":{"type":"array"},"nextActions":{"type":"array"},"tradeoffs":{"type":"array"},"areaNotes":{"type":["string","null"]},"commuteNotes":{"type":["string","null"]},"familyFit":{"type":["string","null"]},"evidenceGaps":{"type":"array"},"source":{"type":["string","null"]},"warnings":{"type":"array"}}}}}"#;
+const ASSESS_RECORD_OUTPUT: &str = r#"{"type":"object","required":["entityId","assessment","normalizedAssessment","savedAt"],"properties":{"assessment":{"type":"object"},"normalizedAssessment":{"type":"object","properties":{"recommendation":{"type":["string","null"],"enum":["view","consider","hold","watch","pass","benchmark",null]},"confidence":{"type":["string","null"]},"summary":{"type":["string","null"]},"scoreAdjustment":{"type":["number","null"]},"judgmentScore":{"type":["number","null"]},"judgmentRationale":{"type":["string","null"]},"positives":{"type":"array"},"risks":{"type":"array"},"nextActions":{"type":"array"},"tradeoffs":{"type":"array"},"areaNotes":{"type":["string","null"]},"commuteNotes":{"type":["string","null"]},"familyFit":{"type":["string","null"]},"evidenceGaps":{"type":"array"},"source":{"type":["string","null"]},"warnings":{"type":"array"}}}}}"#;
+const SCORE_RESULT_OUTPUT: &str = r#"{"type":"object","required":["entityId","rightmoveId","scorecard","computedAt","baseOverall","overall","judgment","band","confidence","domains","summary"],"properties":{"scorecard":{"type":"object"},"baseOverall":{"type":"number"},"overall":{"type":"number"},"judgment":{"type":"object","required":["source","appliedAdjustment","warnings"],"properties":{"source":{"enum":["none","scoreAdjustment","judgmentScore"]},"judgmentScore":{"type":["number","null"]},"requestedAdjustment":{"type":["number","null"]},"appliedAdjustment":{"type":"number"},"rationale":{"type":["string","null"]},"warnings":{"type":"array"}}},"band":{"type":"string"},"confidence":{"type":"string"},"domains":{"type":"array"},"caps":{"type":"array"},"blockers":{"type":"array"},"nextActions":{"type":"array"}}}"#;
+const SCORE_COMPUTE_OUTPUT: &str =
+    r#"{"type":"object","required":["score"],"properties":{"score":{"type":"object"}}}"#;
+const SCORE_LIST_OUTPUT: &str = r#"{"type":"object","required":["scores"],"properties":{"scorecardId":{"type":["string","null"]},"scores":{"type":"array","items":{"type":"object","required":["id","entityId","rightmoveId","scorecardId","scorecardVersion","baseOverall","overall","judgmentAdjustment","band","confidence","computedAt"],"properties":{"judgmentScore":{"type":["number","null"]},"judgmentRationale":{"type":["string","null"]}}}}}}"#;
+const SCORECARDS_OUTPUT: &str = r#"{"type":"object","required":["scorecards","defaultScorecard"],"properties":{"scorecards":{"type":"array"},"defaultScorecard":{"type":"object"}}}"#;
+const SCORECARDS_VALIDATE_OUTPUT: &str = r#"{"type":"object","required":["status","scorecards","defaultScorecard"],"properties":{"status":{"enum":["ok"]},"scorecards":{"type":"array"},"defaultScorecard":{"type":"object"}}}"#;
 const AREA_POSTCODE_OUTPUT: &str = r#"{"type":"object","required":["query","joinKeys","sections","facts","nearby","missingSources","nextActions"],"properties":{"query":{"type":"object"},"joinKeys":{"type":"object"},"sections":{"type":"object"},"facts":{"type":"array"},"broadband":{"type":["object","null"]},"nearby":{"type":"object"},"missingSources":{"type":"array"},"nextActions":{"type":"array"}}}"#;
 const ASSESS_LIST_OUTPUT: &str = r#"{"type":"object","required":["assessments","filters"],"properties":{"assessments":{"type":"array","items":{"type":"object","required":["id","entityId","recommendation","confidence","assessment","normalizedAssessment"],"properties":{"assessment":{"type":"object"},"normalizedAssessment":{"type":"object"},"summary":{"type":["string","null"]},"positives":{"type":"array"},"risks":{"type":"array"},"nextActions":{"type":"array"},"tradeoffs":{"type":"array"},"areaNotes":{"type":["string","null"]},"commuteNotes":{"type":["string","null"]},"familyFit":{"type":["string","null"]},"evidenceGaps":{"type":"array"},"source":{"type":["string","null"]}}}},"filters":{"type":"object"}}}"#;
 const EVIDENCE_LIST_OUTPUT: &str = r#"{"type":"object","required":["listings","filters"],"properties":{"listings":{"type":"array","items":{"type":"object","required":["id","entityId","url","address","postcode","area","price","pricePcm","recommendation","confidence","savedAt","inspectedAt","updatedAt"]}},"filters":{"type":"object"}}}"#;

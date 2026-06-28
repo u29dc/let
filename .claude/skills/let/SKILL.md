@@ -128,12 +128,13 @@ Save assessments as JSON objects with `assess save`; read them with `assess get`
 Assessment guidance:
 
 - The CLI persists agent-authored assessment JSON; it does not enforce a built-in recommendation rubric.
-- Prefer the recommended comparison fields when saving assessments: `recommendation`, `confidence`, `summary`, `positives`, `risks`, `nextActions`, `tradeoffs`, `areaNotes`, `commuteNotes`, `familyFit`, `evidenceGaps`, and `source`.
-- Recommended `recommendation` values are `view`, `stretch_view`, `backup_view`, `watch`, `pass`, and `benchmark`; recommended `confidence` values are `high`, `medium_high`, `medium`, and `low`.
+- Prefer the recommended comparison fields when saving assessments: `recommendation`, `confidence`, `summary`, `scoreAdjustment`, `judgmentScore`, `judgmentRationale`, `positives`, `risks`, `nextActions`, `tradeoffs`, `areaNotes`, `commuteNotes`, `familyFit`, `evidenceGaps`, and `source`.
+- Recommended `recommendation` values are `view`, `consider`, `hold`, `watch`, `pass`, and `benchmark`; recommended `confidence` values are `high`, `medium_high`, `medium`, and `low`.
+- Use `scoreAdjustment` from `-15` to `15` when the saved assessment should recalibrate deterministic scoring. Use `judgmentScore` from `0` to `100` when a score-style judgment is easier. If both are present, `scoreAdjustment` wins. Always include `judgmentRationale` when using either field.
 - The raw assessment remains flexible, but `assess get`, `assess list`, and evidence bundles expose `normalizedAssessment` for comparison.
 - Keep listing quality and location quality separate.
 - Lower confidence when key evidence is missing instead of inventing values.
-- Use deterministic scores only as background context unless the user explicitly asks for scoring experiments.
+- Use saved assessments as the decision layer. `let score compute|get|list` is deterministic at runtime: it reads saved assessment judgment fields and never calls an LLM itself.
 
 Evaluate the factors that matter for the user's stated context, such as:
 

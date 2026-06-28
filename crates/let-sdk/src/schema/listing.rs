@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -40,10 +38,6 @@ pub struct Listing {
     pub listed_date: Option<String>,
     pub lettings: Lettings,
     pub agent: Agent,
-    pub assessment: Option<ListingAssessment>,
-    pub assessed_at: Option<String>,
-    pub assessed_score: Option<f64>,
-    pub scores: Option<Scores>,
     pub fetched_at: String,
     pub extraction_status: ExtractionStatus,
     pub status: ListingStatus,
@@ -202,139 +196,6 @@ pub struct Agent {
     pub phone: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ListingAssessment {
-    pub maintenance: MaintenanceRating,
-    pub light_and_space: String,
-    pub photo_analysis: String,
-    pub tradeoffs: Option<String>,
-    pub neighborhood_analysis: Option<String>,
-    pub recommendation: Recommendation,
-    pub family_suitability: FamilySuitability,
-    pub reasoning: String,
-    pub score_adjustment: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum MaintenanceRating {
-    Excellent,
-    Good,
-    Fair,
-    Poor,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Recommendation {
-    StrongRecommend,
-    Recommend,
-    Neutral,
-    Avoid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum FamilySuitability {
-    Excellent,
-    Good,
-    Fair,
-    Poor,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Scores {
-    pub overall: f64,
-    pub confidence: f64,
-    pub affordability: f64,
-    pub location: f64,
-    pub liveability: f64,
-    pub factors: ScoreFactors,
-    pub penalties: ScorePenalties,
-    pub context: ScoreContext,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ScoreFactors {
-    pub monthly_rent: f64,
-    pub price_percentile: f64,
-    pub floor_area_sqm: Option<f64>,
-    pub floor_area_percentile: Option<f64>,
-    pub epc_band: Option<String>,
-    pub epc_numeric: Option<f64>,
-    pub true_monthly_cost: f64,
-    pub true_cost_percentile: f64,
-    pub station_miles: Option<f64>,
-    pub station_percentile: Option<f64>,
-    pub gigabit_pct: Option<f64>,
-    pub region_name: Option<String>,
-    pub priority_score: Option<f64>,
-    pub garden_type: GardenType,
-    pub heating_type: HeatingType,
-    pub pet_policy: PetPolicy,
-    pub property_type: Option<String>,
-    pub bedrooms: i64,
-    pub imd_decile: Option<i64>,
-    pub crime_rate_per_1k: Option<f64>,
-    pub crime_rate_percentile: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum GardenType {
-    Private,
-    Shared,
-    None,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum HeatingType {
-    Gas,
-    Electric,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum PetPolicy {
-    Yes,
-    No,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ScorePenalties {
-    pub epc: f64,
-    pub garden: f64,
-    pub pets: f64,
-    pub combined: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ScoreContext {
-    pub config_hash: String,
-    pub percentiles: ScorePercentiles,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ScorePercentiles {
-    pub prices: StatsSummary,
-    pub true_costs: StatsSummary,
-    pub floor_areas: StatsSummary,
-    pub station_distances: StatsSummary,
-    pub crime_rates: StatsSummary,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StatsSummary {
-    pub min: f64,
-    pub max: f64,
-    pub mean: f64,
-    pub median: f64,
-    pub std_dev: f64,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ExtractionStatus {
@@ -358,5 +219,3 @@ pub struct ListingsFile {
     pub last_search_total: i64,
     pub listings: Vec<Listing>,
 }
-
-pub type RegionPriority = BTreeMap<String, f64>;

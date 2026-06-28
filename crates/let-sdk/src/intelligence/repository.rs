@@ -10,14 +10,18 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::errors::{ErrorCode, LetError, Result};
+use crate::intelligence::schema::{
+    INTELLIGENCE_SCHEMA_VERSION, database_has_tables, init_schema, read_user_version,
+    schema_mismatch, validate_schema,
+};
 use crate::intelligence::types::{
     AssessmentRecord, ConfidenceLevel, CorrectionKind, CorrectionRecord, EvidenceBundle,
     ListingListFilters, MediaItemEvidence, SectionState, StoredAssessmentSummary,
     StoredListingSummary,
 };
+use crate::score::{ScoreResult, ScoreSummary};
 use crate::utils::time::now_iso;
 
-const INTELLIGENCE_SCHEMA_VERSION: i32 = 1;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 pub struct IntelligenceDb {
@@ -57,6 +61,7 @@ pub struct IntelligenceDbOverview {
     pub entity_count: i64,
     pub bundle_count: i64,
     pub assessment_count: i64,
+    pub score_count: i64,
 }
 
 impl IntelligenceDb {
@@ -69,7 +74,6 @@ impl IntelligenceDb {
         connection.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         let version = read_user_version(&connection)?;
         if version == INTELLIGENCE_SCHEMA_VERSION {
-            ensure_additive_schema(&connection)?;
             validate_schema(&connection)?;
         } else if version == 0 && !database_has_tables(&connection)? {
             init_schema(&connection)?;
@@ -407,9 +411,6 @@ impl IntelligenceDb {
     }
 
     pub fn load_active_corrections(&self, entity_id: &str) -> Result<Vec<CorrectionRecord>> {
-        if !table_exists(&self.connection, "corrections")? {
-            return Ok(Vec::new());
-        }
         let normalized = normalize_entity_id(entity_id);
         let mut statement = self.connection.prepare(
             "SELECT id, entity_id, kind, payload_json, note, active, affected_sections_json, created_at, cleared_at
@@ -482,6 +483,87 @@ impl IntelligenceDb {
             ))
         })
         .transpose()
+    }
+
+    pub fn save_score_result(&self, result: &ScoreResult) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO entities (id, entity_type, created_at, updated_at)
+             VALUES (?1, 'property_listing', ?2, ?2)
+             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at",
+            params![result.entity_id, result.computed_at],
+        )?;
+        self.connection.execute(
+            "INSERT INTO score_results
+                 (entity_id, rightmove_id, scorecard_id, scorecard_version, overall, band, confidence, result_json, computed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(entity_id, scorecard_id) DO UPDATE SET
+                 rightmove_id = excluded.rightmove_id,
+                 scorecard_version = excluded.scorecard_version,
+                 overall = excluded.overall,
+                 band = excluded.band,
+                 confidence = excluded.confidence,
+                 result_json = excluded.result_json,
+                 computed_at = excluded.computed_at",
+            params![
+                result.entity_id,
+                result.rightmove_id,
+                result.scorecard.id,
+                result.scorecard.version,
+                result.overall,
+                result.band.as_str(),
+                result.confidence.as_str(),
+                serialize_json(result, "score result")?,
+                result.computed_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_score_result(&self, id: &str, scorecard_id: &str) -> Result<Option<ScoreResult>> {
+        let entity_id = normalize_entity_id(id);
+        let raw = self
+            .connection
+            .query_row(
+                "SELECT result_json
+                 FROM score_results
+                 WHERE scorecard_id = ?1
+                   AND (entity_id = ?2 OR rightmove_id = ?3)
+                 LIMIT 1",
+                params![scorecard_id, entity_id, id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        raw.map(|raw| deserialize_json(&raw, "score result"))
+            .transpose()
+    }
+
+    pub fn list_score_summaries(&self, scorecard_id: Option<&str>) -> Result<Vec<ScoreSummary>> {
+        let mut summaries = Vec::new();
+        if let Some(scorecard_id) = scorecard_id {
+            let mut statement = self.connection.prepare(
+                "SELECT result_json
+                 FROM score_results
+                 WHERE scorecard_id = ?1
+                 ORDER BY overall DESC, computed_at DESC",
+            )?;
+            let rows = statement.query_map(params![scorecard_id], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                let result = deserialize_json::<ScoreResult>(&row?, "score result")?;
+                summaries.push(score_summary_from_result(&result));
+            }
+        } else {
+            let mut statement = self.connection.prepare(
+                "SELECT result_json
+                 FROM score_results
+                 ORDER BY scorecard_id ASC, overall DESC, computed_at DESC",
+            )?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                let result = deserialize_json::<ScoreResult>(&row?, "score result")?;
+                summaries.push(score_summary_from_result(&result));
+            }
+        }
+        Ok(summaries)
     }
 
     pub fn list_evidence_summaries(
@@ -854,7 +936,26 @@ pub fn database_overview(path: impl AsRef<Path>) -> Result<IntelligenceDbOvervie
         entity_count: count_rows(&db.connection, "entities")?,
         bundle_count: count_rows(&db.connection, "evidence_bundles")?,
         assessment_count: count_rows(&db.connection, "assessments")?,
+        score_count: count_rows(&db.connection, "score_results")?,
     })
+}
+
+fn score_summary_from_result(result: &ScoreResult) -> ScoreSummary {
+    ScoreSummary {
+        id: external_id_from_entity(&result.entity_id, Some(&result.rightmove_id)),
+        entity_id: result.entity_id.clone(),
+        rightmove_id: result.rightmove_id.clone(),
+        scorecard_id: result.scorecard.id.clone(),
+        scorecard_version: result.scorecard.version,
+        base_overall: result.base_overall,
+        overall: result.overall,
+        judgment_adjustment: result.judgment.applied_adjustment,
+        judgment_score: result.judgment.judgment_score,
+        judgment_rationale: result.judgment.rationale.clone(),
+        band: result.band,
+        confidence: result.confidence,
+        computed_at: result.computed_at.clone(),
+    }
 }
 
 pub fn normalize_entity_id(id: &str) -> String {
@@ -887,117 +988,6 @@ pub fn extract_rightmove_id(id_or_url: &str) -> Option<String> {
         .take_while(|ch| ch.is_ascii_digit())
         .collect::<String>();
     (!digits.is_empty()).then_some(digits)
-}
-
-fn init_schema(connection: &Connection) -> Result<()> {
-    connection.execute_batch(SCHEMA)?;
-    connection.pragma_update(None, "user_version", INTELLIGENCE_SCHEMA_VERSION)?;
-    validate_schema(connection)
-}
-
-fn ensure_additive_schema(connection: &Connection) -> Result<()> {
-    connection.execute_batch(CORRECTIONS_SCHEMA)?;
-    Ok(())
-}
-
-fn validate_schema(connection: &Connection) -> Result<()> {
-    let version = read_user_version(connection)?;
-    if version != INTELLIGENCE_SCHEMA_VERSION {
-        return Err(schema_mismatch(version));
-    }
-    validate_required_columns(
-        connection,
-        "assessments",
-        &["entity_id", "assessment_json", "saved_at"],
-    )?;
-    validate_required_columns(
-        connection,
-        "evidence_bundles",
-        &["entity_id", "rightmove_id", "bundle_json", "generated_at"],
-    )?;
-    validate_required_columns(
-        connection,
-        "source_snapshots",
-        &["id", "entity_id", "source", "source_key", "content_hash"],
-    )?;
-    Ok(())
-}
-
-fn read_user_version(connection: &Connection) -> Result<i32> {
-    connection
-        .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
-        .map_err(Into::into)
-}
-
-fn database_has_tables(connection: &Connection) -> Result<bool> {
-    let count = connection.query_row(
-        "SELECT COUNT(*)
-         FROM sqlite_master
-         WHERE type = 'table'
-           AND name NOT LIKE 'sqlite_%'",
-        [],
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(count > 0)
-}
-
-fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
-    let count = connection.query_row(
-        "SELECT COUNT(*)
-         FROM sqlite_master
-         WHERE type = 'table'
-           AND name = ?1",
-        params![table],
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(count > 0)
-}
-
-fn validate_required_columns(
-    connection: &Connection,
-    table: &str,
-    required: &[&str],
-) -> Result<()> {
-    let pragma = format!("PRAGMA table_info({table})");
-    let mut statement = connection.prepare(&pragma)?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    if columns.is_empty() {
-        return Err(schema_shape_mismatch(format!(
-            "intelligence database table `{table}` is missing"
-        )));
-    }
-    let missing = required
-        .iter()
-        .filter(|column| !columns.iter().any(|existing| existing == **column))
-        .copied()
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
-        return Err(schema_shape_mismatch(format!(
-            "intelligence database table `{table}` is missing column(s): {}",
-            missing.join(", ")
-        )));
-    }
-    Ok(())
-}
-
-fn schema_mismatch(version: i32) -> LetError {
-    LetError::new(
-        ErrorCode::SchemaMismatch,
-        format!(
-            "intelligence database schema version {version} does not match expected version {INTELLIGENCE_SCHEMA_VERSION}"
-        ),
-        "move the incompatible database aside and run `let inspect <rightmove-id>` to recreate it",
-    )
-}
-
-fn schema_shape_mismatch(message: String) -> LetError {
-    LetError::new(
-        ErrorCode::SchemaMismatch,
-        message,
-        "move the incompatible database aside and run `let inspect <rightmove-id>` to recreate it",
-    )
 }
 
 fn serialize_json<T: Serialize>(value: &T, label: &str) -> Result<String> {
@@ -1073,173 +1063,6 @@ fn stable_row_id(parts: &[&str]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-const CORRECTIONS_SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS corrections (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    note TEXT,
-    active INTEGER NOT NULL DEFAULT 1,
-    affected_sections_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    cleared_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_corrections_entity_active
-ON corrections(entity_id, active, kind);
-"#;
-
-const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS entities (
-    id TEXT PRIMARY KEY,
-    entity_type TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS entity_identifiers (
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    provider_id TEXT NOT NULL,
-    url TEXT,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (provider, provider_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_entity_identifiers_entity_id
-ON entity_identifiers(entity_id);
-
-CREATE TABLE IF NOT EXISTS source_snapshots (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    source TEXT NOT NULL,
-    source_key TEXT NOT NULL,
-    url TEXT NOT NULL,
-    captured_at TEXT NOT NULL,
-    status TEXT NOT NULL,
-    etag TEXT,
-    content_hash TEXT NOT NULL,
-    raw_json TEXT,
-    raw_text TEXT
-);
-
-CREATE TABLE IF NOT EXISTS observations (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    snapshot_id TEXT REFERENCES source_snapshots(id) ON DELETE SET NULL,
-    namespace TEXT NOT NULL,
-    name TEXT NOT NULL,
-    value_json TEXT NOT NULL,
-    confidence TEXT NOT NULL,
-    source TEXT NOT NULL,
-    observed_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS address_candidates (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    source TEXT NOT NULL,
-    label TEXT NOT NULL,
-    postcode TEXT,
-    lat REAL,
-    lng REAL,
-    confidence TEXT NOT NULL,
-    raw_json TEXT
-);
-
-CREATE TABLE IF NOT EXISTS address_resolutions (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    selected_candidate_id TEXT REFERENCES address_candidates(id) ON DELETE SET NULL,
-    status TEXT NOT NULL,
-    confidence TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    resolved_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS facts (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    category TEXT NOT NULL,
-    name TEXT NOT NULL,
-    value_json TEXT NOT NULL,
-    source_refs_json TEXT NOT NULL,
-    confidence TEXT NOT NULL,
-    observed_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS claims (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    claim_type TEXT NOT NULL,
-    claim_text TEXT NOT NULL,
-    value_json TEXT NOT NULL,
-    source_ref_json TEXT NOT NULL,
-    extracted_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS verifications (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    claim_id TEXT,
-    claim_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    confidence TEXT NOT NULL,
-    explanation TEXT NOT NULL,
-    evidence_refs_json TEXT NOT NULL,
-    verified_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS media_assets (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    remote_url TEXT NOT NULL,
-    local_path TEXT,
-    width INTEGER,
-    height INTEGER,
-    content_hash TEXT,
-    status TEXT NOT NULL,
-    captured_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS corrections (
-    id TEXT PRIMARY KEY,
-    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    note TEXT,
-    active INTEGER NOT NULL DEFAULT 1,
-    affected_sections_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    cleared_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_corrections_entity_active
-ON corrections(entity_id, active, kind);
-
-CREATE TABLE IF NOT EXISTS evidence_bundles (
-    entity_id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-    rightmove_id TEXT NOT NULL,
-    depth TEXT NOT NULL,
-    section_statuses_json TEXT NOT NULL,
-    bundle_json TEXT NOT NULL,
-    generated_at TEXT NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_bundles_rightmove_id
-ON evidence_bundles(rightmove_id);
-
-CREATE TABLE IF NOT EXISTS assessments (
-    entity_id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
-    assessment_json TEXT NOT NULL,
-    saved_at TEXT NOT NULL
-);
-"#;
-
 #[cfg(test)]
 mod tests {
     use rusqlite::Connection;
@@ -1284,13 +1107,38 @@ mod tests {
     }
 
     #[test]
+    fn repository_rejects_v1_shape_missing_corrections_table() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("let.db");
+        {
+            let db = IntelligenceDb::open(&path).expect("open db");
+            drop(db);
+            let connection = Connection::open(&path).expect("reopen db");
+            connection
+                .execute("DROP TABLE corrections", [])
+                .expect("drop corrections");
+        }
+
+        let error = match IntelligenceDb::open(&path) {
+            Ok(_) => panic!("db missing corrections should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code.as_str(), "SCHEMA_MISMATCH");
+        assert!(
+            error.message.contains("corrections"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
     fn repository_rejects_existing_wrong_schema_version_without_mutating_it() {
         let temp = TempDir::new().expect("temp dir");
         let path = temp.path().join("let.db");
         {
             let connection = Connection::open(&path).expect("open db");
             connection
-                .pragma_update(None, "user_version", 2)
+                .pragma_update(None, "user_version", 999)
                 .expect("set user_version");
             connection
                 .execute("CREATE TABLE legacy (id TEXT PRIMARY KEY)", [])
@@ -1306,7 +1154,7 @@ mod tests {
             .expect("reopen db")
             .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .expect("read user_version");
-        assert_eq!(version, 2);
+        assert_eq!(version, 999);
     }
 
     #[test]
@@ -1522,6 +1370,34 @@ mod tests {
         assert_eq!(row.2, "generated");
     }
 
+    #[test]
+    fn repository_persists_and_lists_score_results() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("let.db");
+        let mut db = IntelligenceDb::open(&path).expect("open db");
+        let bundle = test_bundle("170448131", "M1 1AA", 1250);
+        db.save_bundle(&bundle).expect("save bundle");
+
+        let scorecard = crate::score::default_scorecard();
+        let result = crate::score::compute_score(&bundle, &scorecard);
+        db.save_score_result(&result).expect("save score result");
+
+        let loaded = db
+            .load_score_result("170448131", "default")
+            .expect("load score")
+            .expect("score exists");
+        assert_eq!(loaded.entity_id, "rightmove:170448131");
+        assert_eq!(loaded.scorecard.id, "default");
+        assert_eq!(loaded.overall, result.overall);
+
+        let summaries = db
+            .list_score_summaries(Some("default"))
+            .expect("list scores");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].rightmove_id, "170448131");
+        assert_eq!(summaries[0].overall, result.overall);
+    }
+
     fn test_bundle(rightmove_id: &str, postcode: &str, price_pcm: i64) -> EvidenceBundle {
         let entity_id = format!("rightmove:{rightmove_id}");
         let url = format!("https://www.rightmove.co.uk/properties/{rightmove_id}");
@@ -1562,6 +1438,7 @@ mod tests {
                     key_features: Vec::new(),
                     normalized_text: String::new(),
                 },
+                nearest_stations: Vec::new(),
                 media: Vec::new(),
             },
             address: AddressEvidence {

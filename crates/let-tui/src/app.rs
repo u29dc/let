@@ -2,21 +2,17 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use let_sdk::intelligence::{AssessmentRecord, EvidenceBundle, IntelligenceDb};
-use let_sdk::load_listings_file;
-use let_sdk::schema::listing::{
-    Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingImage,
-    ListingStatus, MapViews, PortalIds, RemoteLocalAsset,
-};
+use let_sdk::intelligence::{EvidenceBundle, IntelligenceDb};
+use let_sdk::score::ScoreSummary;
 use ratatui::layout::{Position, Rect};
 
+use crate::listing::{ListingMedia, TuiListingRow};
 use crate::preview::{PreviewAssetKind, PreviewController, PreviewTarget, PreviewView};
 use crate::theme::{HEADER_CONTRACT, HeaderContract};
 
@@ -38,22 +34,6 @@ pub(crate) struct SourceStatus {
     pub(crate) name: String,
     pub(crate) exists: bool,
     pub(crate) size_mb: f64,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ListingMedia {
-    pub(crate) cache_dir: Option<PathBuf>,
-    pub(crate) contact_sheet: Option<PathBuf>,
-    pub(crate) images: Vec<PathBuf>,
-    pub(crate) floorplan: Option<PathBuf>,
-    pub(crate) satellite: Option<PathBuf>,
-    pub(crate) street: Option<PathBuf>,
-}
-
-impl ListingMedia {
-    fn primary_image(&self) -> Option<&PathBuf> {
-        self.contact_sheet.as_ref().or_else(|| self.images.first())
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -87,14 +67,14 @@ pub(crate) struct ContextMediaItem {
 }
 
 struct LoadedListings {
-    listings: Vec<Listing>,
+    listings: Vec<TuiListingRow>,
     bundle_context: HashMap<String, EvidenceBundle>,
     status: String,
 }
 
 pub(crate) struct App {
     running: bool,
-    listings: Vec<Listing>,
+    listings: Vec<TuiListingRow>,
     selected: usize,
     focus: FocusPane,
     context_selected: usize,
@@ -182,7 +162,7 @@ impl App {
         }
     }
 
-    pub(crate) fn listings(&self) -> &[Listing] {
+    pub(crate) fn listings(&self) -> &[TuiListingRow] {
         &self.listings
     }
 
@@ -198,13 +178,19 @@ impl App {
         &self.status
     }
 
-    pub(crate) fn selected_listing(&self) -> Option<&Listing> {
+    pub(crate) fn selected_listing(&self) -> Option<&TuiListingRow> {
         self.listings.get(self.selected)
     }
 
     pub(crate) fn selected_bundle(&self) -> Option<&EvidenceBundle> {
         let listing = self.selected_listing()?;
-        bundle_lookup_keys(listing).find_map(|key| self.bundle_context.get(key))
+        [
+            listing.entity_id.as_str(),
+            listing.rightmove_id.as_str(),
+            listing.id.as_str(),
+        ]
+        .into_iter()
+        .find_map(|key| self.bundle_context.get(key))
     }
 
     pub(crate) fn selected_media(&self) -> &ListingMedia {
@@ -774,9 +760,7 @@ impl App {
 
     fn rebuild_context_cache(&mut self, reset_selection: bool) {
         let (selected_media, context_items) = if let Some(listing) = self.selected_listing() {
-            let paths = let_sdk::paths::paths();
-            let cache_root = paths.resolved.cache.as_path();
-            let selected_media = build_media_index(cache_root, listing);
+            let selected_media = listing.media.clone();
             let context_items = build_context_media_items(listing, &selected_media);
             (selected_media, context_items)
         } else {
@@ -845,13 +829,11 @@ fn select_primary_preview_item(items: &[ContextMediaItem]) -> Option<&ContextMed
         .or_else(|| items.first())
 }
 
-fn build_context_media_items(listing: &Listing, media: &ListingMedia) -> Vec<ContextMediaItem> {
-    let listing_key = listing
-        .portal_ids
-        .rightmove
-        .as_deref()
-        .unwrap_or(listing.id.as_str())
-        .to_owned();
+fn build_context_media_items(
+    listing: &TuiListingRow,
+    media: &ListingMedia,
+) -> Vec<ContextMediaItem> {
+    let listing_key = listing.rightmove_id.clone();
     let mut items = Vec::new();
 
     if let Some(path) = &media.contact_sheet {
@@ -903,55 +885,32 @@ fn load_ranked_listings() -> LoadedListings {
     let paths = let_sdk::paths::paths();
     let db_path = paths.derived.database;
 
-    match IntelligenceDb::open_readonly(&db_path).and_then(|db| db.load_bundles()) {
-        Ok(bundles) if !bundles.is_empty() => {
-            let mut listings = bundles.iter().map(listing_from_bundle).collect::<Vec<_>>();
+    match load_tui_data(&db_path) {
+        Ok((bundles, score_summaries)) => {
+            let cache_root = paths.resolved.cache.as_path();
+            let scores_by_rightmove = score_summary_index(&score_summaries);
+            let mut listings = bundles
+                .iter()
+                .map(|bundle| {
+                    TuiListingRow::from_bundle(bundle, cache_root)
+                        .with_score_summary(scores_by_rightmove.get(&bundle.rightmove_id).copied())
+                })
+                .collect::<Vec<_>>();
             let bundle_context = bundle_context_index(&bundles);
             let listing_count = listings.len();
             listings.sort_by(|a, b| {
-                let left = a.assessed_score.unwrap_or(0.0);
-                let right = b.assessed_score.unwrap_or(0.0);
-                right
-                    .partial_cmp(&left)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            return LoadedListings {
-                listings,
-                bundle_context,
-                status: format!(
-                    "loaded {} evidence bundles from {}",
-                    listing_count,
-                    db_path.display()
-                ),
-            };
-        }
-        Ok(_) => {}
-        Err(_) => {}
-    }
-
-    match load_listings_file(&db_path) {
-        Ok(data) => {
-            let mut listings = data.listings;
-            let listing_count = listings.len();
-            listings.sort_by(|a, b| {
-                let left = a
-                    .assessed_score
-                    .or_else(|| a.scores.as_ref().map(|scores| scores.overall))
-                    .unwrap_or(0.0);
-                let right = b
-                    .assessed_score
-                    .or_else(|| b.scores.as_ref().map(|scores| scores.overall))
-                    .unwrap_or(0.0);
-                right
-                    .partial_cmp(&left)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                score_sort_key(b)
+                    .total_cmp(&score_sort_key(a))
+                    .then_with(|| b.generated_at.cmp(&a.generated_at))
+                    .then_with(|| a.rightmove_id.cmp(&b.rightmove_id))
             });
             LoadedListings {
                 listings,
-                bundle_context: HashMap::new(),
+                bundle_context,
                 status: format!(
-                    "loaded {} listings from {}",
+                    "loaded {} evidence bundles and {} scores from {}",
                     listing_count,
+                    score_summaries.len(),
                     db_path.display()
                 ),
             }
@@ -964,6 +923,26 @@ fn load_ranked_listings() -> LoadedListings {
     }
 }
 
+fn load_tui_data(db_path: &Path) -> let_sdk::Result<(Vec<EvidenceBundle>, Vec<ScoreSummary>)> {
+    let db = IntelligenceDb::open_readonly(db_path)?;
+    let bundles = db.load_bundles()?;
+    let scores = db.list_score_summaries(Some(let_sdk::score::DEFAULT_SCORECARD_ID))?;
+    Ok((bundles, scores))
+}
+
+fn score_summary_index(summaries: &[ScoreSummary]) -> HashMap<String, &ScoreSummary> {
+    let mut index = HashMap::new();
+    for summary in summaries {
+        index.insert(summary.rightmove_id.clone(), summary);
+        index.insert(summary.entity_id.clone(), summary);
+    }
+    index
+}
+
+fn score_sort_key(listing: &TuiListingRow) -> f64 {
+    listing.score_overall.unwrap_or(-1.0)
+}
+
 fn bundle_context_index(bundles: &[EvidenceBundle]) -> HashMap<String, EvidenceBundle> {
     let mut index = HashMap::new();
     for bundle in bundles {
@@ -974,17 +953,7 @@ fn bundle_context_index(bundles: &[EvidenceBundle]) -> HashMap<String, EvidenceB
     index
 }
 
-fn bundle_lookup_keys(listing: &Listing) -> impl Iterator<Item = &str> {
-    [
-        Some(listing.id.as_str()),
-        listing.portal_ids.rightmove.as_deref(),
-        listing.id.strip_prefix("rightmove:"),
-    ]
-    .into_iter()
-    .flatten()
-}
-
-fn initial_selection(listings: &[Listing], requested_id: Option<&str>) -> usize {
+fn initial_selection(listings: &[TuiListingRow], requested_id: Option<&str>) -> usize {
     let Some(requested_id) = requested_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -993,163 +962,8 @@ fn initial_selection(listings: &[Listing], requested_id: Option<&str>) -> usize 
     };
     listings
         .iter()
-        .position(|listing| {
-            listing.id == requested_id
-                || listing.portal_ids.rightmove.as_deref() == Some(requested_id)
-                || requested_id
-                    .strip_prefix("rightmove:")
-                    .is_some_and(|id| listing.portal_ids.rightmove.as_deref() == Some(id))
-        })
+        .position(|listing| listing.matches_requested_id(requested_id))
         .unwrap_or(0)
-}
-
-fn listing_from_bundle(bundle: &EvidenceBundle) -> Listing {
-    let selected_address = bundle.address.selected.as_ref();
-    let address = selected_address
-        .map(|candidate| candidate.label.clone())
-        .or_else(|| bundle.rightmove.address.clone())
-        .unwrap_or_else(|| bundle.rightmove_id.clone());
-    let postcode = selected_address
-        .and_then(|candidate| candidate.postcode.clone())
-        .or_else(|| bundle.rightmove.postcode.clone())
-        .unwrap_or_default();
-    let lat = selected_address
-        .and_then(|candidate| candidate.latitude)
-        .or(bundle.rightmove.latitude)
-        .unwrap_or_default();
-    let lng = selected_address
-        .and_then(|candidate| candidate.longitude)
-        .or(bundle.rightmove.longitude)
-        .unwrap_or_default();
-    let assessed_score = bundle.assessment.as_ref().and_then(assessment_score);
-
-    Listing {
-        id: bundle.rightmove_id.clone(),
-        portal_ids: PortalIds {
-            rightmove: Some(bundle.rightmove_id.clone()),
-            ..PortalIds::default()
-        },
-        uprn: bundle.epc.as_ref().and_then(|epc| epc.uprn.clone()),
-        uprn_source: None,
-        uprn_confidence: None,
-        url: bundle.url.clone(),
-        location: GeoLocation {
-            lat,
-            lng,
-            pin_type: None,
-        },
-        postcode,
-        address,
-        region: None,
-        google_maps_url: format!("https://www.google.com/maps/search/?api=1&query={lat},{lng}"),
-        google_maps_street_view_url: format!(
-            "https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={lat},{lng}"
-        ),
-        area: AreaMetrics::default(),
-        price: bundle.rightmove.price_pcm.unwrap_or_default(),
-        price_display: bundle.rightmove.display_price.clone().unwrap_or_default(),
-        bedrooms: bundle.rightmove.bedrooms.unwrap_or_default(),
-        bathrooms: bundle.rightmove.bathrooms.unwrap_or_default(),
-        property_type: bundle.rightmove.property_type.clone().unwrap_or_default(),
-        description: bundle.rightmove.description.text.clone(),
-        notes: bundle.rightmove.description.key_features.clone(),
-        images: bundle_media_images(bundle),
-        floorplan: bundle
-            .media
-            .floorplans
-            .first()
-            .map(remote_local_asset_from_media)
-            .unwrap_or_default(),
-        epc: bundle
-            .media
-            .epc_graphs
-            .first()
-            .map(remote_local_asset_from_media)
-            .unwrap_or_default(),
-        map_views: MapViews {
-            satellite: bundle
-                .media
-                .maps
-                .iter()
-                .find(|item| item.kind == "mapSatellite")
-                .map(remote_local_asset_from_media)
-                .unwrap_or_default(),
-            street: bundle
-                .media
-                .maps
-                .iter()
-                .find(|item| item.kind == "mapStreet")
-                .map(remote_local_asset_from_media)
-                .unwrap_or_default(),
-        },
-        epc_rating: None,
-        floor_area_sqm: bundle.epc.as_ref().and_then(|epc| epc.floor_area_sqm),
-        epc_lodgement_date: bundle
-            .epc
-            .as_ref()
-            .and_then(|epc| epc.lodgement_date.clone()),
-        epc_address_match: bundle.epc.as_ref().map(|epc| epc.address_match),
-        epc_search_url: None,
-        nearest_stations: Vec::new(),
-        gigabit_availability: bundle
-            .broadband
-            .as_ref()
-            .and_then(|broadband| broadband.gigabit_availability),
-        listed_date: bundle.rightmove.listed_date.clone(),
-        lettings: Lettings {
-            available_date: bundle.rightmove.available_date.clone(),
-            deposit: bundle.rightmove.deposit,
-        },
-        agent: Agent {
-            name: bundle.rightmove.agent_name.clone(),
-            phone: bundle.rightmove.agent_phone.clone(),
-        },
-        assessment: None,
-        assessed_at: bundle
-            .assessment
-            .as_ref()
-            .map(|assessment| assessment.saved_at.clone()),
-        assessed_score,
-        scores: None,
-        fetched_at: bundle.generated_at.clone(),
-        extraction_status: ExtractionStatus::Success,
-        status: ListingStatus::Active,
-        notion_page_id: None,
-    }
-}
-
-fn assessment_score(record: &AssessmentRecord) -> Option<f64> {
-    ["score", "assessedScore", "assessed_score"]
-        .iter()
-        .find_map(|key| record.assessment.get(*key))
-        .and_then(serde_json::Value::as_f64)
-}
-
-fn remote_local_asset_from_media(
-    item: &let_sdk::intelligence::MediaItemEvidence,
-) -> RemoteLocalAsset {
-    RemoteLocalAsset {
-        remote: Some(item.remote_url.clone()),
-        local: item.local_path.clone(),
-    }
-}
-
-fn bundle_media_images(bundle: &EvidenceBundle) -> Vec<ListingImage> {
-    let mut images = Vec::new();
-    if let Some(sheet) = bundle.media.contact_sheet.as_ref()
-        && sheet.status == "generated"
-        && let Some(local_path) = sheet.local_path.clone()
-    {
-        images.push(ListingImage {
-            remote: format!("local://contact-sheet/{}", bundle.entity_id),
-            local: Some(local_path),
-        });
-    }
-    images.extend(bundle.media.photos.iter().map(|item| ListingImage {
-        remote: item.remote_url.clone(),
-        local: item.local_path.clone(),
-    }));
-    images
 }
 
 fn filtered_action_indices(actions: &[PaletteAction], query: &str) -> Vec<usize> {
@@ -1166,112 +980,6 @@ fn filtered_action_indices(actions: &[PaletteAction], query: &str) -> Vec<usize>
             label.contains(&normalized).then_some(index)
         })
         .collect()
-}
-
-fn build_media_index(cache_root: &Path, listing: &Listing) -> ListingMedia {
-    let cache_dir = resolve_cache_dir(cache_root, listing);
-    let cache_dir_ref = cache_dir.as_deref();
-
-    let mut images = listing
-        .images
-        .iter()
-        .filter(|image| !image.remote.starts_with("local://contact-sheet/"))
-        .filter_map(|image| {
-            resolve_local_asset(cache_root, cache_dir_ref, image.local.as_deref(), listing)
-        })
-        .collect::<Vec<_>>();
-    images.sort();
-    images.dedup();
-    let contact_sheet = listing
-        .images
-        .iter()
-        .find(|image| image.remote.starts_with("local://contact-sheet/"))
-        .and_then(|image| {
-            resolve_local_asset(cache_root, cache_dir_ref, image.local.as_deref(), listing)
-        })
-        .or_else(|| cache_dir_ref.and_then(find_contact_sheet));
-
-    let floorplan = resolve_local_asset(
-        cache_root,
-        cache_dir_ref,
-        listing.floorplan.local.as_deref(),
-        listing,
-    );
-    let satellite = resolve_local_asset(
-        cache_root,
-        cache_dir_ref,
-        listing.map_views.satellite.local.as_deref(),
-        listing,
-    );
-    let street = resolve_local_asset(
-        cache_root,
-        cache_dir_ref,
-        listing.map_views.street.local.as_deref(),
-        listing,
-    );
-    ListingMedia {
-        cache_dir,
-        contact_sheet,
-        images,
-        floorplan,
-        satellite,
-        street,
-    }
-}
-
-fn find_contact_sheet(cache_dir: &Path) -> Option<PathBuf> {
-    let mut sheets = fs::read_dir(cache_dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.contains("-contact-sheet-") && name.ends_with(".jpg"))
-        })
-        .collect::<Vec<_>>();
-    sheets.sort();
-    sheets.pop()
-}
-
-fn resolve_cache_dir(cache_root: &Path, listing: &Listing) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(rightmove) = listing.portal_ids.rightmove.as_deref() {
-        candidates.push(cache_root.join(rightmove));
-    }
-    candidates.push(cache_root.join(&listing.id));
-
-    candidates.into_iter().find(|path| path.exists())
-}
-
-fn resolve_local_asset(
-    cache_root: &Path,
-    cache_dir: Option<&Path>,
-    local: Option<&str>,
-    listing: &Listing,
-) -> Option<PathBuf> {
-    let raw = local?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-
-    let direct = PathBuf::from(raw);
-    if direct.is_absolute() {
-        return direct.exists().then_some(direct);
-    }
-
-    let mut candidates = Vec::new();
-    if let Some(dir) = cache_dir {
-        candidates.push(dir.join(raw));
-    }
-    if let Some(rightmove) = listing.portal_ids.rightmove.as_deref() {
-        candidates.push(cache_root.join(rightmove).join(raw));
-    }
-    candidates.push(cache_root.join(raw));
-
-    candidates.into_iter().find(|path| path.exists())
 }
 
 fn compact_media_asset(listing_key: &str, path: &Path) -> String {
@@ -1442,21 +1150,19 @@ mod tests {
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use let_sdk::intelligence::{
-        AddressEvidence, AssessmentRecord, BroadbandEvidence, ConfidenceLevel, DescriptionEvidence,
-        EvidenceBundle, InspectDepth, IntelligenceDb, MediaEvidence, RefreshPolicy,
-        RightmoveEvidence, SectionState, SectionStatus,
-    };
-    use let_sdk::schema::listing::{
-        Agent, AreaMetrics, ExtractionStatus, GeoLocation, Lettings, Listing, ListingStatus,
-        MapViews, PortalIds, RemoteLocalAsset,
+        AddressEvidence, AssessmentRecord, BroadbandEvidence, ConfidenceLevel,
+        ContactSheetEvidence, DescriptionEvidence, EvidenceBundle, FactEvidence, FactProvider,
+        InspectDepth, IntelligenceDb, MediaEvidence, MediaItemEvidence, NearestStationEvidence,
+        RefreshPolicy, RightmoveEvidence, SectionState, SectionStatus,
     };
     use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Color};
     use serde_json::json;
 
     use super::{
         App, ContextMediaItem, FocusPane, ListingMedia, build_context_media_items,
-        build_media_index, bundle_context_index, listing_from_bundle,
+        bundle_context_index,
     };
+    use crate::listing::TuiListingRow;
     use crate::preview::{PreviewAssetKind, PreviewController};
     use crate::theme::Theme;
 
@@ -1468,58 +1174,43 @@ mod tests {
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)
     }
 
-    fn sample_listing(index: usize) -> Listing {
+    fn sample_listing(index: usize) -> TuiListingRow {
         let rightmove_id = format!("900{index:03}");
-        Listing {
-            id: format!("rightmove:{rightmove_id}"),
-            portal_ids: PortalIds {
-                rightmove: Some(rightmove_id.clone()),
-                ..PortalIds::default()
-            },
-            uprn: None,
-            uprn_source: None,
-            uprn_confidence: None,
+        TuiListingRow {
+            id: rightmove_id.clone(),
+            entity_id: format!("rightmove:{rightmove_id}"),
+            rightmove_id: rightmove_id.clone(),
             url: format!("https://www.rightmove.co.uk/properties/{rightmove_id}"),
-            location: GeoLocation {
-                lat: 51.0,
-                lng: -0.1,
-                pin_type: None,
-            },
-            postcode: "SW1A 1AA".to_owned(),
-            address: format!("{index} Test Street"),
-            region: Some("test".to_owned()),
             google_maps_url: String::new(),
             google_maps_street_view_url: String::new(),
-            area: AreaMetrics::default(),
-            price: 1200 + index as i64,
+            address: format!("{index} Test Street"),
+            postcode: "SW1A 1AA".to_owned(),
+            region: Some("test".to_owned()),
+            price_pcm: 1200 + index as i64,
             price_display: format!("£{}", 1200 + index as i64),
             bedrooms: 2,
             bathrooms: 1,
             property_type: "Flat".to_owned(),
-            description: String::new(),
             notes: Vec::new(),
-            images: Vec::new(),
-            floorplan: RemoteLocalAsset::default(),
-            epc: RemoteLocalAsset::default(),
-            map_views: MapViews::default(),
             epc_rating: None,
+            epc_remote: None,
             floor_area_sqm: None,
-            epc_lodgement_date: None,
             epc_address_match: None,
-            epc_search_url: None,
-            nearest_stations: Vec::new(),
+            nearest_station_miles: None,
             gigabit_availability: None,
-            listed_date: None,
-            lettings: Lettings::default(),
-            agent: Agent::default(),
-            assessment: None,
-            assessed_at: None,
-            assessed_score: None,
-            scores: None,
-            fetched_at: "2026-06-19T00:00:00Z".to_owned(),
-            extraction_status: ExtractionStatus::Success,
-            status: ListingStatus::Active,
-            notion_page_id: None,
+            crime_rate_per_1k: None,
+            imd_decile: None,
+            available_date: None,
+            deposit: None,
+            agent_name: None,
+            agent_phone: None,
+            score_overall: None,
+            score_band: None,
+            score_confidence: None,
+            score_computed_at: None,
+            generated_at: "2026-06-19T00:00:00Z".to_owned(),
+            page_status: "active".to_owned(),
+            media: ListingMedia::default(),
         }
     }
 
@@ -1549,7 +1240,10 @@ mod tests {
 
     fn app_with_bundle(bundle: EvidenceBundle) -> App {
         let mut app = App::with_preview(PreviewController::disabled("test preview"));
-        app.listings = vec![listing_from_bundle(&bundle)];
+        app.listings = vec![TuiListingRow::from_bundle(
+            &bundle,
+            std::env::temp_dir().as_path(),
+        )];
         app.bundle_context = bundle_context_index(&[bundle]);
         app.selected = 0;
         app.rebuild_context_cache(true);
@@ -1611,6 +1305,11 @@ mod tests {
                     key_features: vec!["balcony".to_owned()],
                     normalized_text: "good light and practical layout".to_owned(),
                 },
+                nearest_stations: vec![NearestStationEvidence {
+                    name: "Example Station".to_owned(),
+                    distance: 0.7,
+                    unit: "miles".to_owned(),
+                }],
                 media: Vec::new(),
             },
             address: AddressEvidence {
@@ -1638,7 +1337,7 @@ mod tests {
             assessment: Some(AssessmentRecord::new(
                 "rightmove:900001".to_owned(),
                 json!({
-                    "recommendation": "stretch_view",
+                    "recommendation": "consider",
                     "confidence": "medium_high",
                     "score": 82,
                     "summary": "Worth viewing if the photos hold up.",
@@ -1691,23 +1390,60 @@ mod tests {
         fs::write(&sheet_path, b"sheet").expect("write contact sheet");
         fs::write(&photo_path, b"photo").expect("write photo");
 
-        let mut listing = sample_listing(1);
-        listing.images = vec![
-            let_sdk::schema::listing::ListingImage {
-                remote: "local://contact-sheet/rightmove:900001".to_owned(),
-                local: Some(sheet_path.display().to_string()),
-            },
-            let_sdk::schema::listing::ListingImage {
-                remote: "https://media.rightmove.co.uk/photo.jpg".to_owned(),
-                local: Some(photo_path.display().to_string()),
-            },
-        ];
-
-        let media = build_media_index(&test_dir, &listing);
+        let mut bundle = sample_evidence_bundle();
+        bundle.media.contact_sheet = Some(ContactSheetEvidence {
+            status: "generated".to_owned(),
+            photo_count: 1,
+            local_path: Some(sheet_path.display().to_string()),
+            generated_at: Some("2026-06-21T11:00:00Z".to_owned()),
+            width: None,
+            height: None,
+            content_hash: None,
+        });
+        bundle.media.photos.push(MediaItemEvidence {
+            kind: "photo".to_owned(),
+            remote_url: "https://media.rightmove.co.uk/photo.jpg".to_owned(),
+            local_path: Some(photo_path.display().to_string()),
+            width: None,
+            height: None,
+            content_hash: None,
+            status: "cached".to_owned(),
+        });
+        let listing = TuiListingRow::from_bundle(&bundle, &test_dir);
+        let media = listing.media;
 
         assert_eq!(media.contact_sheet.as_deref(), Some(sheet_path.as_path()));
         assert_eq!(media.images, vec![photo_path]);
         fs::remove_dir_all(test_dir).expect("remove test media dir");
+    }
+
+    #[test]
+    fn listing_row_preserves_active_area_facts() {
+        let mut bundle = sample_evidence_bundle();
+        bundle.facts = vec![
+            FactEvidence {
+                provider: FactProvider::DeprivationDb,
+                category: "deprivation".to_owned(),
+                name: "imdDecile".to_owned(),
+                value: json!(8),
+                confidence: ConfidenceLevel::Exact,
+                sources: Vec::new(),
+            },
+            FactEvidence {
+                provider: FactProvider::CrimeDb,
+                category: "crime".to_owned(),
+                name: "ratePer1k".to_owned(),
+                value: json!(42.5),
+                confidence: ConfidenceLevel::Exact,
+                sources: Vec::new(),
+            },
+        ];
+
+        let listing = TuiListingRow::from_bundle(&bundle, std::env::temp_dir().as_path());
+
+        assert_eq!(listing.imd_decile, Some(8));
+        assert_eq!(listing.crime_rate_per_1k, Some(42.5));
+        assert_eq!(listing.nearest_station_miles, Some(0.7));
     }
 
     #[test]
@@ -1723,7 +1459,7 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(text.contains("assessment"));
-        assert!(text.contains("stretch_view"));
+        assert!(text.contains("consider"));
         assert!(text.contains("medium_high"));
         assert!(text.contains("Worth viewing"));
         assert!(text.contains("rightmove"));
@@ -1758,7 +1494,7 @@ mod tests {
         db.save_assessment(
             &bundle.rightmove_id,
             json!({
-                "recommendation": "stretch_view",
+                "recommendation": "consider",
                 "confidence": "medium_high",
                 "summary": "Worth viewing if the photos hold up."
             }),
@@ -1780,7 +1516,7 @@ mod tests {
             .expect("render context");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("stretch_view"));
+        assert!(text.contains("consider"));
         assert!(text.contains("medium_high"));
         assert!(text.contains("Worth viewing if the photos hold up."));
         assert!(!text.contains("no saved assessment"));
@@ -1838,7 +1574,7 @@ mod tests {
         bundle.assessment = Some(AssessmentRecord::new(
             bundle.entity_id.clone(),
             json!({
-                "recommendation": "stretch_view",
+                "recommendation": "consider",
                 "confidence": "medium_high",
                 "summary": "This is a deliberately long assessment summary with enough detail to wrap over multiple rendered lines in the context pane. It should stay readable through the summary scroll path instead of being truncated away.",
                 "positives": [

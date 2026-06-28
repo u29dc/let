@@ -16,9 +16,9 @@ use crate::intelligence::types::{
     AddressCandidateEvidence, AddressEvidence, AssessmentRecord, BroadbandEvidence, ClaimEvidence,
     ConfidenceLevel, ContactSheetEvidence, CorrectionKind, CorrectionRecord, DescriptionEvidence,
     EpcEvidence, EvidenceBundle, EvidenceSection, FactEvidence, FactProvider, InspectDepth,
-    ListingListFilters, MediaEvidence, MediaItemEvidence, RefreshPolicy, RightmoveEvidence,
-    SectionState, SectionStatus, SourceRef, SourceSnapshotEvidence, StoredAssessmentSummary,
-    StoredListingSummary, VerificationEvidence, VerificationStatus,
+    ListingListFilters, MediaEvidence, MediaItemEvidence, NearestStationEvidence, RefreshPolicy,
+    RightmoveEvidence, SectionState, SectionStatus, SourceRef, SourceSnapshotEvidence,
+    StoredAssessmentSummary, StoredListingSummary, VerificationEvidence, VerificationStatus,
 };
 use crate::pipeline::enrich::{
     AreaPostcodeSnapshot, BroadbandProfile, EnrichmentMode, SourceEnricher,
@@ -32,6 +32,10 @@ use crate::pipeline::fetch::rightmove::{
 };
 use crate::pipeline::geocode::mapbox_forward_geocode;
 use crate::schema::listing::{Listing, PinType, RemoteLocalAsset};
+use crate::score::{
+    ScoreResult, ScoreSummary, ScorecardConfig, ScorecardRef, compute_score, configured_scorecards,
+    resolve_scorecard,
+};
 use crate::utils::time::now_iso;
 
 #[derive(Debug, Clone)]
@@ -93,6 +97,32 @@ pub struct AssessGetParams {
 pub struct AssessListParams {
     pub filters: ListingListFilters,
     pub database_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoreComputeParams {
+    pub id: String,
+    pub scorecard_id: String,
+    pub database_path: PathBuf,
+    pub config_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoreGetParams {
+    pub id: String,
+    pub scorecard_id: String,
+    pub database_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoreListParams {
+    pub scorecard_id: Option<String>,
+    pub database_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScorecardsParams {
+    pub config_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +220,26 @@ pub struct CorrectionResponse {
 pub struct AssessListResponse {
     pub assessments: Vec<StoredAssessmentSummary>,
     pub filters: ListingListFilters,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScoreComputeResponse {
+    pub score: ScoreResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScoreListResponse {
+    pub scores: Vec<ScoreSummary>,
+    pub scorecard_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScorecardsResponse {
+    pub scorecards: Vec<ScorecardConfig>,
+    pub default_scorecard: ScorecardRef,
 }
 
 pub fn inspect(params: InspectParams) -> Result<EvidenceBundle> {
@@ -555,6 +605,61 @@ pub fn assess_list(params: AssessListParams) -> Result<AssessListResponse> {
     })
 }
 
+pub fn score_compute(params: ScoreComputeParams) -> Result<ScoreComputeResponse> {
+    let config = load_config(Some(&params.config_path))?;
+    let scorecard = resolve_scorecard(&params.scorecard_id, &config.scorecards)?;
+    let db = IntelligenceDb::open(&params.database_path)?;
+    let bundle = db.load_bundle(&params.id)?.ok_or_else(|| {
+        LetError::new(
+            ErrorCode::NotFound,
+            format!("no evidence bundle found for `{}`", params.id),
+            "run `let inspect <id>` first",
+        )
+    })?;
+    let score = compute_score(&bundle, &scorecard);
+    db.save_score_result(&score)?;
+    Ok(ScoreComputeResponse { score })
+}
+
+pub fn score_get(params: ScoreGetParams) -> Result<ScoreResult> {
+    let db = IntelligenceDb::open(params.database_path)?;
+    db.load_score_result(&params.id, &params.scorecard_id)?
+        .ok_or_else(|| {
+            LetError::new(
+                ErrorCode::NotFound,
+                format!(
+                    "no `{}` score found for `{}`",
+                    params.scorecard_id, params.id
+                ),
+                "run `let score compute <id>` first",
+            )
+        })
+}
+
+pub fn score_list(params: ScoreListParams) -> Result<ScoreListResponse> {
+    let db = IntelligenceDb::open(params.database_path)?;
+    let scores = db.list_score_summaries(params.scorecard_id.as_deref())?;
+    Ok(ScoreListResponse {
+        scores,
+        scorecard_id: params.scorecard_id,
+    })
+}
+
+pub fn scorecards(params: ScorecardsParams) -> Result<ScorecardsResponse> {
+    let config = load_config(Some(&params.config_path))?;
+    let scorecards = configured_scorecards(&config.scorecards)?;
+    let default_scorecard = scorecards
+        .iter()
+        .find(|scorecard| scorecard.id == crate::score::DEFAULT_SCORECARD_ID)
+        .or_else(|| scorecards.first())
+        .map(ScorecardRef::from)
+        .expect("configured_scorecards always returns at least the default scorecard");
+    Ok(ScorecardsResponse {
+        scorecards,
+        default_scorecard,
+    })
+}
+
 fn requested_sections(
     depth: InspectDepth,
     explicit: &[EvidenceSection],
@@ -809,6 +914,15 @@ fn rightmove_evidence(
             key_features: extracted.description.key_features.clone(),
             normalized_text: extracted.description.normalized_text.clone(),
         },
+        nearest_stations: extracted
+            .nearest_stations
+            .iter()
+            .map(|station| NearestStationEvidence {
+                name: station.name.clone(),
+                distance: station.distance,
+                unit: station.unit.clone(),
+            })
+            .collect(),
         media: media
             .photos
             .iter()

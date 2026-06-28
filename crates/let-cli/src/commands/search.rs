@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use let_sdk::config::{RIGHTMOVE_SEARCH_TYPES, SearchFilters, load_config};
-use let_sdk::{ErrorCode, list_known_portal_ids};
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE, HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -167,47 +166,6 @@ impl<'a> DiscoverRuntimeConfig<'a> {
             html_base_url,
         }
     }
-}
-
-#[allow(dead_code)]
-pub fn diff(shared: &SharedArgs, ids_raw: &str) -> CommandResult {
-    let input_ids = parse_csv(ids_raw);
-    if input_ids.is_empty() {
-        return Err(CommandError::runtime(
-            "VALIDATION_ERROR",
-            "no ids provided",
-            "provide comma-separated portal ids",
-        ));
-    }
-
-    let paths = let_sdk::paths::resolve_paths(Some(shared.overrides.clone()));
-    let db_path = paths.derived.database;
-
-    let (known_ids, database_present) = match list_known_portal_ids(&db_path) {
-        Ok(ids) => (ids.into_iter().collect::<HashSet<_>>(), true),
-        Err(error) if error.code == ErrorCode::NotFound => (HashSet::new(), false),
-        Err(error) => return Err(error.into()),
-    };
-
-    let mut known = Vec::new();
-    let mut new_ids = Vec::new();
-    for id in &input_ids {
-        if known_ids.contains(id) {
-            known.push(id.clone());
-        } else {
-            new_ids.push(id.clone());
-        }
-    }
-
-    Ok(CommandOutput::new(json!({
-        "new": new_ids,
-        "known": known,
-        "databasePresent": database_present,
-        "total": input_ids.len(),
-    }))
-    .with_count(input_ids.len())
-    .with_total(input_ids.len())
-    .with_has_more(false))
 }
 
 pub fn resolve(location: &str) -> CommandResult {

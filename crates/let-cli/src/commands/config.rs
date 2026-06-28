@@ -45,19 +45,3 @@ pub fn profiles(shared: &SharedArgs) -> CommandResult {
         .with_total(count)
         .with_has_more(false))
 }
-
-#[allow(dead_code)]
-pub fn validate(shared: &SharedArgs) -> CommandResult {
-    let paths = shared.resolved_paths();
-    let path = shared.config_path(&paths)?;
-    let config = load_config(Some(&path))?;
-    config.validate()?;
-    let path_display = path.display().to_string();
-
-    let data = json!({
-        "path": path_display,
-        "valid": true,
-        "errors": [],
-    });
-    Ok(CommandOutput::new(data))
-}

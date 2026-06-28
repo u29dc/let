@@ -116,6 +116,16 @@ enum Command {
         #[command(subcommand)]
         command: Option<AssessCommand>,
     },
+    /// Compute and read deterministic scorecard results.
+    Score {
+        #[command(subcommand)]
+        command: Option<ScoreCommand>,
+    },
+    /// Inspect configured scorecards.
+    Scorecards {
+        #[command(subcommand)]
+        command: Option<ScorecardsCommand>,
+    },
     /// Record manual evidence corrections without mutating source snapshots.
     Correct {
         #[command(subcommand)]
@@ -235,6 +245,46 @@ enum AssessCommand {
         filters: CliListFilters,
     },
     /// Capture unknown assess subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum ScoreCommand {
+    /// Compute and persist a deterministic score for a stored evidence bundle.
+    Compute {
+        /// Rightmove id or entity id.
+        id: String,
+        /// Scorecard id from config.
+        #[arg(long, default_value = let_sdk::score::DEFAULT_SCORECARD_ID)]
+        scorecard: String,
+    },
+    /// Read the latest persisted score for a listing and scorecard.
+    Get {
+        /// Rightmove id or entity id.
+        id: String,
+        /// Scorecard id from config.
+        #[arg(long, default_value = let_sdk::score::DEFAULT_SCORECARD_ID)]
+        scorecard: String,
+    },
+    /// List persisted scores.
+    List {
+        /// Optional scorecard id filter.
+        #[arg(long)]
+        scorecard: Option<String>,
+    },
+    /// Capture unknown score subcommands.
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum ScorecardsCommand {
+    /// List resolved scorecard configs.
+    List,
+    /// Validate scorecard config.
+    Validate,
+    /// Capture unknown scorecards subcommands.
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -743,6 +793,58 @@ fn dispatch(command: &Command, shared: &SharedArgs) -> DispatchOutcome {
         Command::Assess {
             command: Some(AssessCommand::External(args)),
         } => unsupported_external_group("assess", args),
+        Command::Score {
+            command: Some(ScoreCommand::Compute { id, scorecard }),
+        } => DispatchOutcome::local(
+            "score.compute",
+            commands::score::compute(
+                shared,
+                commands::score::ScoreComputeCommandParams {
+                    id: id.clone(),
+                    scorecard_id: scorecard.clone(),
+                },
+            ),
+        ),
+        Command::Score {
+            command: Some(ScoreCommand::Get { id, scorecard }),
+        } => DispatchOutcome::local(
+            "score.get",
+            commands::score::get(
+                shared,
+                commands::score::ScoreGetCommandParams {
+                    id: id.clone(),
+                    scorecard_id: scorecard.clone(),
+                },
+            ),
+        ),
+        Command::Score {
+            command: Some(ScoreCommand::List { scorecard }),
+        } => DispatchOutcome::local(
+            "score.list",
+            commands::score::list(
+                shared,
+                commands::score::ScoreListCommandParams {
+                    scorecard_id: scorecard.clone(),
+                },
+            ),
+        ),
+        Command::Score { command: None } => DispatchOutcome::help(&["score"]),
+        Command::Score {
+            command: Some(ScoreCommand::External(args)),
+        } => unsupported_external_group("score", args),
+        Command::Scorecards {
+            command: Some(ScorecardsCommand::List),
+        } => DispatchOutcome::local("scorecards.list", commands::score::scorecards_list(shared)),
+        Command::Scorecards {
+            command: Some(ScorecardsCommand::Validate),
+        } => DispatchOutcome::local(
+            "scorecards.validate",
+            commands::score::scorecards_validate(shared),
+        ),
+        Command::Scorecards { command: None } => DispatchOutcome::help(&["scorecards"]),
+        Command::Scorecards {
+            command: Some(ScorecardsCommand::External(args)),
+        } => unsupported_external_group("scorecards", args),
         Command::Correct {
             command:
                 Some(CorrectCommand::Address {

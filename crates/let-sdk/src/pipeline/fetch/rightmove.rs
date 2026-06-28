@@ -82,6 +82,8 @@ pub struct RightmovePropertyExtract {
     pub available_date: Option<String>,
     pub deposit: Option<i64>,
     pub description: RightmoveDescriptionExtract,
+    #[serde(default)]
+    pub nearest_stations: Vec<StationDistance>,
     pub media: RightmoveMediaExtract,
 }
 
@@ -178,6 +180,7 @@ pub fn extract_property_evidence(
             .and_then(string_value),
         deposit: get_path(property_data, &["lettings", "deposit"]).and_then(value_to_i64),
         description: extract_description(property_data),
+        nearest_stations: extract_stations(property_data),
         media: RightmoveMediaExtract {
             photos: extract_image_urls(get_path(property_data, &["images"])),
             floorplans: extract_url_list(get_path(property_data, &["floorplans"])),
@@ -567,10 +570,6 @@ fn transform_listing(
         listed_date,
         lettings,
         agent,
-        assessment: None,
-        assessed_at: None,
-        assessed_score: None,
-        scores: None,
         fetched_at: crate::utils::time::now_iso(),
         extraction_status: if has_all_optional {
             ExtractionStatus::Success

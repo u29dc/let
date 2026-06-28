@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod listing;
 mod preview;
 mod theme;
 mod ui;

@@ -6,6 +6,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::intelligence::assessment::normalize_assessment;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InspectDepth {
@@ -298,7 +300,17 @@ pub struct RightmoveEvidence {
     pub deposit: Option<i64>,
     pub description: DescriptionEvidence,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nearest_stations: Vec<NearestStationEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub media: Vec<MediaItemEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NearestStationEvidence {
+    pub name: String,
+    pub distance: f64,
+    pub unit: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -507,12 +519,15 @@ impl AssessmentRecord {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NormalizedAssessment {
     pub recommendation: Option<String>,
     pub confidence: Option<String>,
     pub summary: Option<String>,
+    pub score_adjustment: Option<f64>,
+    pub judgment_score: Option<f64>,
+    pub judgment_rationale: Option<String>,
     #[serde(default)]
     pub positives: Vec<String>,
     #[serde(default)]
@@ -657,118 +672,6 @@ pub struct EvidenceQualityFlag {
     #[serde(default)]
     pub sources: Vec<String>,
     pub recommended_action: String,
-}
-
-pub fn normalize_assessment(assessment: &Value) -> NormalizedAssessment {
-    let mut normalized = NormalizedAssessment {
-        recommendation: normalized_enum_text(
-            assessment_text(assessment, &["recommendation"]),
-            &[
-                "view",
-                "stretch_view",
-                "backup_view",
-                "watch",
-                "pass",
-                "benchmark",
-            ],
-            "recommendation",
-        ),
-        confidence: normalized_enum_text(
-            assessment_text(assessment, &["confidence"]),
-            &["high", "medium_high", "medium", "low"],
-            "confidence",
-        ),
-        summary: assessment_text(assessment, &["summary"]),
-        positives: assessment_text_list(assessment, &["positives", "pros"]),
-        risks: assessment_text_list(assessment, &["risks", "cons"]),
-        next_actions: assessment_text_list(assessment, &["nextActions", "next_actions"]),
-        tradeoffs: assessment_text_list(assessment, &["tradeoffs", "tradeOffs", "trade_offs"]),
-        area_notes: assessment_text(assessment, &["areaNotes", "area_notes"]),
-        commute_notes: assessment_text(assessment, &["commuteNotes", "commute_notes"]),
-        family_fit: assessment_text(assessment, &["familyFit", "family_fit"]),
-        evidence_gaps: assessment_text_list(assessment, &["evidenceGaps", "evidence_gaps"]),
-        source: assessment_text(assessment, &["source"]),
-        warnings: Vec::new(),
-    };
-
-    warn_unknown_enum(
-        &mut normalized,
-        "recommendation",
-        &[
-            "view",
-            "stretch_view",
-            "backup_view",
-            "watch",
-            "pass",
-            "benchmark",
-        ],
-    );
-    warn_unknown_enum(
-        &mut normalized,
-        "confidence",
-        &["high", "medium_high", "medium", "low"],
-    );
-
-    normalized
-}
-
-fn assessment_text(assessment: &Value, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(value) = assessment.get(*key).and_then(value_to_text) {
-            return Some(value);
-        }
-    }
-    None
-}
-
-fn assessment_text_list(assessment: &Value, keys: &[&str]) -> Vec<String> {
-    let Some(value) = keys.iter().find_map(|key| assessment.get(*key)) else {
-        return Vec::new();
-    };
-    match value {
-        Value::Array(items) => items.iter().filter_map(value_to_text).collect(),
-        other => value_to_text(other).into_iter().collect(),
-    }
-}
-
-fn value_to_text(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => non_empty_text(text),
-        Value::Number(number) => Some(number.to_string()),
-        Value::Bool(flag) => Some(flag.to_string()),
-        _ => None,
-    }
-}
-
-fn normalized_enum_text(value: Option<String>, _allowed: &[&str], _field: &str) -> Option<String> {
-    value
-        .map(|text| normalize_token(&text))
-        .filter(|text| !text.is_empty())
-}
-
-fn warn_unknown_enum(assessment: &mut NormalizedAssessment, field: &str, allowed: &[&str]) {
-    let value = match field {
-        "recommendation" => assessment.recommendation.as_deref(),
-        "confidence" => assessment.confidence.as_deref(),
-        _ => None,
-    };
-    let Some(value) = value else {
-        return;
-    };
-    if !allowed.iter().any(|allowed| allowed == &value) {
-        assessment.warnings.push(format!(
-            "`{field}` value `{value}` is outside the recommended assessment vocabulary"
-        ));
-    }
-}
-
-fn normalize_token(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace([' ', '-'], "_")
-}
-
-fn non_empty_text(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 pub fn compute_evidence_quality_flags(bundle: &EvidenceBundle) -> Vec<EvidenceQualityFlag> {
@@ -1030,32 +933,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_recommended_assessment_fields() {
-        let normalized = normalize_assessment(&json!({
-            "recommendation": "Stretch View",
-            "confidence": "medium-high",
-            "summary": "Worth viewing if evidence checks out.",
-            "positives": "station access",
-            "risks": ["EPC mismatch"],
-            "next_actions": ["call agent"],
-            "tradeoffs": ["smaller garden"],
-            "area_notes": "walkable",
-            "commuteNotes": "direct train",
-            "family_fit": "plausible",
-            "evidenceGaps": "floor area",
-            "source": "agent"
-        }));
-
-        assert_eq!(normalized.recommendation.as_deref(), Some("stretch_view"));
-        assert_eq!(normalized.confidence.as_deref(), Some("medium_high"));
-        assert_eq!(normalized.positives, vec!["station access"]);
-        assert_eq!(normalized.risks, vec!["EPC mismatch"]);
-        assert_eq!(normalized.next_actions, vec!["call agent"]);
-        assert_eq!(normalized.evidence_gaps, vec!["floor area"]);
-        assert!(normalized.warnings.is_empty());
-    }
-
-    #[test]
     fn flags_generic_evidence_quality_issues() {
         let mut bundle = test_bundle();
         bundle.broadband = Some(BroadbandEvidence {
@@ -1210,6 +1087,7 @@ mod tests {
                     key_features: Vec::new(),
                     normalized_text: String::new(),
                 },
+                nearest_stations: Vec::new(),
                 media: Vec::new(),
             },
             address: AddressEvidence {

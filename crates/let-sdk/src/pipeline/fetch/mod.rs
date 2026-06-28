@@ -24,15 +24,6 @@ pub fn carry_over_persistent_fields(incoming: &mut Listing, existing: &Listing) 
     if incoming.notion_page_id.is_none() {
         incoming.notion_page_id = existing.notion_page_id.clone();
     }
-    if incoming.assessment.is_none() {
-        incoming.assessment = existing.assessment.clone();
-    }
-    if incoming.assessed_at.is_none() {
-        incoming.assessed_at = existing.assessed_at.clone();
-    }
-    if incoming.assessed_score.is_none() {
-        incoming.assessed_score = existing.assessed_score;
-    }
     if incoming.uprn.is_none() {
         incoming.uprn = existing.uprn.clone();
     }
@@ -165,10 +156,6 @@ mod tests {
             listed_date: None,
             lettings: Lettings::default(),
             agent: Agent::default(),
-            assessment: None,
-            assessed_at: None,
-            assessed_score: None,
-            scores: None,
             fetched_at: "2026-01-01T00:00:00.000Z".to_owned(),
             extraction_status: ExtractionStatus::Partial,
             status: ListingStatus::Active,

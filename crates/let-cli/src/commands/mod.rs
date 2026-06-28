@@ -15,6 +15,7 @@ pub mod correct;
 pub mod evidence;
 pub mod health;
 pub mod inspect;
+pub mod score;
 pub mod search;
 pub mod sources;
 pub mod start;

@@ -78,25 +78,18 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
     let header = Row::new([
         Cell::from("id"),
         Cell::from("region"),
+        Cell::from("score"),
         Cell::from("price"),
         Cell::from("dep"),
         Cell::from("avail"),
         Cell::from("bed"),
         Cell::from("bath"),
-        Cell::from("algo"),
-        Cell::from("assess"),
-        Cell::from("aff"),
-        Cell::from("loc"),
-        Cell::from("live"),
-        Cell::from("conf"),
         Cell::from("epc"),
         Cell::from("sqm"),
         Cell::from("stn"),
         Cell::from("gig"),
         Cell::from("crime"),
         Cell::from("imd"),
-        Cell::from("garden"),
-        Cell::from("pets"),
         Cell::from("type"),
         Cell::from("status"),
         Cell::from("address"),
@@ -115,124 +108,67 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
         .skip(visible_start)
         .take(visible_limit)
         .map(|listing| {
-            let id = listing
-                .portal_ids
-                .rightmove
-                .as_deref()
-                .unwrap_or(listing.id.as_str())
-                .to_owned();
+            let id = listing.rightmove_id.clone();
             let region = listing.region.clone().unwrap_or_else(|| "--".to_owned());
-            let price = format!("£{}", listing.price);
+            let score = listing
+                .score_overall
+                .map(|value| format!("{value:.0}"))
+                .unwrap_or_else(|| "--".to_owned());
+            let price = format!("£{}", listing.price_pcm);
             let deposit = listing
-                .lettings
                 .deposit
                 .map(|value| format!("£{value}"))
                 .unwrap_or_else(|| "--".to_owned());
             let available = listing
-                .lettings
                 .available_date
                 .as_deref()
                 .map(short_date)
                 .unwrap_or_else(|| "--".to_owned());
             let beds = listing.bedrooms.to_string();
             let baths = listing.bathrooms.to_string();
-            let algo = listing
-                .scores
-                .as_ref()
-                .map(|scores| format!("{:.0}", scores.overall))
-                .unwrap_or_else(|| "--".to_owned());
-            let assess = listing
-                .assessed_score
-                .map(|value| format!("{:.0}", value))
-                .unwrap_or_else(|| "--".to_owned());
-            let affordability = listing
-                .scores
-                .as_ref()
-                .map(|scores| format!("{:.0}", scores.affordability))
-                .unwrap_or_else(|| "--".to_owned());
-            let location = listing
-                .scores
-                .as_ref()
-                .map(|scores| format!("{:.0}", scores.location))
-                .unwrap_or_else(|| "--".to_owned());
-            let liveability = listing
-                .scores
-                .as_ref()
-                .map(|scores| format!("{:.0}", scores.liveability))
-                .unwrap_or_else(|| "--".to_owned());
-            let confidence = listing
-                .scores
-                .as_ref()
-                .map(|scores| format!("{:.0}%", scores.confidence * 100.0))
-                .unwrap_or_else(|| "--".to_owned());
             let epc = listing
                 .epc_rating
-                .as_ref()
-                .map(epc_band_label)
+                .clone()
                 .unwrap_or_else(|| "--".to_owned());
             let sqm = listing
                 .floor_area_sqm
                 .map(|value| format!("{value:.0}"))
                 .unwrap_or_else(|| "--".to_owned());
             let station = listing
-                .nearest_stations
-                .first()
-                .map(|item| format!("{:.1}", item.distance))
+                .nearest_station_miles
+                .map(|distance| format!("{distance:.1}"))
                 .unwrap_or_else(|| "--".to_owned());
             let gigabit = listing
                 .gigabit_availability
                 .map(|value| format!("{value:.0}"))
                 .unwrap_or_else(|| "--".to_owned());
             let crime = listing
-                .area
-                .crime
-                .rate_per_1k
+                .crime_rate_per_1k
                 .map(|value| format!("{value:.1}"))
                 .unwrap_or_else(|| "--".to_owned());
             let imd = listing
-                .area
-                .imd
-                .decile
+                .imd_decile
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "--".to_owned());
-            let garden = listing
-                .scores
-                .as_ref()
-                .map(|scores| format!("{:?}", scores.factors.garden_type))
-                .unwrap_or_else(|| "--".to_owned())
-                .to_lowercase();
-            let pets = listing
-                .scores
-                .as_ref()
-                .map(|scores| format!("{:?}", scores.factors.pet_policy))
-                .unwrap_or_else(|| "--".to_owned())
-                .to_lowercase();
             let property_type = truncate(&listing.property_type, 10);
-            let status = format!("{:?}", listing.status).to_lowercase();
+            let status = listing.page_status.clone();
             let address = truncate(&listing.address, 44);
 
             Row::new([
                 Cell::from(id),
                 Cell::from(truncate(&region, 12)),
+                Cell::from(score),
                 Cell::from(price),
                 Cell::from(deposit),
                 Cell::from(available),
                 Cell::from(beds),
                 Cell::from(baths),
-                Cell::from(algo),
-                Cell::from(assess),
-                Cell::from(affordability),
-                Cell::from(location),
-                Cell::from(liveability),
-                Cell::from(confidence),
                 Cell::from(epc),
                 Cell::from(sqm),
                 Cell::from(station),
                 Cell::from(gigabit),
                 Cell::from(crime),
                 Cell::from(imd),
-                Cell::from(garden),
-                Cell::from(pets),
                 Cell::from(property_type),
                 Cell::from(status),
                 Cell::from(address),
@@ -246,25 +182,18 @@ fn render_listings_table(frame: &mut Frame<'_>, area: Rect, app: &App, theme: &T
         [
             Constraint::Length(10),
             Constraint::Length(12),
+            Constraint::Length(5),
             Constraint::Length(8),
             Constraint::Length(8),
             Constraint::Length(10),
             Constraint::Length(3),
             Constraint::Length(4),
-            Constraint::Length(5),
-            Constraint::Length(6),
-            Constraint::Length(4),
-            Constraint::Length(4),
-            Constraint::Length(4),
-            Constraint::Length(5),
             Constraint::Length(3),
             Constraint::Length(4),
             Constraint::Length(4),
             Constraint::Length(3),
             Constraint::Length(5),
             Constraint::Length(3),
-            Constraint::Length(7),
-            Constraint::Length(5),
             Constraint::Length(10),
             Constraint::Length(8),
             Constraint::Min(36),
@@ -604,11 +533,7 @@ fn build_context_summary_lines(app: &App, theme: &Theme, compact: bool) -> Vec<L
     };
 
     let mut lines = Vec::new();
-    let id = listing
-        .portal_ids
-        .rightmove
-        .as_deref()
-        .unwrap_or(listing.id.as_str());
+    let id = listing.rightmove_id.as_str();
     let cache = app
         .selected_media()
         .cache_dir
@@ -621,10 +546,8 @@ fn build_context_summary_lines(app: &App, theme: &Theme, compact: bool) -> Vec<L
     append_listing_detail_lines(&mut lines, listing, cache, media_count, theme, compact);
 
     if let Some(bundle) = app.selected_bundle() {
-        append_bundle_assessment_lines(&mut lines, bundle, listing.assessed_score, theme, compact);
+        append_bundle_assessment_lines(&mut lines, bundle, theme, compact);
         append_bundle_evidence_lines(&mut lines, bundle, theme, compact);
-    } else {
-        append_legacy_assessment_lines(&mut lines, listing, theme, compact);
     }
 
     lines.push(Line::from(""));
@@ -643,7 +566,7 @@ fn build_context_summary_lines(app: &App, theme: &Theme, compact: bool) -> Vec<L
 
 fn append_listing_detail_lines(
     lines: &mut Vec<Line<'static>>,
-    listing: &let_sdk::schema::listing::Listing,
+    listing: &crate::listing::TuiListingRow,
     cache: String,
     media_count: usize,
     theme: &Theme,
@@ -651,22 +574,30 @@ fn append_listing_detail_lines(
 ) {
     let max = if compact { 112 } else { 180 };
     let price = if listing.price_display.trim().is_empty() {
-        format!("£{} pcm", listing.price)
+        format!("£{} pcm", listing.price_pcm)
     } else {
         listing.price_display.clone()
     };
     let deposit = listing
-        .lettings
         .deposit
         .map(|value| format!("£{value}"))
         .unwrap_or_else(|| "--".to_owned());
-    let available = listing.lettings.available_date.as_deref().unwrap_or("--");
+    let available = listing.available_date.as_deref().unwrap_or("--");
     let epc = listing
         .epc_rating
-        .as_ref()
-        .map(epc_band_label)
-        .or_else(|| listing.epc.remote.clone())
+        .clone()
+        .or_else(|| listing.epc_remote.clone())
         .unwrap_or_else(|| "--".to_owned());
+    let epc_match = listing
+        .epc_address_match
+        .map(|matched| {
+            if matched {
+                "address match"
+            } else {
+                "address mismatch"
+            }
+        })
+        .unwrap_or("--");
     let floor_area = listing
         .floor_area_sqm
         .map(|value| format!("{value:.0} sqm"))
@@ -700,32 +631,56 @@ fn append_listing_detail_lines(
         ),
         theme,
     ));
-    lines.push(kv_line("address", truncate(&listing.address, max), theme));
+    let address = if listing.postcode.trim().is_empty() {
+        listing.address.clone()
+    } else {
+        format!("{} / {}", listing.address, listing.postcode)
+    };
+    lines.push(kv_line("address", truncate(&address, max), theme));
     lines.push(kv_line(
         "evidence",
-        format!("{epc} / {floor_area} / {broadband}"),
+        format!("{epc} / {epc_match} / {floor_area} / {broadband}"),
         theme,
     ));
+    if let Some(score) = listing.score_overall {
+        let band = listing.score_band.as_deref().unwrap_or("--");
+        let confidence = listing.score_confidence.as_deref().unwrap_or("--");
+        lines.push(kv_line(
+            "score",
+            format!("{score:.0}/100 / {band} / {confidence}"),
+            theme,
+        ));
+    }
     lines.push(kv_line(
         "cache/media",
         truncate(&format!("{cache} / {media_count} items"), max),
         theme,
     ));
 
-    if let Some(name) = listing.agent.name.as_deref() {
-        let phone = listing.agent.phone.as_deref().unwrap_or("--");
+    if let Some(name) = listing.agent_name.as_deref() {
+        let phone = listing.agent_phone.as_deref().unwrap_or("--");
         lines.push(kv_line(
             "agent",
             truncate(&format!("{name} / {phone}"), max),
             theme,
         ));
     }
+
+    if !compact && !listing.notes.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("notes", theme.section_heading)));
+        for note in listing.notes.iter().take(3) {
+            lines.push(Line::from(Span::styled(
+                format!("- {}", truncate(note, 140)),
+                theme.body,
+            )));
+        }
+    }
 }
 
 fn append_bundle_assessment_lines(
     lines: &mut Vec<Line<'static>>,
     bundle: &let_sdk::intelligence::EvidenceBundle,
-    assessed_score: Option<f64>,
     theme: &Theme,
     _compact: bool,
 ) {
@@ -747,13 +702,10 @@ fn append_bundle_assessment_lines(
         .unwrap_or("--")
         .to_owned();
     let confidence = normalized.confidence.as_deref().unwrap_or("--");
-    let score = assessed_score
-        .map(|value| format!("{value:.0}"))
-        .unwrap_or_else(|| "--".to_owned());
 
     lines.push(kv_line(
         "recommendation",
-        format!("{recommendation} / {confidence} / score {score}"),
+        format!("{recommendation} / {confidence}"),
         theme,
     ));
     lines.push(kv_line("saved", record.saved_at.clone(), theme));
@@ -877,56 +829,6 @@ fn append_bundle_evidence_lines(
     }
 }
 
-fn append_legacy_assessment_lines(
-    lines: &mut Vec<Line<'static>>,
-    listing: &let_sdk::schema::listing::Listing,
-    theme: &Theme,
-    compact: bool,
-) {
-    if let Some(assessment) = &listing.assessment {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "assessment",
-            theme.section_heading,
-        )));
-        lines.push(kv_line(
-            "recommendation",
-            format!("{:?}", assessment.recommendation).to_lowercase(),
-            theme,
-        ));
-        lines.push(kv_line(
-            "maintenance",
-            format!("{:?}", assessment.maintenance).to_lowercase(),
-            theme,
-        ));
-        lines.push(kv_line(
-            "family",
-            format!("{:?}", assessment.family_suitability).to_lowercase(),
-            theme,
-        ));
-        let max = if compact { 156 } else { 220 };
-        lines.push(kv_line(
-            "reasoning",
-            truncate(&assessment.reasoning, max),
-            theme,
-        ));
-        if let Some(tradeoffs) = &assessment.tradeoffs {
-            lines.push(kv_line("tradeoffs", truncate(tradeoffs, max), theme));
-        }
-    }
-
-    if !compact && !listing.notes.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("notes", theme.section_heading)));
-        for note in listing.notes.iter().take(3) {
-            lines.push(Line::from(Span::styled(
-                format!("- {}", truncate(note, 140)),
-                theme.body,
-            )));
-        }
-    }
-}
-
 fn append_list_kv(
     lines: &mut Vec<Line<'static>>,
     key: &str,
@@ -1012,19 +914,6 @@ fn kv_line(key: &str, value: impl Into<String>, theme: &Theme) -> Line<'static> 
         Span::styled(format!("{key}: "), theme.key),
         Span::styled(value, theme.body),
     ])
-}
-
-fn epc_band_label(band: &let_sdk::schema::listing::EpcBand) -> String {
-    match band {
-        let_sdk::schema::listing::EpcBand::A => "A",
-        let_sdk::schema::listing::EpcBand::B => "B",
-        let_sdk::schema::listing::EpcBand::C => "C",
-        let_sdk::schema::listing::EpcBand::D => "D",
-        let_sdk::schema::listing::EpcBand::E => "E",
-        let_sdk::schema::listing::EpcBand::F => "F",
-        let_sdk::schema::listing::EpcBand::G => "G",
-    }
-    .to_owned()
 }
 
 fn short_date(value: &str) -> String {

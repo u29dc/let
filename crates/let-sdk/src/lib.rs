@@ -2,34 +2,29 @@
 
 pub mod config;
 pub mod context;
-pub mod db;
 pub mod errors;
 pub mod intelligence;
 pub mod paths;
 pub mod pipeline;
 pub mod schema;
-pub mod services;
+pub mod score;
 pub mod sources;
 pub mod utils;
 
-pub use db::{
-    DbMeta, ListingSummary, ListingsOverview, close_listings_db, find_listing_by_id_from_db,
-    list_known_portal_ids, load_listing_summaries, load_listings_file, load_listings_overview,
-    open_listings_db, open_listings_db_readonly, replace_listing_scores, replace_listings,
-    update_listing_assessment, update_listing_notion_page_ids, upsert_listings,
-};
 pub use errors::{ErrorCode, LetError, Result};
 pub use intelligence::{
     AreaPostcodeParams, AssessGetParams, AssessListParams, AssessSaveParams, EvidenceListParams,
-    EvidenceParams, InspectParams, IntelligenceDb, ListingListFilters, RefreshPolicy, VerifyParams,
+    EvidenceParams, InspectParams, IntelligenceDb, ListingListFilters, RefreshPolicy,
+    ScoreComputeParams, ScoreGetParams, ScoreListParams, ScorecardsParams, VerifyParams,
     area_postcode, assess_get, assess_list, assess_save, database_overview, evidence,
-    evidence_list, inspect, verify,
+    evidence_list, inspect, score_compute, score_get, score_list, scorecards, verify,
 };
 pub use pipeline::enrich::{
     AreaPostcodeSnapshot, BroadbandProfile, EnrichmentMode, ListingEnrichmentReport,
     PostcodeCoordinates, SourceEnricher,
 };
 pub use pipeline::geocode::{GeocodeSource, GeocodedCoordinates, mapbox_forward_geocode};
-pub use pipeline::score::{
-    calculate_assessed_score, recalc_assessed_scores, score_listings_with_config,
+pub use score::{
+    ScoreJudgment, ScoreJudgmentPolicy, ScoreJudgmentSource, ScoreResult, ScoreSummary,
+    ScorecardConfig, compute_score,
 };

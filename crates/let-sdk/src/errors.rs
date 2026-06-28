@@ -79,7 +79,7 @@ impl From<rusqlite::Error> for LetError {
         let (code, hint) = match err.sqlite_error_code() {
             Some(SqliteErrorCode::SchemaChanged) => (
                 ErrorCode::SchemaMismatch,
-                "verify the listings database schema and recreate it if needed",
+                "verify the intelligence database schema and recreate it if needed",
             ),
             Some(SqliteErrorCode::DatabaseBusy | SqliteErrorCode::DatabaseLocked) => (
                 ErrorCode::Conflict,

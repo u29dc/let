@@ -270,6 +270,11 @@ fn tools_json_returns_agent_native_catalog() {
         "assess.save",
         "assess.get",
         "assess.list",
+        "score.compute",
+        "score.get",
+        "score.list",
+        "scorecards.list",
+        "scorecards.validate",
         "evidence.list",
         "sources.list",
         "sources.status",
@@ -281,13 +286,7 @@ fn tools_json_returns_agent_native_catalog() {
             "expected tool {expected}"
         );
     }
-    for removed in [
-        "fetch",
-        "view.list",
-        "score.compute",
-        "ops.patch",
-        "export.json",
-    ] {
+    for removed in ["fetch", "view.list", "ops.patch", "export.json"] {
         assert!(
             tools.iter().all(|tool| tool["name"] != removed),
             "removed tool {removed} should not be advertised"
@@ -1181,6 +1180,166 @@ fn assess_save_rejects_non_object_json() {
 }
 
 #[test]
+fn scorecards_list_and_validate_resolved_config() {
+    let fixture = Fixture::new();
+
+    let list = fixture
+        .cmd()
+        .args(["scorecards", "list"])
+        .output()
+        .expect("run scorecards list");
+    assert_eq!(list.status.code(), Some(0));
+    let list_json = assert_single_json_envelope(&list);
+    assert_eq!(list_json["meta"]["tool"], "scorecards.list");
+    assert_eq!(list_json["data"]["defaultScorecard"]["id"], "default");
+    assert_eq!(list_json["data"]["scorecards"][0]["id"], "default");
+
+    let validate = fixture
+        .cmd()
+        .args(["scorecards", "validate"])
+        .output()
+        .expect("run scorecards validate");
+    assert_eq!(validate.status.code(), Some(0));
+    let validate_json = assert_single_json_envelope(&validate);
+    assert_eq!(validate_json["meta"]["tool"], "scorecards.validate");
+    assert_eq!(validate_json["data"]["status"], "ok");
+}
+
+#[test]
+fn score_compute_get_and_list_persist_result() {
+    let fixture = Fixture::new();
+    fixture.seed_bundle();
+
+    let compute = fixture
+        .cmd()
+        .args(["score", "compute", "170448131"])
+        .output()
+        .expect("run score compute");
+    assert_eq!(compute.status.code(), Some(0));
+    let compute_json = assert_single_json_envelope(&compute);
+    assert_eq!(compute_json["meta"]["tool"], "score.compute");
+    assert_eq!(
+        compute_json["data"]["score"]["entityId"],
+        "rightmove:170448131"
+    );
+    assert_eq!(compute_json["data"]["score"]["scorecard"]["id"], "default");
+    assert!(
+        compute_json["data"]["score"]["baseOverall"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    assert!(compute_json["data"]["score"]["overall"].as_f64().unwrap() > 0.0);
+    assert_eq!(compute_json["data"]["score"]["judgment"]["source"], "none");
+    assert_eq!(
+        compute_json["data"]["score"]["baseOverall"],
+        compute_json["data"]["score"]["overall"]
+    );
+    assert!(
+        compute_json["data"]["score"]["domains"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 5
+    );
+
+    let get = fixture
+        .cmd()
+        .args(["score", "get", "170448131"])
+        .output()
+        .expect("run score get");
+    assert_eq!(get.status.code(), Some(0));
+    let get_json = assert_single_json_envelope(&get);
+    assert_eq!(get_json["meta"]["tool"], "score.get");
+    assert_eq!(
+        get_json["data"]["overall"],
+        compute_json["data"]["score"]["overall"]
+    );
+    assert_eq!(
+        get_json["data"]["baseOverall"],
+        compute_json["data"]["score"]["baseOverall"]
+    );
+
+    let list = fixture
+        .cmd()
+        .args(["score", "list", "--scorecard", "default"])
+        .output()
+        .expect("run score list");
+    assert_eq!(list.status.code(), Some(0));
+    let list_json = assert_single_json_envelope(&list);
+    assert_eq!(list_json["meta"]["tool"], "score.list");
+    assert_eq!(list_json["data"]["scores"].as_array().unwrap().len(), 1);
+    assert_eq!(list_json["data"]["scores"][0]["rightmoveId"], "170448131");
+    assert_eq!(
+        list_json["data"]["scores"][0]["baseOverall"],
+        compute_json["data"]["score"]["baseOverall"]
+    );
+    assert_eq!(list_json["data"]["scores"][0]["judgmentAdjustment"], 0.0);
+}
+
+#[test]
+fn score_list_orders_by_final_calibrated_score() {
+    let fixture = Fixture::new();
+    let high = sample_bundle_variant(
+        "170448132",
+        "2 Example Street",
+        "M1 1AB",
+        1500,
+        "2026-06-18T00:00:00.000Z",
+    );
+    let low = sample_bundle_variant(
+        "170448133",
+        "3 Example Street",
+        "M1 1AC",
+        1500,
+        "2026-06-18T00:00:00.000Z",
+    );
+    fixture.seed_bundle_record(&high);
+    fixture.seed_bundle_record(&low);
+    fixture.save_assessment(
+        "170448132",
+        json!({
+            "recommendation": "view",
+            "scoreAdjustment": 10,
+            "judgmentRationale": "Strong family fit."
+        }),
+    );
+    fixture.save_assessment(
+        "170448133",
+        json!({
+            "recommendation": "hold",
+            "scoreAdjustment": -8,
+            "judgmentRationale": "Important human-fit reservations."
+        }),
+    );
+
+    for id in ["170448133", "170448132"] {
+        let output = fixture
+            .cmd()
+            .args(["score", "compute", id])
+            .output()
+            .expect("run score compute");
+        assert_eq!(output.status.code(), Some(0));
+    }
+
+    let list = fixture
+        .cmd()
+        .args(["score", "list", "--scorecard", "default"])
+        .output()
+        .expect("run score list");
+    assert_eq!(list.status.code(), Some(0));
+    let list_json = assert_single_json_envelope(&list);
+    let scores = list_json["data"]["scores"].as_array().expect("scores");
+    assert_eq!(scores.len(), 2);
+    assert_eq!(scores[0]["rightmoveId"], "170448132");
+    assert_eq!(scores[0]["judgmentAdjustment"], 10.0);
+    assert_eq!(scores[1]["rightmoveId"], "170448133");
+    assert_eq!(scores[1]["judgmentAdjustment"], -8.0);
+    assert!(scores[0]["overall"].as_f64().unwrap() > scores[0]["baseOverall"].as_f64().unwrap());
+    assert!(scores[1]["overall"].as_f64().unwrap() < scores[1]["baseOverall"].as_f64().unwrap());
+}
+
+#[test]
 fn correct_address_persists_and_clear_disables_correction() {
     let fixture = Fixture::new();
     fixture.seed_bundle();
@@ -1489,8 +1648,6 @@ mustHave = []
 delayMs = 1
 maxListings = 100
 maxRetries = 2
-minScore = 0
-dropNewBelowMinScore = false
 downloadMaps = false
 downloadFloorplan = false
 downloadEpcAsset = false
@@ -1508,65 +1665,6 @@ mediaQualityPhoto = 82
 mediaQualityAux = 82
 mediaQualityMap = 82
 mediaTimeoutMs = 15000
-
-[scoring]
-adaptiveness = 2.0
-adaptivenessFactor = 0.5
-regionPriority = {}
-
-[scoring.weights]
-affordability = 0.25
-location = 0.30
-liveability = 0.45
-
-[scoring.affordability]
-priceWeight = 1.0
-epcWeight = 0.0
-
-[scoring.affordability.heatingCosts]
-A = 30
-B = 45
-C = 70
-D = 100
-E = 400
-F = 450
-G = 500
-
-[scoring.location]
-stationWeight = 0.45
-broadbandWeight = 0.20
-priorityWeight = 0.20
-imdWeight = 0.15
-crimeWeight = 0.0
-
-[scoring.liveability]
-heatingWeight = 0.2
-gardenWeight = 0.2
-propertyTypeWeight = 0.6
-
-[scoring.liveability.garden]
-private = 100
-shared = 40
-none = 0
-
-[scoring.liveability.heating]
-gas = 100
-electric = 60
-unknown = 30
-
-[scoring.liveability.propertyType]
-flat = 80
-
-[scoring.penalties]
-epcF = 0.0
-epcG = 0.0
-noGarden = 0.5
-noPets = 0.9
-deprivation = 0.75
-deprivationThreshold = 2
-highCrime = 0.8
-highCrimeThreshold = 120
-missingDataPenalty = 0.95
 "#
 }
 
@@ -1685,6 +1783,7 @@ fn sample_bundle() -> EvidenceBundle {
                 key_features: vec!["Balcony".to_owned()],
                 normalized_text: "balcony gigabit broadband available".to_owned(),
             },
+            nearest_stations: Vec::new(),
             media: vec![MediaItemEvidence {
                 kind: "photo".to_owned(),
                 remote_url: "https://media.rightmove.co.uk/photo.jpg".to_owned(),

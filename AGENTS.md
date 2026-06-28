@@ -65,7 +65,7 @@
 - [`crates/let-sdk/src/intelligence/repository.rs`](crates/let-sdk/src/intelligence/repository.rs) owns the intelligence DB schema and versioning
 - [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs) captures Rightmove `PAGE_MODEL`, preserves raw description evidence, extracts media URLs, and classifies active vs let-agreed vs removed pages
 - [`crates/let-sdk/src/pipeline/enrich.rs`](crates/let-sdk/src/pipeline/enrich.rs) joins local postcode, IMD, census, population, income, flood, crime, NaPTAN, and UPRN data; missing source DBs degrade the report instead of aborting most workflows
-- [`crates/let-sdk/src/pipeline/score.rs`](crates/let-sdk/src/pipeline/score.rs) is retained for deterministic scoring experiments only; agent assessment is the default decision layer
+- Deterministic scoring is a persisted comparison layer, not the final decision layer. The public-safe baseline scorecard lives in `let-sdk::score`; local `[scorecards.<id>]` config overrides tune weights and thresholds.
 - Default stdout is exactly one JSON envelope per structured command. `--toon` emits the same envelope as Toon. Progress, warnings, and confirmation prompts go to stderr. There is no supported `--json` or `--text` flag.
 
 ## 6. Runtime and State
