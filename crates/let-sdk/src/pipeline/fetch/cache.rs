@@ -185,7 +185,6 @@ mod tests {
             fetched_at: "2026-01-01T00:00:00.000Z".to_owned(),
             extraction_status: ExtractionStatus::Partial,
             status: ListingStatus::Active,
-            notion_page_id: None,
         }
     }
 }

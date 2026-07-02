@@ -41,7 +41,6 @@ pub struct Listing {
     pub fetched_at: String,
     pub extraction_status: ExtractionStatus,
     pub status: ListingStatus,
-    pub notion_page_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

@@ -37,7 +37,7 @@
 | CLI | `clap` + JSON/Toon envelopes | default stdout is JSON; `--toon` emits the same envelope as Toon |
 | TUI | `ratatui` + `crossterm` | local browser surface; keep it aligned with the intelligence DB before expanding it |
 | Storage | SQLite via `rusqlite` | one intelligence DB plus one DB per enrichment source |
-| HTTP / Parsing | `reqwest`, `serde_json`, `csv`, `zip`, `calamine`, `image` | Rightmove fetch, EPC/Mapbox/Notion, source ingests, media normalization |
+| HTTP / Parsing | `reqwest`, `serde_json`, `csv`, `zip`, `calamine`, `image` | Rightmove fetch, EPC/Mapbox, source ingests, media normalization |
 | JS Tooling | Bun + Husky + lint-staged | wrappers, hooks, and release/install scripts only; product code is Rust |
 
 ## 4. Commands
@@ -78,7 +78,7 @@
 - Source DBs live under `$LET_HOME/sources/{broadband,postcodes,deprivation,census,population,income,flood,naptan,uprn,crime}.db`
 - Source builds accept per-input path or URL override env vars plus optional `*_SHA256` integrity guards, and each built DB gets `source_runs` / `source_inputs` metadata written by [`crates/let-sdk/src/sources/common.rs`](crates/let-sdk/src/sources/common.rs)
 - Intelligence DB schema version is `1`; schema-version mismatches are treated as `SCHEMA_MISMATCH`, and the supported repair path is DB recreation through `let inspect <rightmove-id>`, not hand migration
-- Environment variables that materially affect behavior: `EPC_API_BEARER_TOKEN` preferred, legacy `EPC_API_EMAIL` + `EPC_API_KEY`, `MAPBOX_ACCESS_TOKEN`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`
+- Environment variables that materially affect behavior: `EPC_API_BEARER_TOKEN` preferred, legacy `EPC_API_EMAIL` + `EPC_API_KEY`, `MAPBOX_ACCESS_TOKEN`
 
 ## 7. Conventions
 
@@ -93,7 +93,7 @@
 
 - Never hand-edit runtime DB files, source DBs, or cache assets; use CLI commands or source builders instead
 - High-risk files are [`crates/let-sdk/src/intelligence/repository.rs`](crates/let-sdk/src/intelligence/repository.rs), [`crates/let-sdk/src/intelligence/service.rs`](crates/let-sdk/src/intelligence/service.rs), [`crates/let-sdk/src/pipeline/fetch/rightmove.rs`](crates/let-sdk/src/pipeline/fetch/rightmove.rs), [`crates/let-sdk/src/pipeline/epc.rs`](crates/let-sdk/src/pipeline/epc.rs), [`crates/let-sdk/src/sources/`](crates/let-sdk/src/sources/), and [`crates/let-cli/src/registry.rs`](crates/let-cli/src/registry.rs)
-- Rightmove, EPC, Mapbox, Notion, and public source datasets are unstable dependencies. Expect API fallback, removed listings, header/schema drift, and partial enrichment.
+- Rightmove, EPC, Mapbox, and public source datasets are unstable dependencies. Expect API fallback, removed listings, header/schema drift, and partial enrichment.
 - Do not commit `$LET_HOME/data/.env`, evidence exports, cached media, test-generated DBs, or personal search context
 
 ## 9. Validation

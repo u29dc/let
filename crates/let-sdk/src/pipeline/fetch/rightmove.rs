@@ -577,7 +577,6 @@ fn transform_listing(
             ExtractionStatus::Partial
         },
         status: ListingStatus::Active,
-        notion_page_id: None,
     })
 }
 

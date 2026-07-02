@@ -788,7 +788,6 @@ mod tests {
             fetched_at: "2026-06-20T00:00:00Z".to_owned(),
             extraction_status: ExtractionStatus::Success,
             status: ListingStatus::Active,
-            notion_page_id: None,
         }
     }
 }

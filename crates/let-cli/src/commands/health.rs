@@ -61,20 +61,6 @@ pub fn run(shared: &SharedArgs) -> CommandResult {
     }
     checks.push(check_epc_credentials(&bundle.derived.env_file));
     checks.push(check_env_key(
-        "NOTION_API_KEY",
-        "env.notion_api_key",
-        "Notion API Key",
-        &bundle.derived.env_file,
-        "your-key",
-    ));
-    checks.push(check_env_key(
-        "NOTION_DATABASE_ID",
-        "env.notion_database_id",
-        "Notion Database ID",
-        &bundle.derived.env_file,
-        "your-database-id",
-    ));
-    checks.push(check_env_key(
         "MAPBOX_ACCESS_TOKEN",
         "env.mapbox_access_token",
         "Mapbox Token",

@@ -499,6 +499,28 @@ fn health_reports_missing_and_present_intelligence_db() {
     let missing = fixture.cmd().args(["health"]).output().expect("run health");
     assert_eq!(missing.status.code(), Some(0));
     let missing_json = assert_single_json_envelope(&missing);
+    assert_eq!(
+        check_ids(&missing_json),
+        vec![
+            "config",
+            "rightmove.search_api",
+            "database",
+            "source.postcodes",
+            "source.broadband",
+            "source.deprivation",
+            "source.census",
+            "source.population",
+            "source.income",
+            "source.flood",
+            "source.crime",
+            "source.naptan",
+            "source.uprn",
+            "env.epc_auth",
+            "env.mapbox_access_token",
+            "dir.data",
+            "dir.cache",
+        ]
+    );
     let database = find_check(&missing_json, "database");
     assert_eq!(database["label"], "Intelligence Database");
     assert_eq!(database["status"], "missing");
@@ -1607,6 +1629,15 @@ fn find_check<'a>(envelope: &'a serde_json::Value, id: &str) -> &'a serde_json::
         .iter()
         .find(|check| check["id"] == id)
         .expect("check present")
+}
+
+fn check_ids(envelope: &serde_json::Value) -> Vec<&str> {
+    envelope["data"]["checks"]
+        .as_array()
+        .expect("checks array")
+        .iter()
+        .map(|check| check["id"].as_str().expect("check id"))
+        .collect()
 }
 
 fn serve_search_api_response_once(response: &'static str) -> String {

@@ -218,7 +218,6 @@ mod tests {
             fetched_at: "2026-03-10T00:00:00.000Z".to_owned(),
             extraction_status: ExtractionStatus::Success,
             status: ListingStatus::Active,
-            notion_page_id: None,
         };
 
         let result = resolve_listing_stations(&enricher, &listing).expect("resolve stations");

@@ -21,9 +21,6 @@ pub fn carry_over_persistent_fields(incoming: &mut Listing, existing: &Listing) 
     if incoming.portal_ids.onthemarket.is_none() {
         incoming.portal_ids.onthemarket = existing.portal_ids.onthemarket.clone();
     }
-    if incoming.notion_page_id.is_none() {
-        incoming.notion_page_id = existing.notion_page_id.clone();
-    }
     if incoming.uprn.is_none() {
         incoming.uprn = existing.uprn.clone();
     }
@@ -159,7 +156,6 @@ mod tests {
             fetched_at: "2026-01-01T00:00:00.000Z".to_owned(),
             extraction_status: ExtractionStatus::Partial,
             status: ListingStatus::Active,
-            notion_page_id: None,
         }
     }
 }
